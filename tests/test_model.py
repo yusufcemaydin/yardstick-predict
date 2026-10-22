@@ -134,6 +134,28 @@ def test_too_few_tasks_to_train():
         M.train(tasks, rows_for(tasks))
 
 
+def test_cost_forecasts_are_only_given_where_cost_was_tested():
+    tasks = synthetic(300)
+    for t in tasks[int(len(tasks) * 0.65) :]:
+        if t.model == "gpt-6.1-sol":
+            t.usd = None  # so the test has no costs to check this model's cost forecasts on
+    model = M.train(tasks, rows_for(tasks))
+    assert model.served("gpt-6.1-sol") == (True, None)
+    rows = rows_for(tasks[-2:])
+    found = {row.model: result for row, result in zip(rows, model.forecast(rows))}
+    assert found["gpt-6.1-sol"]["usd"] is None and found["gpt-6.1-sol"]["seconds"]["expected"] > 0
+    assert found["claude-opus-5-5"]["usd"]["expected"] > 0
+
+
+def test_a_head_with_nothing_to_learn_fails_with_a_plain_reason():
+    tasks = synthetic(120)
+    for t in tasks:
+        t.usd = None
+    with pytest.raises(M.NotEnoughData) as caught:
+        M.train(tasks, rows_for(tasks), {"heads": ["usd"]})
+    assert "usd" in str(caught.value)
+
+
 def test_stopped_and_waiting_tasks_are_not_learned_from():
     tasks = synthetic(50)
     tasks[0].stopped = True

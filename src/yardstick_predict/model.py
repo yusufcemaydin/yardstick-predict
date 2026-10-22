@@ -604,13 +604,14 @@ class Model:
     def forecast(self, rows: list[Features]) -> list[dict]:
         """Each row's forecast: for every head, the expected value and, when there is one, the curve.
 
-        This is what every model type provides. A head the model doesn't have is None.
+        This is what every model type provides. A head the model doesn't have is None, and so is a head
+        the test never checked for the row's AI model.
         """
         if not rows:
             return []
         if self.settings["head"] == "expected":
             values = self.expected_values(rows)
-            return [
+            found = [
                 {
                     "shape": None,
                     "direct_probability": None,
@@ -621,6 +622,7 @@ class Model:
                 }
                 for i in range(len(rows))
             ]
+            return self._tested_only(rows, found)
         curves = self.curves(rows)
         family = self.family
         found = []
@@ -641,6 +643,18 @@ class Model:
                     },
                 }
             found.append(row)
+        return self._tested_only(rows, found)
+
+    def _tested_only(self, rows: list[Features], found: list[dict]) -> list[dict]:
+        """Set each head the test never checked for the row's AI model to None."""
+        verdicts = self.meta.get("served", {})
+        for row, result in zip(rows, found):
+            tested = verdicts.get(row.model, {}).get("heads")
+            if tested is None:  # no verdict for this AI model, or a model saved before verdicts named heads
+                continue
+            for target in TARGETS:
+                if target not in tested:
+                    result[target] = None
         return found
 
     def served(self, model: str) -> tuple[bool, str | None]:
@@ -697,11 +711,20 @@ def train(tasks: list[Task], rows: list[Features], settings: dict | None = None)
     if len(pairs) < MIN_TASKS:
         raise NotEnoughData(f"Training needs at least {MIN_TASKS} finished tasks. This dataset has {len(pairs)}.")
     eligible, eligible_rows = [t for t, _ in pairs], [r for _, r in pairs]
+    # A head with too few known values is left out. With no head left, there is nothing to learn.
+    known = max(sum(target_value(t, head) is not None for t in eligible) for head in settings["heads"])
+    if known < MIN_TASKS:
+        raise NotEnoughData(
+            f"Training needs at least {MIN_TASKS} tasks with a known value for the "
+            f"{' or '.join(settings['heads'])} head. This dataset has {known}."
+        )
     report = test(eligible, eligible_rows, settings)
     final = fit(eligible, eligible_rows, settings)
     final.meta.update(
         report=report,
-        served={m: {"served": r["served"], "reason": r["reason"]} for m, r in report["models"].items()},
+        served={
+            m: {"served": r["served"], "reason": r["reason"], "heads": r["heads"]} for m, r in report["models"].items()
+        },
         trained_at=time.time(),
         tasks=len(eligible),
     )
@@ -1144,10 +1167,10 @@ def _verdicts(scored: list[dict], trained_on: int, tested_on: int, settings: dic
                 "in_90_range": round(float(np.mean((chance > 0.05) & (chance < 0.95))), 4) if has_ranges else None,
                 "expected_over_real_total": round(float(data["expected"][rows].sum() / data["real"][rows].sum()), 4),
             }
+        # Only heads with test results were checked. A head that wasn't tested is never given.
+        tested = [target for target in TARGETS if target in result]
         failed = []
-        for target in TARGETS:
-            if target not in result:
-                continue
+        for target in tested:
             r = result[target]
             if r["score"] > r["simple_rule_score"] * (1 + TOLERANCE):
                 failed.append(f"{target}.simple_rule")
@@ -1155,12 +1178,12 @@ def _verdicts(scored: list[dict], trained_on: int, tested_on: int, settings: dic
                 failed.append(f"{target}.range_held")
             if not TOTALS_RANGE[0] <= r["expected_over_real_total"] <= TOTALS_RANGE[1]:
                 failed.append(f"{target}.totals")
-        if result["tasks_tested"] < MIN_TEST_TASKS:
+        if result["tasks_tested"] < MIN_TEST_TASKS or not tested:
             served, reason = False, "not_enough_data"
         elif failed:
             served, reason = False, "not_accurate_enough"
         else:
             served, reason = True, None
         result["failed_checks"] = failed if reason == "not_accurate_enough" else []
-        report["models"][model] = {"served": served, "reason": reason, **result}
+        report["models"][model] = {"served": served, "reason": reason, "heads": tested, **result}
     return report
