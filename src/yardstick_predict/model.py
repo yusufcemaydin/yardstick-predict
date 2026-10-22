@@ -194,7 +194,9 @@ def recency_weights(tasks: list[Task], half_life_days: float | None) -> np.ndarr
         return np.ones(len(tasks))
     newest = max(t.started_at for t in tasks)
     age_days = np.array([(newest - t.started_at) / 86400 for t in tasks])
-    return 0.5 ** (age_days / half_life_days)
+    # With a short half-life, a task years old would weigh exactly 0, and so could every task of an AI model
+    # used only long ago. A tiny least weight keeps its curve defined without giving it any real say.
+    return np.maximum(0.5 ** (age_days / half_life_days), 1e-12)
 
 
 # Curve math -----------------------------------------------------------------------------------------

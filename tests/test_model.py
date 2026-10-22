@@ -341,6 +341,15 @@ def test_a_target_that_never_changes_still_gives_strict_json(loss, seconds):
     assert all(math.isfinite(r["seconds"]["expected"]) for r in model.forecast(rows_for(tasks[:4])))
 
 
+def test_a_short_half_life_trains_with_an_ai_model_used_years_ago():
+    tasks = synthetic(400)
+    for task in tasks[:80:2]:
+        task.model, task.started_at = "claude-old", task.started_at - 3 * 365 * 86400
+    tasks.sort(key=lambda t: t.started_at)
+    model = M.train(tasks, rows_for(tasks), {"half_life_days": 0.5})  # older tasks count half after 12 hours
+    assert model.forecast(rows_for(tasks[-1:]))[0]["seconds"]["expected"] > 0
+
+
 def test_a_head_is_only_judged_on_enough_known_values():
     tasks = synthetic(300)
     for task in tasks[200:]:
