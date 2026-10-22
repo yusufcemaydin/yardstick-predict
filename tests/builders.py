@@ -133,6 +133,22 @@ class ClaudeSession:
         self.clock += seconds
         self.lines.append({"type": "custom-title", "timestamp": iso(self.clock), "sessionId": self.session})
 
+    def side_line(self, seconds: float, kind: str):
+        """A line that isn't the agent's own reply or tool result: a helper's message, a progress update or a hook."""
+        self.clock += seconds
+        line = {"uuid": self._id("x"), "sessionId": self.session, "timestamp": iso(self.clock), "isSidechain": False}
+        if kind == "helper":
+            # Older versions of Claude Code wrote a helper's messages into the main record.
+            message = {"role": "assistant", "content": [{"type": "text", "text": "Still looking."}]}
+            line.update(type="assistant", isSidechain=True, message=message)
+        elif kind == "progress":
+            line.update(type="progress", data={"type": "agent_progress", "agentId": "a1"}, toolUseID="agent_a1")
+        elif kind == "hook":
+            line.update(type="attachment", attachment={"type": "hook_success", "hookEvent": "Notification"})
+        else:
+            raise ValueError(kind)
+        self.lines.append(line)
+
     def helper(self, prompt_id: str, model="claude-haiku-5-5", calls=1, call_usage=None):
         folder = self.folder / self.session / "subagents"
         folder.mkdir(parents=True, exist_ok=True)

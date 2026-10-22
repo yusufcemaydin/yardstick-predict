@@ -96,6 +96,53 @@ def test_waiting_for_the_person_is_not_agent_time(tmp_path):
     assert not task.idle
 
 
+@pytest.mark.parametrize("kind", ["helper", "progress", "hook"])
+@pytest.mark.parametrize("tool, source", [("AskUserQuestion", "config"), ("Bash", "user_temporary")])
+def test_a_line_written_while_waiting_for_the_person_doesnt_make_the_task_look_left_waiting(
+    tmp_path, kind, tool, source
+):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Pick a database for me")
+    tool_id = session.reply(5, tool=tool)
+    session.side_line(1900, kind)
+    session.tool_result(tool_id, 200, line["promptId"], source=source)
+    session.reply(6)
+    session.save(mtime=START)
+
+    task = read_claude(tmp_path)["Pick a database for me"]
+    assert task.seconds == pytest.approx(11)
+    assert not task.idle
+
+
+def test_a_long_silence_after_waiting_for_the_person_still_marks_the_task_left_waiting(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Pick a database, then set it up")
+    tool = session.reply(5, tool="AskUserQuestion")
+    session.side_line(1900, "progress")
+    session.tool_result(tool, 200, line["promptId"])
+    tool = session.reply(6, tool="Bash")
+    session.tool_result(tool, 2400, line["promptId"])
+    session.reply(5)
+    session.save(mtime=START)
+    assert read_claude(tmp_path)["Pick a database, then set it up"].idle
+
+
+@pytest.mark.parametrize("kind", ["helper", "progress"])
+def test_a_helper_working_for_a_long_time_doesnt_make_the_task_look_left_waiting(tmp_path, kind):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Compare these three libraries")
+    tool = session.reply(5, tool="Task")
+    for _ in range(4):
+        session.side_line(600, kind)
+    session.tool_result(tool, 600, line["promptId"])
+    session.reply(5)
+    session.save(mtime=START)
+
+    task = read_claude(tmp_path)["Compare these three libraries"]
+    assert task.seconds == pytest.approx(3010)
+    assert not task.idle
+
+
 def test_late_bookkeeping_lines_dont_make_a_task_look_left_waiting(tmp_path):
     session = ClaudeSession(tmp_path, "s1", START)
     session.prompt("Quick question")

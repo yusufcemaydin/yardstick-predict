@@ -360,7 +360,7 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
         tools_started: dict[str, tuple[str, float]] = {}
         skills: set[str] = set()
         waited = 0.0
-        wait_ends: set[float] = set()
+        waits: list[tuple[float, float]] = []
         for event in lines[i + 1 : end]:
             moment = _timestamp(event.get("timestamp"))
             if moment is not None:
@@ -372,9 +372,9 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                 if (_claude_text(message) or "").lstrip().startswith("[Request interrupted"):
                     stopped = True
                 wait = _person_wait(message, event, tools_started, moment)
-                if wait > 0 and moment is not None:
-                    waited += wait
-                    wait_ends.add(moment)
+                if wait is not None:
+                    waited += wait[1] - wait[0]
+                    waits.append(wait)
                 continue
             if event.get("type") != "assistant":
                 continue
@@ -437,7 +437,7 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                 calls=len(all_calls),
                 direct=not used_tools,
                 stopped=stopped,
-                idle=_longest_gap(start, last, moments, wait_ends) > IDLE_GAP_SECONDS,
+                idle=_longest_gap(start, last, moments, waits) > IDLE_GAP_SECONDS,
                 skills="\n".join(sorted(skills)),
             )
         )
@@ -448,25 +448,37 @@ PERSON_TOOLS = {"AskUserQuestion", "ExitPlanMode"}
 """Tools that wait for the person to answer or approve."""
 
 
-def _person_wait(message: dict, line: dict, tools_started: dict[str, tuple[str, float]], moment: float | None) -> float:
-    """Seconds a tool result spent waiting for the person: a question, a plan approval or a permission prompt."""
+def _person_wait(
+    message: dict, line: dict, tools_started: dict[str, tuple[str, float]], moment: float | None
+) -> tuple[float, float] | None:
+    """When a tool result waited for the person: a question, a plan approval or a permission prompt.
+
+    The wait runs from the tool call to the result. None means the result didn't wait for the person.
+    """
     if moment is None or not isinstance(message.get("content"), list):
-        return 0.0
+        return None
     asked_person = str((line.get("permissionDecision") or {}).get("source") or "").startswith("user")
-    wait = 0.0
+    began = moment
     for part in message["content"]:
         if not isinstance(part, dict) or part.get("type") != "tool_result":
             continue
-        name, began = tools_started.get(part.get("tool_use_id") or "", ("", moment))
+        name, called = tools_started.get(part.get("tool_use_id") or "", ("", moment))
         if name in PERSON_TOOLS or asked_person:
-            wait = max(wait, moment - began)
-    return wait
+            began = min(began, called)
+    return (began, moment) if began < moment else None
 
 
-def _longest_gap(start: float, last: float, moments: list[float], wait_ends: set[float]) -> float:
-    """The longest silence while the agent worked, not counting time spent waiting for the person."""
+def _longest_gap(start: float, last: float, moments: list[float], waits: list[tuple[float, float]]) -> float:
+    """The longest silence while the agent worked, not counting time spent waiting for the person.
+
+    Other lines can land inside a wait, such as a helper's progress or a hook. They split the wait
+    into shorter silences, and none of those count either.
+    """
     busy = sorted({start, last, *(m for m in moments if start <= m <= last)})
-    return max((b - a for a, b in zip(busy, busy[1:]) if b not in wait_ends), default=0.0)
+    return max(
+        (b - a for a, b in zip(busy, busy[1:]) if not any(began <= a and b <= ended for began, ended in waits)),
+        default=0.0,
+    )
 
 
 # Codex ------------------------------------------------------------------------------------------------
