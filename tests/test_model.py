@@ -4,12 +4,16 @@ import json
 import math
 import os
 import random
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import xgboost as xgb
 
 from yardstick_predict import model as M
+from yardstick_predict import pipeline
 from yardstick_predict.archives import Task
 
 START = 1_780_000_000.0
@@ -243,9 +247,9 @@ def test_a_test_window_learns_only_from_tasks_that_finished_before_it_starts(mon
     learned, scored = [], []
     real_fit, real_score = M.fit, M._score_window
 
-    def fit(train_tasks, train_rows, settings):
+    def fit(train_tasks, train_rows, settings, *rest):
         learned.append(train_tasks)
-        return real_fit(train_tasks, train_rows, settings)
+        return real_fit(train_tasks, train_rows, settings, *rest)
 
     def score(trial, train_tasks, test_tasks, test_rows):
         scored.append((train_tasks, test_tasks))
@@ -379,6 +383,8 @@ def test_an_ai_model_used_only_long_ago_is_still_in_the_report():
         ({"family": "cauchy"}, "distribution"),
         ({"loss": "gamma"}, "loss"),
         ({"family": "weibull", "loss": "crps"}, "crps"),
+        ({"head": "expected", "family": "weibull"}, "shape"),
+        ({"shape": "weibull"}, "Unknown model setting 'shape'"),
         ({"dropout": 2}, "dropout"),
         ({"test_windows": 0}, "test_windows"),
     ],
@@ -387,3 +393,360 @@ def test_bad_settings_get_a_plain_reason(settings, words):
     with pytest.raises(ValueError) as caught:
         M.settings_for(settings)
     assert words in str(caught.value)
+
+
+def test_xgboost_runs_on_one_thread_on_small_data_and_more_threads_change_nothing(monkeypatch):
+    tasks = synthetic(200)
+    rows = rows_for(tasks)
+    one = M.fit(tasks, rows, {})
+    assert one.boosters
+    for booster in one.boosters.values():
+        assert json.loads(booster.save_config())["learner"]["generic_param"]["nthread"] == "1"
+    monkeypatch.setattr(M, "THREADS_FROM", 0)  # every training runs on several threads
+    many = M.fit(tasks, rows, {})
+    assert [r["seconds"]["expected"] for r in one.forecast(rows)] == [
+        r["seconds"]["expected"] for r in many.forecast(rows)
+    ]
+
+
+def test_a_weibull_part_starts_from_the_curve_its_tasks_follow():
+    family = M.FAMILY["weibull"]
+    z = 4.0 + 0.7 * np.log(np.random.default_rng(2).exponential(size=100_000))  # center 4, width 0.7
+    start, _ = M._pooled_curves(["claude-opus-5-5"] * len(z), z, np.ones(len(z)), family)
+    center, log_width = start["claude-opus-5-5"]
+    assert center == pytest.approx(4.0, abs=0.01)
+    assert math.exp(log_width) == pytest.approx(0.7, rel=0.01)
+    assert family.mean(center, math.exp(log_width)) == pytest.approx(np.exp(z).mean(), rel=0.02)
+
+
+def test_the_newest_tasks_judge_trees_against_starting_points_fitted_without_them(monkeypatch):
+    tasks = synthetic(200)
+    held = max(int(len(tasks) * M.DEFAULTS["validation_share"]), 10)
+    weight = M.recency_weights(tasks, M.DEFAULTS["half_life_days"])
+    seen = {}
+    real_direct, real_part = M._grow_direct, M._grow_part
+
+    def grow_direct(model, *args):
+        seen["direct"] = model.meta["direct"]["start"]["*"]
+        return real_direct(model, *args)
+
+    def grow_part(model, key, *args):
+        seen[key] = model.meta["parts"][key]["start"]["*"]
+        return real_part(model, key, *args)
+
+    monkeypatch.setattr(M, "_grow_direct", grow_direct)
+    monkeypatch.setattr(M, "_grow_part", grow_part)
+    model = M.fit(tasks, rows_for(tasks), {})
+    direct = np.array([t.direct for t in tasks])
+    z = np.log([t.seconds for t in tasks])
+    older = np.arange(len(tasks)) < len(tasks) - held
+    assert seen["direct"] == pytest.approx(np.average(direct[older], weights=weight[older]))
+    work = older & ~direct
+    assert seen["seconds.work"][0] == pytest.approx(np.average(z[work], weights=weight[work]))
+    # The final model starts from every task, the newest too.
+    assert model.meta["parts"]["seconds.work"]["start"]["*"][0] == pytest.approx(
+        np.average(z[~direct], weights=weight[~direct])
+    )
+
+
+def test_a_model_whose_weight_sits_on_two_recent_tasks_counts_as_about_two_tasks():
+    rng = np.random.default_rng(0)
+    # One model ran 200 tasks 300 days ago and 2 today. Another ran 500 tasks this month.
+    age = np.r_[np.full(200, 300.0), [0.0, 0.1], rng.random(500) * 30]
+    z = np.r_[rng.normal(5, 1, 200), [6.0, 6.02], rng.normal(4, 1, 500)]
+    models = ["claude-old"] * 202 + ["claude-new"] * 500
+    weight = 0.5 ** (age / 30)
+    mean, variance, n = M._moments(z[:202], weight[:202])
+    assert 2 <= n < 3 and M._moments(z[:5], np.ones(5))[2] == pytest.approx(5)
+    start, _ = M._pooled_curves(models, z, weight)
+    every_mean, every_variance, _ = M._moments(z, weight)
+    # As if it had 10 more tasks like all models, so its spread includes the gap between the two centers.
+    center = (n * mean + 10 * every_mean) / (n + 10)
+    spread = (n * (variance + (mean - center) ** 2) + 10 * (every_variance + (every_mean - center) ** 2)) / (n + 10)
+    assert start["claude-old"] == pytest.approx([center, 0.5 * math.log(spread)])
+    assert math.exp(start["claude-old"][1]) > 1.0  # not the narrow curve of its two recent tasks
+
+
+def test_the_crps_width_step_uses_the_curvature_crps_really_has():
+    s = 1.3
+    data = xgb.DMatrix(np.zeros((1, 1)), label=np.zeros((1, 2)))
+    _, hess = M._curve_objective(M.LogNormal(), "crps")(np.array([[0.0, math.log(s)]]), data)
+
+    def expected_crps(log_width: float) -> float:  # a normal curve's CRPS, averaged over results from N(0, s²)
+        width = math.exp(log_width)
+        return math.sqrt(2 / math.pi) * math.sqrt(width**2 + s**2) - width / math.sqrt(math.pi)
+
+    h, middle = 1e-4, math.log(s)
+    curvature = (expected_crps(middle + h) - 2 * expected_crps(middle) + expected_crps(middle - h)) / h**2
+    assert hess[0, 1] == pytest.approx(curvature, rel=1e-3)
+
+
+def test_the_width_factor_is_picked_by_crps_when_the_trees_learn_by_crps():
+    rng = np.random.default_rng(3)
+    z = np.where(rng.random(400) < 0.9, rng.normal(0, 1, 400), rng.normal(0, 6, 400))  # some results far off
+    picked = {}
+    for loss in ("log_score", "crps"):
+        curve = {"start": {"*": [0.0, 0.0]}}
+        meta = {
+            "settings": M.settings_for({"loss": loss}),
+            "direct": {"start": {"*": 0.0}},
+            "parts": {"seconds.direct": dict(curve), "seconds.work": dict(curve)},
+            "width_scale": {},
+        }
+        model = M.Model(meta, {})
+        n = len(z)
+        M._fit_width_scale(
+            model, "seconds", np.zeros((n, 1)), ["claude-opus-5-5"] * n, z, np.ones(n, bool), np.arange(n)
+        )
+        picked[loss] = model.meta["width_scale"]["seconds"]["claude-opus-5-5"]
+    grid = np.geomspace(0.5, 3.0, 46)
+    by_crps = grid[np.argmin([M.crps(z, 0.5, (0.0, g), (0.0, g)).mean() for g in grid])]
+    assert picked["crps"] == pytest.approx(by_crps)
+    assert picked["log_score"] > picked["crps"]  # the log score widens more for the few far-off results
+
+
+def test_the_simple_rule_and_the_starting_curves_are_never_narrower_than_a_forecast():
+    tasks = [task(i, "claude-opus-5-5", "same", 60.0, 50_000, False) for i in range(40)]
+    assert M.simple_rule(tasks, "seconds")["claude-opus-5-5"]["work"][1] == M.WIDTH_RANGE[0]
+    start, _ = M._pooled_curves([t.model for t in tasks], np.full(40, math.log(60.0)), np.ones(40))
+    assert math.exp(start["claude-opus-5-5"][1]) == pytest.approx(M.WIDTH_RANGE[0])
+
+
+def test_the_fewest_tasks_to_test_follow_the_settings():
+    assert M.min_tasks_to_test({}) == 100
+    assert M.min_tasks_to_test({"test_share": 0.5}) == 60
+    tasks = synthetic(60)
+    report = M.test(tasks, rows_for(tasks), {"test_share": 0.5})
+    assert report["min_tasks_to_test"] == 60 and report["windows"] > 0
+    report = M.test(tasks[:59], rows_for(tasks[:59]), {"test_share": 0.5})
+    assert (report["min_tasks_to_test"], report["windows"], report["tested_on"]) == (60, 0, 0)
+
+
+def test_tested_on_counts_only_the_windows_that_ran():
+    tasks = synthetic(100)  # windows open at tasks 70, 80 and 90
+    for i, t in enumerate(tasks[:70]):
+        t.seconds = 45_000 - 600 * i  # each finishes after task 70 started, before task 80 did
+    report = M.test(tasks, rows_for(tasks), {})
+    assert (report["windows"], report["trained_on"], report["tested_on"]) == (2, 80, 20)
+
+
+def test_a_test_window_reuses_the_similar_task_numbers_it_would_work_out_itself(monkeypatch):
+    tasks = synthetic(120)
+    for t in tasks[::5]:
+        t.seconds = 3 * 3600  # still running while the next tasks start
+    rng = np.random.default_rng(4)
+    rows = rows_for(tasks, {"prompt": {t.id: rng.normal(size=8).astype(np.float32) for t in tasks}})
+    every = M._similar_features(tasks, rows)["prompt"]
+    finished = M.finish_times(tasks)
+    known = [i for i in range(96) if finished[i] <= tasks[96].started_at]  # what the window opening at 96 learns from
+    alone = M._similar_features([tasks[i] for i in known], [rows[i] for i in known])["prompt"]
+    np.testing.assert_allclose(every[known], alone, rtol=1e-5, atol=1e-6)  # the same tasks, up to rounding
+    calls, real = [], M._similar_features
+    monkeypatch.setattr(M, "_similar_features", lambda *args: calls.append(args) or real(*args))
+    assert M.test(tasks, rows, {})["windows"] == 3
+    assert len(calls) == 1  # worked out once for all three windows
+
+
+def test_the_weibull_crps_comes_out_the_same_worked_out_in_blocks():
+    rng = np.random.default_rng(5)
+    n = 2500  # more than one block
+    z, w = rng.normal(3, 1, n), rng.random(n)
+    c1, c2 = (rng.normal(1, 0.3, n), rng.uniform(0.1, 1, n)), (rng.normal(4, 0.5, n), rng.uniform(0.3, 2, n))
+    family = M.FAMILY["weibull"]
+    together = M.crps(z, w, c1, c2, family)
+    picks = range(0, n, 97)
+    alone = [M.crps(z[i : i + 1], w[i : i + 1], (c1[0][i], c1[1][i]), (c2[0][i], c2[1][i]), family)[0] for i in picks]
+    np.testing.assert_allclose(together[list(picks)], alone)
+
+
+def test_a_model_saved_in_a_newer_format_gives_a_plain_error(tmp_path):
+    M.Model({"format": M.FORMAT + 1, "text_fields": []}, {}).save(tmp_path / "model")
+    with pytest.raises(M.NewerFormat) as caught:
+        M.load(tmp_path / "model")
+    assert "newer version" in str(caught.value) and "uv tool upgrade yardstick-predict" in str(caught.value)
+
+
+def test_a_model_saved_by_version_0_2_still_loads_and_forecasts(tmp_path):
+    tasks = synthetic(200)
+    model = M.fit(tasks, rows_for(tasks), {})
+    assert "tree_settings" not in model.meta and "direct_objective" not in model.meta
+    model.save(tmp_path / "model")
+    meta = json.loads((tmp_path / "model" / "model.json").read_text())
+    for spec in [meta["direct"], *meta["parts"].values()]:
+        del spec["effort_start"]  # 0.2 kept one starting point per AI model
+    del meta["effort_counts"]
+    meta["served"] = {"claude-opus-5-5": {"served": True, "reason": None, "heads": list(M.TARGETS)}}
+    (tmp_path / "model" / "model.json").write_text(json.dumps(meta))
+    old = M.load(tmp_path / "model")
+    assert all(r["seconds"]["expected"] > 0 for r in old.forecast(rows_for(tasks[-3:])))
+    assert old.served("claude-opus-5-5", "max") == (True, None)  # 0.2 didn't count effort levels
+
+
+def test_each_effort_level_starts_from_its_own_curve_pulled_toward_its_model():
+    rng = np.random.default_rng(6)
+    levels = ["high"] * 160 + ["max"] * 80 + ["low"] * 3
+    rng.shuffle(levels)
+    took = {"high": 60.0, "max": 600.0, "low": 6.0}
+    tasks = []
+    for i, level in enumerate(levels):
+        tasks.append(task(i, "claude-opus-5-5", "same", took[level] * math.exp(rng.normal(0, 0.3)), 50_000, False))
+        tasks[-1].effort = level
+    model = M.fit(tasks, rows_for(tasks), {"heads": ["seconds"]})
+    spec = model.meta["parts"]["seconds.work"]
+    own, by_level = spec["start"]["claude-opus-5-5"][0], spec["effort_start"]["claude-opus-5-5"]
+    assert by_level["max"][0] == pytest.approx(math.log(600), abs=0.3)
+    assert by_level["high"][0] == pytest.approx(math.log(60), abs=0.3)
+    # Three tasks count for little, so their level starts nearer the model's own curve than their own.
+    assert abs(by_level["low"][0] - own) < abs(math.log(6) - own) / 2
+    high, top = model.forecast(
+        [M.Features("claude-opus-5-5", level, "claude-code", "person", 4) for level in ("high", "max")]
+    )
+    assert top["seconds"]["expected"] > 5 * high["seconds"]["expected"]
+
+
+def test_the_default_effort_level_is_the_one_used_lately():
+    tasks = [task(i, "claude-opus-5-5", "word", 60.0, 50_000, False) for i in range(100)]  # all at high
+    for i in range(20):
+        tasks.append(task(200 + i, "claude-opus-5-5", "word", 60.0, 50_000, False))
+        tasks[-1].effort, tasks[-1].started_at = "max", tasks[-1].started_at + 120 * 86400
+    assert M._defaults(tasks, M.recency_weights(tasks, 30.0))["claude-opus-5-5"]["effort"] == "max"
+    assert M._defaults(tasks)["claude-opus-5-5"]["effort"] == "high"  # every task counted alike
+
+
+def test_effort_counts_list_each_models_levels_most_used_first():
+    tasks = synthetic(10)  # the two models take turns, all at high
+    for t in tasks[:3]:
+        t.effort = "max"
+    assert M._effort_counts(tasks) == {
+        "claude-opus-5-5": [["high", 3], ["max", 2]],
+        "gpt-6.1-sol": [["high", 4], ["max", 1]],
+    }
+
+
+def test_an_effort_level_the_model_never_ran_at_gets_no_forecast():
+    meta = {
+        "categories": {"model": ["claude-opus-5-5"]},
+        "served": {"claude-opus-5-5": {"served": True, "reason": None, "heads": ["seconds"]}},
+        "effort_counts": {"claude-opus-5-5": [["high", 80], ["max", 30]]},
+    }
+    model = M.Model(meta, {})
+    assert model.served("claude-opus-5-5") == model.served("claude-opus-5-5", "max") == (True, None)
+    assert model.served("claude-opus-5-5", "low") == (False, "not_enough_data")
+
+
+def test_dropout_really_drops_trees(monkeypatch):
+    monkeypatch.setattr(M, "MAX_DROPOUT_ROUNDS", 60)
+    tasks = synthetic(200)
+    rows = rows_for(tasks)
+    plain, dropped = M.fit(tasks, rows, {}), M.fit(tasks, rows, {"dropout": 0.3})
+    assert dropped.boosters
+    for key, booster in dropped.boosters.items():
+        config = json.loads(booster.save_config())["learner"]["gradient_booster"]
+        assert float(config["dart_train_param"]["rate_drop"]) == pytest.approx(0.3)
+        spec = dropped.meta["direct"] if key == "direct" else dropped.meta["parts"][key]
+        assert booster.num_boosted_rounds() == spec["rounds"] <= M.MAX_DROPOUT_ROUNDS  # a forecast uses every tree
+    assert [r["seconds"]["expected"] for r in plain.forecast(rows)] != [
+        r["seconds"]["expected"] for r in dropped.forecast(rows)
+    ]
+
+
+def test_with_dropout_the_trees_kept_are_the_model_early_stopping_picked():
+    rng = np.random.default_rng(7)
+    n = 400
+    matrix = np.column_stack([np.zeros((n, len(M.CATEGORIES))), rng.normal(size=(n, 2))])
+    label = matrix[:, -2] + rng.normal(0, 3, n)  # a weak signal in much noise, so trees soon stop helping
+    model, margin, grow, check = M.Model({}, {}), np.zeros(n), np.arange(300), np.arange(300, n)
+
+    def objective(predt, data):
+        return M._weighted(predt - data.get_label(), np.ones_like(predt), data)
+
+    def metric(predt, data):
+        return "score", float(np.mean((predt - data.get_label()) ** 2))
+
+    params = M._params({"dropout": 0.3})
+    start_score = float(np.mean(label[check] ** 2))
+    booster, rounds = M._grow(
+        model, "x", params, matrix, margin, label, np.ones(n), grow, check, objective, metric, start_score
+    )
+    assert 0 < rounds < M.MAX_DROPOUT_ROUNDS and booster.num_boosted_rounds() == rounds
+    data = model.dmatrix(matrix[grow], margin[grow], label=label[grow], weight=np.ones(len(grow)))
+    again = xgb.train({**params, "disable_default_eval_metric": 1, "nthread": 1}, data, rounds, obj=objective)
+    np.testing.assert_array_equal(booster.predict(data, output_margin=True), again.predict(data, output_margin=True))
+
+
+def test_a_forecast_compares_each_different_vector_with_past_tasks_once(monkeypatch):
+    tasks = synthetic(200)
+    rng = np.random.default_rng(8)
+    model = M.fit(tasks, rows_for(tasks, {"prompt": {t.id: rng.normal(size=8).astype(np.float32) for t in tasks}}), {})
+    a, b = rng.normal(size=8).astype(np.float32), rng.normal(size=8).astype(np.float32)
+    rows = [
+        M.Features(name, "high", "claude-code", "person", 4, vectors={"prompt": vector})
+        for vector in (a, b, a)
+        for name in ("claude-opus-5-5", "gpt-6.1-sol")
+    ]
+    rows.append(M.Features("claude-opus-5-5", "high", "claude-code", "person", 4))  # no prompt vector
+    asked, real = [], M.similar_tasks
+
+    def similar_tasks(pool, results, queries, *args, **kwargs):
+        asked.append(len(queries))
+        return real(pool, results, queries, *args, **kwargs)
+
+    monkeypatch.setattr(M, "similar_tasks", similar_tasks)
+    found = model.matrix(rows)
+    assert asked == [3]  # a, b and the row without one
+    pool, results = model.pools["prompt"]
+    queries, has = M._unit([r.vectors.get("prompt") for r in rows], 8)
+    np.testing.assert_allclose(found[:, -5:], real(pool, results, queries, has, earlier_only=False), rtol=1e-6)
+
+
+def test_a_free_ai_model_keeps_its_time_and_token_forecasts():
+    paid = task(0, "claude-opus-5-5", "word", 60.0, 50_000, False, usd=0.25)
+    free = task(1, "gpt-6.1-sol", "word", 60.0, 50_000, False, usd=0.0)
+    values = M._known_values([paid, free], "usd")
+    assert values[0] == 0.25 and np.isnan(values[1])  # a $0 cost can't go on a log scale, so it isn't learned
+    tasks = synthetic(300)
+    for t in tasks:
+        if t.model == "gpt-6.1-sol":
+            t.usd = 0.0  # as on a free AI model
+    model = M.train(tasks, rows_for(tasks))
+    assert model.served("gpt-6.1-sol") == (True, None)
+    assert model.meta["report"]["models"]["gpt-6.1-sol"]["heads"] == ["seconds", "tokens"]
+    found = model.forecast(rows_for(tasks[-2:]))
+    assert all(f["seconds"]["expected"] > 0 for f in found)
+    assert [f["usd"] is None for f in found] == [t.model == "gpt-6.1-sol" for t in tasks[-2:]]
+
+
+def test_a_load_that_read_the_old_settings_gets_the_old_trees_while_a_save_waits(tmp_path, monkeypatch):
+    def tiny(generation: str, label: float) -> M.Model:
+        booster = xgb.train(
+            {"nthread": 1, "base_score": 0.0}, xgb.DMatrix(np.zeros((4, 1)), label=np.full(4, label)), 1
+        )
+        return M.Model({"format": M.FORMAT, "generation": generation, "text_fields": []}, {"seconds": booster})
+
+    folder = tmp_path / "model"
+    predictor = SimpleNamespace(dir=tmp_path, model_dir=folder, config={})
+    old, new = tiny("old", 1.0), tiny("new", 50.0)
+    old.save(folder)
+    real_read, saving = Path.read_text, []
+
+    def save_as_a_refresh_does():
+        with pipeline._model_lock(predictor):
+            new.save(folder)
+
+    def read_text(self, *args, **kwargs):
+        text = real_read(self, *args, **kwargs)
+        if self == folder / "model.json" and not saving:
+            saving.append(threading.Thread(target=save_as_a_refresh_does))
+            saving[0].start()
+            saving[0].join(timeout=0.5)  # time enough for a save that doesn't wait to swap the new model in
+            assert saving[0].is_alive(), "the save didn't wait for the load to finish"
+        return text
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    loaded = pipeline.load_model(predictor)
+    monkeypatch.undo()
+    saving[0].join(timeout=10)
+    point = xgb.DMatrix(np.zeros((1, 1)))
+    assert loaded.meta["generation"] == "old"
+    assert loaded.boosters["seconds"].predict(point) == pytest.approx(old.boosters["seconds"].predict(point))
+    assert not saving[0].is_alive() and pipeline.load_model(predictor).meta["generation"] == "new"
