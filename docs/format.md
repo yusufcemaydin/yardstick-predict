@@ -49,7 +49,7 @@ The [request schema](../schemas/forecast-request.v1.json) and the [answer schema
   "predictor": "default",
   "embedding_model": "voyage-4",
   "forecasts": [
-    {"task": "a", "model": "claude-opus-5-5", "seconds": 245.0, "tokens": 1830000, "usd": 0.92, "reason": null},
+    {"task": "a", "model": "claude-opus-5-5", "seconds": 245.0, "tokens": 1830000, "usd": 0.92},
     {"task": "a", "model": "gpt-6.1-sol", "seconds": null, "tokens": null, "usd": null, "reason": "not_accurate_enough"}
   ]
 }
@@ -62,7 +62,7 @@ These numbers are an example. There is one forecast for each pair of task and mo
 | `seconds` | Expected seconds from the prompt until the agent stops and hands control back. In Claude Code runs, time spent waiting for a person to answer or approve is left out. |
 | `tokens` | Expected tokens of every kind: new input, cache writes, cache reads and output, including helper agents. A whole number. |
 | `usd` | Expected cost in US dollars at the model's list price. `null` when the model's price isn't in the price list. |
-| `reason` | `null` when the forecast is given. Otherwise it says why the numbers are `null`. |
+| `reason` | Only when the forecast isn't given: why the numbers are `null`. |
 
 A predictor can be set to forecast only some of `seconds`, `tokens` and `usd`. The others are always `null`.
 

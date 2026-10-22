@@ -37,8 +37,7 @@
           "model",
           "seconds",
           "tokens",
-          "usd",
-          "reason"
+          "usd"
         ],
         "properties": {
           "task": {
@@ -72,17 +71,13 @@
             "description": "Expected cost at the model's list price."
           },
           "reason": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "enum": [
-              null,
               "unknown_model",
               "not_enough_data",
               "not_accurate_enough"
             ],
-            "description": "Why the numbers are null. Null when they aren't."
+            "description": "Why the numbers are null. Present only when they are."
           },
           "distribution": {
             "oneOf": [

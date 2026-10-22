@@ -9,10 +9,10 @@ The answer (version 1):
 
     {"version": 1, "predictor": "default", "embedding_model": "voyage-4",
      "forecasts": [{"task": "t1", "model": "claude-opus-5-5",
-                    "seconds": 245.0, "tokens": 1830000, "usd": 0.92, "reason": null}]}
+                    "seconds": 245.0, "tokens": 1830000, "usd": 0.92}]}
 
 The numbers are expected values. When the tool can't stand behind a forecast, the numbers are null
-and the reason says why. Within version 1, fields may be added but are never renamed or removed.
+and a reason says why. Within version 1, fields may be added but are never renamed or removed.
 """
 
 from __future__ import annotations
@@ -203,14 +203,9 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
     results = iter(model.forecast(rows))
     forecasts = []
     for task, name, served, reason in pairs:
-        forecast: dict = {
-            "task": task.id,
-            "model": name,
-            "seconds": None,
-            "tokens": None,
-            "usd": None,
-            "reason": reason,
-        }
+        forecast: dict = {"task": task.id, "model": name, "seconds": None, "tokens": None, "usd": None}
+        if reason:
+            forecast["reason"] = reason  # only when the numbers are null
         result = next(results) if served else None
         if result is not None:
             shape: dict = {

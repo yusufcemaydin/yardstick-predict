@@ -10,7 +10,7 @@ yardstick-predict learns from your own past Claude Code and Codex runs. Give it 
 ```console
 $ yardstick-predict predict --model claude-opus-5-5 --prompt "Add a login page with tests"
 {"version": 1, "predictor": "default", "embedding_model": "voyage-4", "forecasts": [
-  {"task": "task", "model": "claude-opus-5-5", "seconds": 245.0, "tokens": 1830000, "usd": 0.92, "reason": null}]}
+  {"task": "task", "model": "claude-opus-5-5", "seconds": 245.0, "tokens": 1830000, "usd": 0.92}]}
 ```
 
 The numbers above are an example. Yours come from your own history.
@@ -72,8 +72,7 @@ It answers with the expected seconds, tokens and dollars. These numbers are an e
       "model": "claude-opus-5-5",
       "seconds": 245.0,
       "tokens": 1830000,
-      "usd": 0.92,
-      "reason": null
+      "usd": 0.92
     }
   ]
 }
@@ -139,7 +138,7 @@ print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minu
 - **`seconds`, `tokens` and `usd`** are expected values: averages, not middles. They add up, so the expected total of ten tasks is the sum of their ten forecasts.
 - **`tokens`** counts every kind: new input, cache writes, cache reads and output, including helper agents.
 - **`usd`** is the cost at the model's list price.
-- **`reason`** is `null` when a forecast is given. Otherwise the numbers are `null` and it says why: `unknown_model`, `not_enough_data` or `not_accurate_enough`.
+- **`reason`** appears only when a forecast isn't given. Then the numbers are `null` and it says why: `unknown_model`, `not_enough_data` or `not_accurate_enough`.
 - **`"distribution": true`** adds each forecast's full curve, so a program can work out any chance or any range.
 
 One request can hold up to 1,000 tasks, each on up to 50 models. The format is fixed and versioned: within version 1, fields may be added but are never renamed or removed. Schemas for the [request](schemas/forecast-request.v1.json) and the [answer](schemas/forecast-response.v1.json) let a program check every answer. [The format](docs/format.md) explains every field.

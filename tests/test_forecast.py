@@ -70,7 +70,7 @@ def test_answers_give_expected_values_and_say_why_when_they_cant(trained):
     jsonschema.validate(result, schema("forecast-response.v1.json"))
     by_model = {f["model"]: f for f in result["forecasts"]}
     opus = by_model["claude-opus-5-5"]
-    assert opus["reason"] is None and opus["seconds"] > 0 and opus["tokens"] > 0 and opus["usd"] > 0
+    assert "reason" not in opus and opus["seconds"] > 0 and opus["tokens"] > 0 and opus["usd"] > 0
     assert isinstance(opus["tokens"], int)
     assert by_model["brand-new-model"] == {
         "task": "t1",
