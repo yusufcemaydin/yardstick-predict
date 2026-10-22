@@ -349,6 +349,74 @@ def test_a_reused_codex_helper_charges_each_turn_to_the_task_that_sent_it(tmp_pa
     assert (second.calls, second.input_tokens) == (3, 1600)
 
 
+def two_prompts(tmp_path, roots=True):
+    """A main thread with two prompts, 100 seconds apart. Newer versions of Codex name each turn's own root."""
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=10, root="t1" if roots else None)
+    parent.clock = START + 100
+    parent.turn("t2", "Something else", calls=[(1000, 0, 100)], seconds=10, root="t2" if roots else None)
+    parent.save(mtime=START)
+
+
+def first_and_second(tmp_path):
+    tasks = {t.prompt: t for t in read_archive(codex_archive(tmp_path), now=LATER)}
+    first, second = tasks["Start a helper"], tasks["Something else"]
+    return (first.calls, first.input_tokens), (second.calls, second.input_tokens)
+
+
+def test_a_codex_helper_turn_that_starts_after_the_next_prompt_counts_toward_the_turn_codex_names(tmp_path):
+    two_prompts(tmp_path)
+    # The helper works on after the person's next prompt. Codex says its second turn still belongs to the first.
+    helper = CodexSession(tmp_path, "helper", START + 5, parent="parent")
+    helper.turn("h1", "First part", calls=[(200, 0, 20)], seconds=5, root="t1")
+    helper.clock = START + 150
+    helper.turn("h2", "Second part", calls=[(300, 0, 30)], seconds=5, root="t1")
+    helper.save(mtime=START)
+    assert first_and_second(tmp_path) == ((3, 1500), (1, 1000))
+
+
+@pytest.mark.parametrize("nested_root", ["t1", "h1"])
+def test_a_nested_codex_helper_spawned_after_the_next_prompt_counts_toward_the_turn_that_started_the_chain(
+    tmp_path, nested_root
+):
+    two_prompts(tmp_path)
+    helper = CodexSession(tmp_path, "helper", START + 5, parent="parent")
+    helper.turn("h1", "Long part", calls=[(200, 0, 20)], seconds=300, root="t1")
+    helper.save(mtime=START)
+    # The helper spawns its own helper after the person's next prompt. Its root is the main thread's
+    # turn, or the helper turn that spawned it, which leads up to the same main thread's turn.
+    nested = CodexSession(tmp_path, "nested", START + 150, parent="helper")
+    nested.turn("n1", "Nested part", calls=[(50, 0, 5)], seconds=2, root=nested_root)
+    nested.save(mtime=START)
+    assert first_and_second(tmp_path) == ((3, 1250), (1, 1000))
+
+
+def test_without_named_turns_a_nested_codex_helper_counts_toward_the_turn_its_parent_helper_worked_for(tmp_path):
+    two_prompts(tmp_path, roots=False)
+    helper = CodexSession(tmp_path, "helper", START + 5, parent="parent")
+    helper.turn("h1", "Long part", calls=[(200, 0, 20)], seconds=300)
+    helper.save(mtime=START)
+    # Older records name no turns. The nested helper's turn started during the helper's turn, which
+    # started during the first prompt's turn.
+    nested = CodexSession(tmp_path, "nested", START + 150, parent="helper")
+    nested.turn("n1", "Nested part", calls=[(50, 0, 5)], seconds=2)
+    nested.save(mtime=START)
+    assert first_and_second(tmp_path) == ((3, 1250), (1, 1000))
+
+
+def test_a_codex_helper_turn_naming_a_turn_missing_from_the_records_isnt_charged_to_another_task(tmp_path):
+    parent = CodexSession(tmp_path, "parent", START + 100)
+    parent.turn("t2", "Something else", calls=[(1000, 0, 100)], seconds=10, root="t2")
+    parent.save(mtime=START)
+    # The helper's turn belongs to an earlier turn whose record is gone, not to the one running now.
+    helper = CodexSession(tmp_path, "helper", START + 150, parent="parent")
+    helper.turn("h1", "Part of an earlier task", calls=[(200, 0, 20)], seconds=5, root="t1")
+    helper.save(mtime=START)
+
+    [task] = read_archive(codex_archive(tmp_path), now=LATER)
+    assert (task.calls, task.input_tokens) == (1, 1000)
+
+
 def test_the_context_keeps_the_conversation_in_order(tmp_path):
     claude = ClaudeSession(tmp_path / "claude", "s1", START)
     claude.prompt("First question")

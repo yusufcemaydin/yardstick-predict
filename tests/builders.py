@@ -230,8 +230,13 @@ class CodexSession:
         effort="xhigh",
         tools=True,
         aborted=False,
+        root: str | None = None,
     ):
-        self.add("event_msg", {"type": "task_started", "turn_id": turn_id, "started_at": int(self.clock)})
+        """One turn. `root` is the main thread's turn behind it, which newer versions of Codex write down."""
+        started = {"type": "task_started", "turn_id": turn_id, "started_at": int(self.clock)}
+        if root is not None:
+            started["root_turn_id"] = root
+        self.add("event_msg", started)
         self.add(
             "response_item",
             {

@@ -547,13 +547,24 @@ class _CodexTurn:
 
 
 @dataclass
+class _ThreadTurn:
+    """One turn of a Codex thread, for finding the task its model calls count toward."""
+
+    id: str
+    root: str
+    """The main thread's turn behind this one, as newer versions of Codex write it. Empty in older records."""
+    started: float
+    calls: list[_Call] = field(default_factory=list)
+
+
+@dataclass
 class _CodexThread:
     """One Codex thread: its id, the thread that spawned it, and its turns."""
 
     id: str
     parent: str | None
-    turns: list[tuple[str, float, list[_Call]]]
-    """Each turn's id, start and model calls. Calls before the first turn count from when the thread began."""
+    turns: list[_ThreadTurn]
+    """Calls before the first turn count from when the thread began."""
 
 
 def _read_codex(archive: dict, only: set[str] | None, now: float) -> list[Task]:
@@ -581,7 +592,7 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
     last_total: dict | None = None
     history = _History()
     tasks: list[Task] = []
-    turns: list[tuple[str, float, list[_Call]]] = []
+    turns: list[_ThreadTurn] = []
     began: float | None = None
     for line in _lines(path):
         kind = line.get("type")
@@ -625,8 +636,8 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
             last_total = total
             call = _codex_call(info.get("last_token_usage") or {}, model)
             if not turns:
-                turns.append(("", began or moment or 0.0, []))
-            turns[-1][2].append(call)
+                turns.append(_ThreadTurn("", "", began or moment or 0.0))
+            turns[-1].calls.append(call)
             if turn is not None:
                 turn.calls.append(call)
                 if turn.first_input is None:
@@ -636,7 +647,7 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
             turn = _CodexTurn(str(payload.get("turn_id") or ""), started or 0.0, model, effort)
             turn.last_moment = moment
             turn.context = history.context()
-            turns.append((turn.turn_id, turn.started_at, []))
+            turns.append(_ThreadTurn(turn.turn_id, str(payload.get("root_turn_id") or ""), turn.started_at))
         elif event in ("task_complete", "turn_aborted") and turn is not None:
             task = _codex_task(turn, payload, event, meta, path, archive_name)
             if task is not None:
@@ -692,29 +703,52 @@ def _codex_task(turn: _CodexTurn, payload: dict, event: str, meta: dict, path: P
 
 
 def _attach_codex_helpers(tasks: dict[str, Task], threads: list[_CodexThread]) -> None:
-    """Add each helper turn's tokens to the task of the main thread's turn that started last before it.
+    """Add each helper turn's tokens to the task of the main thread's turn behind it.
 
-    That turn spawned the helper or sent it more work. So a helper's tokens count even when its first
-    reply comes after that turn finished, and a reused helper's later turns count toward the later
-    turns that sent them. A helper spawned by a helper counts toward the main thread at the top.
+    Newer versions of Codex name that turn in each helper turn. So a helper, or a helper spawned by a
+    helper, still counts toward the turn that started it when it works on after the person's next prompt.
+    Older records name no turn. There a helper's turn counts toward its parent thread's turn that started
+    last before it, as that turn spawned the helper or sent it more work, and so on up to the main thread.
+    A helper's tokens then count even when its first reply comes after that turn finished.
     """
     by_id = {thread.id: thread for thread in threads}
+    owners: dict[str, tuple[_CodexThread, _ThreadTurn]] = {}
+    # Main threads first: a helper forked from its parent starts with a copy of the parent's turn.
+    for thread in sorted(threads, key=lambda t: t.parent is not None):
+        for turn in thread.turns:
+            owners.setdefault(turn.id, (thread, turn))
+
+    def main_turn(thread: _CodexThread, turn: _ThreadTurn) -> str | None:
+        """The main thread's turn behind a helper's turn. None when the records don't hold it."""
+        seen = set()
+        while thread.parent:
+            if (thread.id, turn.id) in seen:
+                return None
+            seen.add((thread.id, turn.id))
+            if turn.root:
+                if turn.root not in owners:
+                    return None
+                thread, turn = owners[turn.root]
+                continue
+            parent = by_id.get(thread.parent)
+            earlier = [t for t in parent.turns if t.started <= turn.started] if parent else []
+            if not earlier:
+                return None
+            thread, turn = parent, max(earlier, key=lambda t: (t.started, t.id))
+        return turn.id
+
     for thread in threads:
-        main, seen = by_id.get(thread.parent or ""), {thread.id}
-        while main is not None and main.parent and main.id not in seen:
-            seen.add(main.id)
-            main = by_id.get(main.parent)
-        if main is None or main.parent:
+        if not thread.parent:
             continue
-        for _, started, calls in thread.turns:
-            sent = max(((start, turn_id) for turn_id, start, _ in main.turns if start <= started), default=None)
-            task = tasks.get(f"codex:{sent[1]}") if sent else None
+        for turn in thread.turns:
+            sent = main_turn(thread, turn)
+            task = tasks.get(f"codex:{sent}") if sent else None
             if task is None:
                 continue
-            new_input, cache_write, cache_read, output, usd = _totals(calls)
+            new_input, cache_write, cache_read, output, usd = _totals(turn.calls)
             task.input_tokens += new_input
             task.cache_write_tokens += cache_write
             task.cache_read_tokens += cache_read
             task.output_tokens += output
             task.usd = None if task.usd is None or usd is None else task.usd + usd
-            task.calls += len(calls)
+            task.calls += len(turn.calls)
