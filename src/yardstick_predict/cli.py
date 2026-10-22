@@ -496,6 +496,10 @@ def cmd_create(args) -> int:
     except ImportError as error:
         raise SystemExit(f"Couldn't load the plugin: {error}") from None
     model_settings = advanced_settings(args)
+    try:
+        model_types.get(model_settings.get("type", "xgboost"))
+    except (ValueError, ImportError, AttributeError) as error:
+        raise SystemExit(f"{error} Nothing was read or spent.") from None
     from .model import MIN_TASKS
 
     # The built-in model needs 30 tasks it can learn from. A model type from a plugin sets its own needs.
@@ -569,8 +573,10 @@ def cmd_create(args) -> int:
     free = plan.cost.free_left
     if can_ask and free is not None and plan.cost.tokens > free and free > 0:
         fit = newest_that_fit(plan, free)
-        if fit and ui.ask(f"Only the newest {fit:,} tasks fit in your free tokens. Use just those?", True):
+        if fit >= least and ui.ask(f"Only the newest {fit:,} tasks fit in your free tokens. Use just those?", True):
             limit = fit
+        elif fit < least:
+            ui.note(f"Your free tokens cover only {fit:,} tasks, fewer than the {least} training needs.")
     if limit and limit != args.max_tasks:
         items = embedding_items(found.new_tasks, chosen, limit=limit)
         plan = price(items, model_name, key)

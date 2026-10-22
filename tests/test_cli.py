@@ -213,6 +213,30 @@ def test_forecasting_with_an_untrained_predictor_says_so(capsys):
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "not_trained"
 
 
+def test_an_unknown_model_type_stops_setup_before_anything_is_spent(capsys, records, ready):
+    assert main(["create", "--yes", "--model-type", "nope", "--archive", f"claude-code={records}"]) == 1
+    error = capsys.readouterr().err
+    assert "Unknown model type 'nope'" in error and "Nothing was read or spent" in error
+    assert ready.requests == [] and predictor_names() == []
+
+
+def test_setup_never_offers_fewer_free_tasks_than_training_needs(capsys, records, ready, monkeypatch):
+    embeddings.set_free_tokens(KEY, "new")
+    embeddings.record_usage(KEY, "voyage-4", embeddings.FREE_TOKENS - 300)  # room for only a few tasks
+    asked = []
+
+    def fake_input(question=""):
+        asked.append(question.strip())
+        return "n" if "Embed them" in question else ""
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(cli, "interactive", lambda: True)
+    code = main(["create", "--archive", f"claude-code={records}", "--features", "", "--embedding", "voyage-4"])
+    assert code == 0 and "Your free tokens cover only" in capsys.readouterr().out
+    assert not any("fit in your free tokens" in question for question in asked)
+    assert predictor_names() == []  # it stopped at the question, as told
+
+
 def test_bad_choices_get_a_plain_reason(capsys, records, ready):
     assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "horoscope"]) == 1
     assert "Unknown feature" in capsys.readouterr().err
