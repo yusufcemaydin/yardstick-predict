@@ -2,6 +2,93 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Records are read more accurately again, and this time your predictors catch up by themselves: the next refresh reads all your records again, once, and embeds only the texts that changed. Training is several times faster, and more so on computers with many processor cores.
+
+### Fixed
+
+- Reading records:
+  - A Claude Code helper's tokens and cost were never added to the task that started it, because the reader looked for a mark that helper replies don't have. Helpers that a workflow starts were missed too, and their records were read as if they were sessions.
+  - A task whose helper was still running could be learned from with only part of its tokens and cost. It now waits for a later refresh. A helper that goes quiet without reporting back leaves its task stopped.
+  - A scheduled task, a message from another session or a headless run wasn't a task of its own. Its work was added to the task before it. Each is now a task, started by a program.
+  - Work the agent did after a background job reported back was counted nowhere. It now counts toward the task that started the job.
+  - A person's `!` shell command that the agent then worked on was left out. It's now a task.
+  - A copy of a session that had lost a line could join two tasks into one and count the second one twice. A session and its copies are now read together, line by line.
+  - A refresh never learned that a saved task had stopped, such as on a usage limit, when no new model call came with it. A task read again from its own record now replaces its saved copy. A saved task its record no longer holds is taken out.
+  - An approved tool's whole run was taken out of the task's time as a wait for you. When the tool's result says how long it ran, only the wait before that is taken out now.
+  - A task whose last tool call never got a result was learned from as finished. It's now stopped.
+  - Codex: a turn cut short by the next one was dropped. It's now kept, stopped. Helpers that review approvals were dropped, and a helper started by a helper could lose both their turns.
+  - A record with an empty text, or one deleted while it was read, stopped the whole read.
+  - Big records took more memory than they needed, and each refresh looked through the record folders twice.
+- The model:
+  - Training used every processor core on small jobs, where the threads cost more time than they saved. On a computer with many cores, it's now about ten times faster.
+  - Weibull curves started from numbers meant for log-normal ones, so their expected values came out far too low.
+  - The newest training tasks, held back to decide when to stop adding trees, were also used to build the starting curves those trees were judged against.
+  - A model with many old tasks and few new ones got a starting curve that was too narrow.
+  - With `--loss crps`, curve widths learned at half speed, and the width correction was picked by another score.
+  - The simple rule's narrowest curve was twice as wide as the model's, so on values that barely varied the model could pass on that alone.
+  - With dropout, the trees kept were not quite the ones early stopping picked.
+  - Weibull with expected values only, and unknown settings, were accepted and then ignored. They're now refused.
+  - "Tested on" counted test windows that never ran.
+  - A forecast searched for similar tasks once for each AI model and effort level, not once for each prompt.
+  - A forecast could read a model while a refresh replaced it, and mix the old model's settings with the new one's trees.
+- Embedding with Voyage:
+  - On an account with low limits, one rate limit made every later request hold a single text, and a request limit made it send more requests, not fewer. A big setup could take hours. It now waits for the limit to come back, as Voyage asks.
+  - The same text in many tasks, such as "continue", was paid for once per task. A prompt the status line forecast was paid for again at the next refresh.
+  - A vector made from an older text of a task was kept after the text changed.
+  - A request with several texts gave up after a few seconds of server errors.
+  - When Voyage's tokenizer couldn't be downloaded, every count waited about 23 seconds again, and every forecast loaded it.
+  - A forecast with Voyage out of reach waited about two minutes before it said so. It now says so within seconds.
+  - A damaged record of your Voyage usage could offer the 200 million free tokens again. It's now set aside, and costs assume no free tokens.
+  - A redirect could send your key to another address. A key with a hidden character in it, or an odd reply, ended in a traceback.
+- The command:
+  - A program could get a traceback instead of a JSON answer, for example when a plugin was missing or a predictor's settings were broken.
+  - Saving a setting, a predictor or the benchmarks wrote the file in place. A crash halfway left it empty, and a reader at the wrong moment saw half of it. Saves now happen in one step.
+  - The README's plugin example didn't work with the installed command.
+  - Code in the current folder, such as a file called `json.py`, could run in place of Python's own when the command restarted itself on a Mac.
+  - A broken XGBoost stopped commands that don't need it, such as `status`, `default` and `claude-code remove`.
+  - `--yes` still asked questions in a terminal.
+  - After a failed setup, the advice to finish it refreshed your default predictor, not the new one. A first predictor whose setup failed never became the default.
+  - A plain `predict` when no AI model had passed the test gave an error, not each model's reason. A repeated `--model` gave repeated forecasts.
+  - A record file that was only touched was read again on every refresh.
+  - The guided refresh stopped at the first predictor that was busy.
+  - Ctrl+D at a question ended in a traceback.
+  - Not-a-number and infinite values were accepted for number flags, and so was a negative `--half-life`.
+  - Requests the schema refused were accepted, and a prompt of only spaces was refused by one and accepted by the other.
+  - `status` loaded every whole model just to print its report.
+  - A predictor name could end in a line break, or be a name Windows keeps for a device.
+  - The help said the default features were the prompt alone. They're the prompt and the context.
+- In Claude Code's status line:
+  - Its commands let Python load code from the folder you work in, so a project's own file called `json.py` ran in place of Python's own. The commands now start Python so that it never looks there, and the package keeps that folder out for the older commands too. Run `yardstick-predict claude-code install` again to get the new ones: until you do, the status line asks you to.
+  - The clock stopped at the first stop, even when another hook kept the agent working.
+  - A background job reporting back, a scheduled task or a message from another session started a new task and a new forecast. A job's report now continues its task. Scheduled tasks and messages from other sessions are forecast as a program's prompts, as training counts them.
+  - "Took" counted the time spent waiting for your answers and approvals. It's now the agent's working time, as training counts it.
+  - Removing it didn't put back the status line it replaced, and the copy of your settings kept next to them was only made the first time.
+  - A prompt with half an emoji in it broke the hook, and the line showed "forecasting…" for good.
+  - Prompts whose forecast never started piled up, and nothing was cleaned up after removing it.
+  - A locked password store kept each forecast waiting, and each new prompt started another one. Now one forecast runs at a time, and it waits a few seconds at most.
+  - Scripted runs, such as `claude -p`, made forecasts no one saw.
+  - If you set `YARDSTICK_HOME`, the status line looked for its forecasts in the usual folder. Installing now puts your folder into its commands.
+- Prices: Claude Sonnet 4 and 4.5 cost more above 200,000 input tokens, and five Codex models had no price.
+
+### Changed
+
+- The `skills` feature now uses only the skills known before a task runs: the ones its prompt invokes and the ones the conversation used before it. The skills a task went on to use can't be known when it's forecast, so learning from them made the test look better than real forecasts are. A predictor with this feature embeds its skills again once. The status line's forecasts send them too.
+- Installing the status line warns when your Voyage key is only in the environment, where Claude Code may not see it, and offers to keep it in your password store.
+- An effort level that an AI model never ran at gets no forecast, with the reason `not_enough_data`. A request with no effort level gets the level the model ran at most often lately.
+- Each effort level gets its own starting curve, pulled toward its AI model's.
+- A free AI model's cost is `0`.
+- `--plugin` also takes the path of a `.py` file. A predictor remembers where it found each plugin, so forecasts from other folders load it too.
+- Errors that stop a command go to standard error.
+
+### Added
+
+- A cache of embeddings in the yardstick folder. It holds each text's vector and a one-way hash of the text, never the text.
+- New error codes in the JSON answer: `no_default_predictor`, `broken_predictor`, `plugin_failed`, `model_too_new` and `internal_error`.
+- Training says when one of your own features had no value for any past task, as when it reads only a request's `extra`.
+- The yardstick folder is made private on Windows too.
+
 ## [0.2.1] - 2026-10-22
 
 Records are read more accurately. A predictor made with an older version keeps the tasks it already read. To re-read all of yours, create a new predictor with `yardstick-predict create NAME`, then make it the default with `yardstick-predict default NAME`.

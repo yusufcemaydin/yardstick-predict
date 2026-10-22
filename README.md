@@ -79,7 +79,7 @@ The prompt, the AI model and its effort level are always used. You can add more,
 | AI model | The model that runs the task, such as `claude-opus-5-5`. | Always on |
 | effort level | How hard the model thinks, such as `high`, `xhigh` or `max`. | Always on |
 | `context` | The last 1,500 characters of the conversation before the prompt, embedded. | On |
-| `skills` | The skills the agent used, embedded by their descriptions. | Off |
+| `skills` | The skills known before the task runs, embedded by their descriptions: the ones its prompt invokes, and the ones used earlier in the conversation. | Off |
 | `benchmarks` | Public facts about each AI model from [OpenRouter's model list](https://openrouter.ai/models): prices, context size, longest answer and release date. They are the same for old and new models. | Off |
 | your own | Any text or number you compute from a task. See [Extend it](#extend-it). | — |
 
@@ -101,7 +101,13 @@ Each embedded feature becomes what the most similar past tasks really took. A pr
 yardstick · 1:12 of ~4 min · ~$1.23
 ```
 
-While it's on, every prompt you send in Claude Code goes to Voyage to be embedded, a few tokens each. Add `--here` to turn it on only for sessions in the current folder. `yardstick-predict claude-code remove` turns it off.
+"Took" is the agent's working time, as training counts it: waits for your answers and approvals are left out. When another hook keeps the agent working after it stops, the clock runs on. A background job reporting back continues its task. Scheduled tasks and messages from other sessions are forecast as a program's prompts, as training counts them. Scripted runs, such as `claude -p`, get no forecast, since they show no status line.
+
+While it's on, every new prompt you send in Claude Code goes to Voyage to be embedded, a few tokens each. Add `--here` to turn it on only for sessions in the current folder. `yardstick-predict claude-code remove` turns it off and puts back the status line it replaced. Both keep a copy of Claude Code's settings file next to it, as it was before.
+
+If your Voyage key is only in the `VOYAGE_API_KEY` environment variable, Claude Code may not see it. Install says so, and offers to keep the key in your computer's password store.
+
+If you installed it with version 0.2.1 or earlier, run `yardstick-predict claude-code install` again. The older commands let Python load code from the folder you work in, and the status line asks you to update them until you do.
 
 ## Use it from a program
 
@@ -147,11 +153,11 @@ One request can hold up to 1,000 tasks, each on up to 50 models. The format is f
 
 A forecast you can't trust is worse than none, because a program acts on it. So before it gives any forecast, a predictor replays your newest 30% of tasks in three windows. Each window is forecast by a model trained only on the tasks before it. Then each AI model must pass three checks:
 
-1. **Beat the simple rule.** The simple rule gives every task on a model the same forecast: the spread of that model's past tasks. The forecasts must score at least as well on CRPS, the standard score for probability forecasts.
+1. **Beat the simple rule.** The simple rule gives every task on a model the same forecast: the spread of that model's past tasks. The forecasts must score at least as well on CRPS, the standard score for probability forecasts, within 2%.
 2. **Keep its ranges honest.** At least 75% of real results must fall inside the 90% range.
 3. **Add up.** The expected values must add up to between half and twice the real total.
 
-A model that fails a check gets `null` and a reason. `yardstick-predict status` shows the scores and which check failed. Much of how long an agent takes is chance, so the predictor's job is to be honest about that spread, and to narrow it where your data allows.
+A model that fails a check gets `null` and a reason. So does an effort level the model never ran at. `yardstick-predict status` shows the scores and which check failed. The test needs 100 tasks before it can judge anything, and each AI model needs 30 to test on and 30 before them. Much of how long an agent takes is chance, so the predictor's job is to be honest about that spread, and to narrow it where your data allows.
 
 ## Advanced settings
 
@@ -162,7 +168,7 @@ These are for experts and have sensible defaults. The guided setup never asks ab
 | `--model-type` | The kind of model: `xgboost`, or one a plugin adds. | `xgboost` |
 | `--heads` | What to forecast: any of `seconds`, `tokens`, `usd`. | all three |
 | `--head` | `distribution` for a full curve, or `expected` for the expected value alone. | `distribution` |
-| `--shape` | The curve's shape: `lognormal` or `weibull`. | `lognormal` |
+| `--shape` | The curve's shape: `lognormal` or `weibull`. Only curves have one. | `lognormal` |
 | `--loss` | What training minimizes: `log_score` or `crps` for curves, `gamma` or `tweedie` for expected values. | `log_score` |
 | `--dropout` | The share of trees dropped each round, from 0 to 0.9. | `0` |
 | `--test-share` | The share of newest tasks held back as the test. | `0.3` |
@@ -190,7 +196,9 @@ register_feature("project", "text", lambda info: info.project)
 yardstick-predict create --yes --plugin my_features --features context,words,project
 ```
 
-A text feature is embedded like the prompt. A number feature goes to the model as it is. Your function gets the task's prompt, context, skills, project, model, thinking level and agent, from past records when training and from the request when forecasting. A request can also carry an `"extra"` object for your features, which reaches them as `info.extra`.
+`--plugin` takes a module in the current folder, as here, or the path of a `.py` file. The predictor remembers where the file is, so the plugin also loads when a forecast runs from another folder, as the status line's do.
+
+A text feature is embedded like the prompt. A number feature goes to the model as it is. Your function gets the task's prompt, context, skills, project, model, thinking level and agent, from past records when training and from the request when forecasting. A request can also carry an `"extra"` object for your features, which reaches them as `info.extra`. Past tasks have no extra, so a feature should also work its value out from the task itself. Training says so when one of your features had no value for any past task.
 
 A plugin can also add a model type with `yardstick_predict.model_types.register_model_type(name, train, load)`, then use it with `--model-type`. [`model_types.py`](src/yardstick_predict/model_types.py) describes what a model type provides.
 
@@ -199,7 +207,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | Command | What it does |
 |---|---|
 | `yardstick-predict` | Sets up your first predictor, or finds new runs and offers to refresh. |
-| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express` takes every default. `--archive codex=PATH` adds a folder of records. |
+| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express`, or `--yes`, takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. |
 | `yardstick-predict refresh` | Adds new runs, embeds them and retrains. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each predictor, its features and how it did on its test. `--json` for programs. |
@@ -214,7 +222,7 @@ To get the newest version:
 uv tool upgrade yardstick-predict
 ```
 
-Upgrading doesn't touch your predictors.
+Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed.
 
 To remove everything, uninstall the program, delete its folder and delete the Voyage key it kept:
 
@@ -228,7 +236,8 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 
 ## Privacy and safety
 
-- **Your records stay on your computer.** The dataset and the model live in `~/.yardstick`, or wherever `YARDSTICK_HOME` points. The folder is readable only by you.
+- **Your records stay on your computer.** The dataset and the model live in `~/.yardstick`, or wherever `YARDSTICK_HOME` points. The folder is readable only by you, on Windows too.
+- **The cache of embeddings holds no text.** For each text it keeps a one-way hash and the text's vector, in the same private folder.
 - **Only the text you choose to embed is sent, and only to Voyage,** over an encrypted connection.
 - **Your Voyage key** is read from `VOYAGE_API_KEY` or kept in your computer's password store. yardstick-predict never writes it to a file of its own.
 - **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face, at one fixed version, and OpenRouter's model list if you use benchmarks.
@@ -240,6 +249,10 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 Voyage gives every account 200 million free tokens. yardstick-predict can't see your balance, so it keeps its own count and asks once whether your account is new.
 
 Before it embeds anything, it shows the exact token count, counted with Voyage's own tokenizer, and the price. If a big history won't fit in your free tokens, it offers to embed only your newest tasks. Each refresh shows the cost of just the new tasks.
+
+A text is paid for once. The same text in many tasks, such as a prompt that says only "continue", is sent once. A text embedded before with the same Voyage model, for any predictor or for a forecast, comes from a cache on your computer and costs nothing.
+
+An account without a payment method gets low limits, such as a few requests and 10,000 tokens a minute. When Voyage says a limit is reached, yardstick-predict waits for it to come back, so a big first setup on such an account can take a while.
 
 ## Dependencies
 
