@@ -141,8 +141,10 @@ def test_the_key_comes_from_the_environment_and_is_never_stored(monkeypatch, hom
 
 def test_the_key_is_never_sent_unencrypted(monkeypatch):
     monkeypatch.setenv("VOYAGE_API_BASE", "http://evil.example.com/v1")
-    with pytest.raises(embeddings.VoyageError, match="https"):
+    monkeypatch.setattr(embeddings.time, "sleep", lambda seconds: pytest.fail("a wrong setting was retried"))
+    with pytest.raises(embeddings.VoyageError, match="https") as caught:
         embeddings.check_key(KEY, "voyage-4")
+    assert str(caught.value).startswith("VOYAGE_API_BASE must start with https://")
 
 
 def test_the_yardstick_folder_is_private(home):

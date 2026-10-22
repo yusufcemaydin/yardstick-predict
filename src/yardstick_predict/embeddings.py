@@ -52,9 +52,13 @@ MODELS = {
 }
 
 
+SETTINGS = -1
+"""The status of an error in a setting on this computer. No retry can fix it, so it's never retried."""
+
+
 class VoyageError(Exception):
     def __init__(self, status: int, detail: str) -> None:
-        super().__init__(f"Voyage said {status}: {detail}")
+        super().__init__(detail if status == SETTINGS else f"Voyage said {status}: {detail}")
         self.status = status
         self.detail = detail
 
@@ -64,7 +68,7 @@ def api_base() -> str:
     base = os.environ.get("VOYAGE_API_BASE", "https://api.voyageai.com/v1").rstrip("/")
     address = urllib.parse.urlparse(base)
     if address.scheme != "https" and address.hostname not in ("127.0.0.1", "localhost", "::1"):
-        raise VoyageError(0, "VOYAGE_API_BASE must start with https://, so your key is never sent unencrypted")
+        raise VoyageError(SETTINGS, "VOYAGE_API_BASE must start with https://, so your key is never sent unencrypted")
     return base
 
 

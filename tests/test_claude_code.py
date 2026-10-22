@@ -271,3 +271,16 @@ def forecasts_by_hand(monkeypatch) -> list[list[str]]:
 
 def plain(text: str) -> str:
     return text.replace("\033[2m", "").replace("\033[22m", "")
+
+
+@pytest.mark.parametrize("settings", [["not", "an", "object"], {"hooks": None}, {"hooks": {"Stop": "say done"}}])
+def test_install_leaves_settings_it_cant_add_to_alone(tmp_path, monkeypatch, capsys, settings):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / ".claude" / "settings.local.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(settings))
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    assert cli.main(["claude-code", "install", "--here", "--yes"]) == 1
+    error = capsys.readouterr().err
+    assert "left alone" in error or "nothing was added" in error
+    assert json.loads(path.read_text()) == settings

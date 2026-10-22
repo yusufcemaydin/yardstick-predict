@@ -102,6 +102,8 @@ def cost_lines(cost: embeddings.Cost, model: str, tasks: int) -> list[str]:
 
 
 def explain(error: embeddings.VoyageError) -> str:
+    if error.status == embeddings.SETTINGS:
+        return error.detail
     detail = error.detail.lower()
     if any(word in detail for word in ("payment", "billing", "credit", "balance", "quota", "free token")):
         return (
@@ -921,6 +923,8 @@ def cmd_claude_code(args) -> int:
         settings = json.loads(path.read_text()) if path.is_file() else {}
     except ValueError:
         raise SystemExit(f"Claude Code's settings in {path} aren't valid JSON, so they were left alone.") from None
+    if not isinstance(settings, dict):
+        raise SystemExit(f"Claude Code's settings in {path} aren't a JSON object, so they were left alone.")
     where = "Claude Code sessions in this folder" if args.here else "all your Claude Code sessions"
     if args.action == "remove":
         changed = claude_code.removed(settings)
@@ -932,6 +936,16 @@ def cmd_claude_code(args) -> int:
         return 0
     if not predictor_names():
         raise SystemExit("There's no predictor yet. Run yardstick-predict to create one first.")
+    hooks = settings.get("hooks", {})
+    unreadable = not isinstance(hooks, dict) or any(
+        not isinstance(hooks.get(event, []), list) for event in ("UserPromptSubmit", *claude_code.STOPS)
+    )
+    if unreadable:
+        # Adding only the status line would show it without ever starting a forecast.
+        raise SystemExit(
+            f'The "hooks" in {path} aren\'t in the form Claude Code reads, so nothing was added. '
+            "Fix or remove them, then run this again."
+        )
     ui.out(ui.bold("Forecasts in Claude Code"))
     ui.line(f"This adds a status line and two hooks to {where}.")
     ui.note(f"They go in {path}." + (" A copy of the file as it is now is kept next to it." if path.is_file() else ""))
