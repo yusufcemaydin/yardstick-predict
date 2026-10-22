@@ -306,6 +306,16 @@ def _claude_call(line: dict) -> tuple[tuple, _Call] | None:
     return (message.get("id"), line.get("requestId")), call
 
 
+def _claude_failed(line: dict) -> bool:
+    """Whether a reply is a failed call that Claude Code wrote itself, such as a server error or a usage limit.
+
+    Its placeholder for a message that needs no answer isn't a failure, and neither is a real model reply.
+    """
+    if (line.get("message") or {}).get("model") != "<synthetic>":
+        return False
+    return bool(line.get("isApiErrorMessage") or line.get("error"))
+
+
 def _claude_helpers(session_dir: Path) -> dict[str, dict[tuple, _Call]]:
     """Helper-agent calls grouped by the prompt that started them."""
     by_prompt: dict[str, dict[tuple, _Call]] = {}
@@ -355,7 +365,7 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
         calls: dict[tuple, _Call] = {}
         model = effort = None
         first_input = None
-        used_tools = stopped = False
+        used_tools = stopped = failed = False
         start = _timestamp(line.get("timestamp"))
         last = start
         moments: list[float] = []
@@ -380,7 +390,11 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                 continue
             found = _claude_call(event)
             if not found:
+                # Claude Code writes a failed call, such as a server error or a usage limit, as a reply of its
+                # own. The task stopped there, unless a real reply came after it, as when Claude Code retried.
+                failed = failed or _claude_failed(event)
                 continue
+            failed = False
             key, call = found
             if key not in calls:
                 calls[key] = call
@@ -436,7 +450,7 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                 usd=usd,
                 calls=len(all_calls),
                 direct=not used_tools,
-                stopped=stopped,
+                stopped=stopped or failed,
                 idle=_longest_gap(start, last, moments, waits) > IDLE_GAP_SECONDS,
                 skills="\n".join(sorted(skills)),
                 finished_at=last,

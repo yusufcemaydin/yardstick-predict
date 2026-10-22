@@ -182,6 +182,72 @@ def test_stopped_tasks_are_marked(tmp_path):
     assert not tasks["Never mind"].stopped
 
 
+@pytest.mark.parametrize("error", ["rate_limit", "server_error", "authentication_failed"])
+def test_a_task_that_ends_on_an_api_error_is_stopped(tmp_path, error):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Refactor the parser")
+    tool = session.reply(5, tool="Bash")
+    session.tool_result(tool, 2, line["promptId"])
+    session.synthetic(3, error=error)
+    session.prompt("Carry on")
+    session.reply(2)
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    assert tasks["Refactor the parser"].stopped
+    assert not tasks["Carry on"].stopped
+
+
+def test_an_api_error_followed_by_a_retry_that_worked_doesnt_stop_the_task(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Refactor the parser")
+    tool = session.reply(5, tool="Bash")
+    session.tool_result(tool, 2, line["promptId"])
+    session.synthetic(3, error="server_error")
+    session.reply(4)  # Claude Code retried, and the agent carried on
+    session.save(mtime=START)
+
+    task = read_claude(tmp_path)["Refactor the parser"]
+    assert not task.stopped
+    assert task.calls == 2
+
+
+def test_an_api_error_followed_only_by_a_placeholder_reply_still_stops_the_task(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Refactor the parser")
+    session.reply(5)
+    session.synthetic(3, error="rate_limit")
+    session.synthetic(60, error=None)  # "No response requested." No model call came after the error.
+    session.save(mtime=START)
+    assert read_claude(tmp_path)["Refactor the parser"].stopped
+
+
+def test_an_api_error_in_a_helper_doesnt_stop_the_task(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Compare these libraries")
+    session.reply(5)
+    session.synthetic(1, error="server_error", sidechain=True)
+    session.save(mtime=START)
+    assert not read_claude(tmp_path)["Compare these libraries"].stopped
+
+
+def test_a_synthetic_reply_is_never_a_model_call_and_never_sets_the_model(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Price this")
+    session.synthetic(1, error="server_error")
+    session.synthetic(1, error=None)
+    session.reply(5, model="claude-sonnet-5", calls_usage=usage(new_input=100, read=0, output=10))
+    session.prompt("Only an error came back")
+    session.synthetic(1, error="rate_limit")
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    assert set(tasks) == {"Price this"}
+    task = tasks["Price this"]
+    assert (task.calls, task.model, task.input_tokens, task.output_tokens) == (1, "claude-sonnet-5", 100, 10)
+    assert task.usd == pytest.approx(prices.call_cost("claude-sonnet-5", 100, 0, 0, 0, 10))
+
+
 def test_a_task_copied_into_a_resumed_session_counts_once(tmp_path):
     original = ClaudeSession(tmp_path, "s1", START)
     line = original.prompt("Original task", uuid="same-uuid")

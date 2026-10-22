@@ -115,6 +115,29 @@ class ClaudeSession:
             }
         )
 
+    def synthetic(self, seconds: float, error: str | None = "rate_limit", sidechain: bool = False):
+        """A reply Claude Code writes itself, with no model call: a failed call such as a server error or a
+        usage limit, or with `error=None`, the placeholder it writes when a message needs no answer."""
+        self.clock += seconds
+        line = {
+            "type": "assistant",
+            "uuid": self._id("y"),
+            "sessionId": self.session,
+            "timestamp": iso(self.clock),
+            "isSidechain": sidechain,
+            "isApiErrorMessage": error is not None,
+            "message": {
+                "id": self._id("ymsg"),
+                "model": "<synthetic>",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "API Error: 429" if error else "No response requested."}],
+                "usage": usage(new_input=0, read=0, output=0),
+            },
+        }
+        if error is not None:
+            line["error"] = error
+        self.lines.append(line)
+
     def interrupt(self, seconds: float = 1):
         self.clock += seconds
         self.lines.append(
