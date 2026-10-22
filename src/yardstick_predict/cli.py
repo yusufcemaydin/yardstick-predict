@@ -496,8 +496,11 @@ def cmd_create(args) -> int:
     model_settings = advanced_settings(args)
     from .model import MIN_TASKS
 
-    if args.max_tasks is not None and args.max_tasks < MIN_TASKS:
-        raise SystemExit(f"Use --max-tasks {MIN_TASKS} or more. Training needs at least {MIN_TASKS} tasks.")
+    # The built-in model needs 30 tasks it can learn from. A model type from a plugin sets its own needs.
+    built_in = model_settings.get("type", "xgboost") == "xgboost"
+    least = MIN_TASKS if built_in else 1
+    if args.max_tasks is not None and args.max_tasks < least:
+        raise SystemExit(f"Use --max-tasks {least} or more. Training needs at least {least} tasks.")
 
     ui.heading("Your past runs")
     archives = unique_names(choose_archives(can_ask, args.archive))
@@ -515,13 +518,12 @@ def cmd_create(args) -> int:
         ui.ok(f"Read {total:,} tasks: " + ui.join([f"{source} {count:,}" for source, count in counts]))
     if not found.new_tasks:
         raise SystemExit("Found no finished tasks in those records.")
-    from .model import MIN_TASKS
     from .pipeline import learnable
 
     ready = len(learnable(found.new_tasks, args.max_tasks))
-    if ready < MIN_TASKS:
+    if built_in and ready < least:
         raise SystemExit(
-            f"Only {ready} of those tasks can be learned from. Training needs at least {MIN_TASKS}. "
+            f"Only {ready} of those tasks can be learned from. Training needs at least {least}. "
             "Nothing was spent. Add more records, or try again after more runs."
         )
     chosen = choose_features(can_ask, args.features)
