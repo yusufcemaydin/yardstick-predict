@@ -385,3 +385,16 @@ def test_prices():
     assert prices.call_cost("claude-opus-5-5", 1_000_000, 0, 0, 0, 0) == pytest.approx(4.0)
     assert prices.call_cost("claude-opus-5-5", 0, 0, 0, 1_000_000, 0, fast=True) == pytest.approx(0.4)
     assert prices.call_cost("gpt-6.1-sol", 300_000, 0, 0, 0, 0) == pytest.approx(1.2)
+
+
+def test_two_waits_for_the_person_at_once_are_taken_off_once(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Ask me two things, then do it")
+    first = session.reply(5, tool="AskUserQuestion")
+    second = session.reply(1, tool="AskUserQuestion")
+    session.tool_result(first, 1200, line["promptId"])  # answered after 20 minutes
+    session.tool_result(second, 600, line["promptId"])  # answered after 30 minutes, the two waits overlap
+    session.reply(9)
+    session.save(mtime=START)
+    # 5 seconds before the questions and 9 after. Counting both waits in full left 0.5 seconds, the least.
+    assert read_claude(tmp_path)["Ask me two things, then do it"].seconds == pytest.approx(14)

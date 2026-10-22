@@ -359,7 +359,6 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
         moments: list[float] = []
         tools_started: dict[str, tuple[str, float]] = {}
         skills: set[str] = set()
-        waited = 0.0
         waits: list[tuple[float, float]] = []
         for event in lines[i + 1 : end]:
             moment = _timestamp(event.get("timestamp"))
@@ -373,7 +372,6 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                     stopped = True
                 wait = _person_wait(message, event, tools_started, moment)
                 if wait is not None:
-                    waited += wait[1] - wait[0]
                     waits.append(wait)
                 continue
             if event.get("type") != "assistant":
@@ -428,7 +426,7 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                 prompt=text.strip()[:TEXT_CHARS],
                 context=context,
                 context_tokens=first_input or 0,
-                seconds=max(last - start - waited, 0.5),
+                seconds=max(last - start - _covered(waits), 0.5),
                 input_tokens=new_input,
                 cache_write_tokens=cache_write,
                 cache_read_tokens=cache_read,
@@ -466,6 +464,15 @@ def _person_wait(
         if name in PERSON_TOOLS or asked_person:
             began = min(began, called)
     return (began, moment) if began < moment else None
+
+
+def _covered(spans: list[tuple[float, float]]) -> float:
+    """How long some spans of time cover together. Two questions asked at once overlap, and count once."""
+    total, reach = 0.0, float("-inf")
+    for began, ended in sorted(spans):
+        total += max(ended - max(began, reach), 0.0)
+        reach = max(reach, ended)
+    return total
 
 
 def _longest_gap(start: float, last: float, moments: list[float], waits: list[tuple[float, float]]) -> float:
