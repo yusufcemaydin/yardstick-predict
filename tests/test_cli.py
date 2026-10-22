@@ -506,6 +506,7 @@ def test_llm_analysis_reads_each_task_once_and_its_descriptions_are_embedded(cap
     predictor = Predictor("default")
     assert predictor.config["llm"] == {"provider": "codex", "model": llm.DEFAULT_CODEX}
     assert "LLM analysis: 420 tasks with Codex's own model through your chatgpt subscription" in out
+    assert "Analyzed 420 tasks." in out
     assert len(predictor.llm_labels()) == 420 and len(predictor.embedded("llm")) == 420
 
     code, out = run(capsys, "predict", "--model", "claude-opus-5-5", "--prompt", "fix the api")

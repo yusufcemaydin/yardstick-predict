@@ -253,7 +253,8 @@ def run_analysis(
         if on_progress:
             on_progress(done, len(asks))
 
-    return answered, llm.analyze(asks, predictor.config["llm"], fields, on_batch=save).problem
+    problem = llm.analyze(asks, predictor.config["llm"], fields, on_batch=save).problem
+    return answered, problem  # counted only once every answer is in
 
 
 def price(items: list[tuple[str, str, str]], model: str, key: str | None) -> EmbedPlan:
