@@ -627,7 +627,8 @@ class Model:
         family = self.family
         found = []
         for i in range(len(rows)):
-            row: dict = {"shape": f"two_part_{family.name}", "direct_probability": float(curves["p_direct"][i])}
+            p = curves["p_direct"]
+            row: dict = {"shape": f"two_part_{family.name}", "direct_probability": None if p is None else float(p[i])}
             for target in TARGETS:
                 curve = curves[target]
                 if curve is None:
@@ -1079,7 +1080,8 @@ def test(tasks: list[Task], rows: list[Features], settings: dict) -> dict:
         train_tasks, train_rows = [tasks[i] for i in known], [rows[i] for i in known]
         trial = fit(train_tasks, train_rows, settings)
         scored.append(_score_window(trial, train_tasks, tasks[cut:end], rows[cut:end]))
-    return _verdicts(scored, trained_on=first, tested_on=len(tasks) - first, settings=settings)
+    seen = sorted({t.model for t in tasks})
+    return _verdicts(scored, trained_on=first, tested_on=len(tasks) - first, settings=settings, seen=seen)
 
 
 def _score_window(trial: Model, train_tasks: list[Task], test_tasks: list[Task], test_rows: list[Features]) -> dict:
@@ -1137,8 +1139,13 @@ def _score_window(trial: Model, train_tasks: list[Task], test_tasks: list[Task],
     return out
 
 
-def _verdicts(scored: list[dict], trained_on: int, tested_on: int, settings: dict) -> dict:
-    """Pool the windows and judge each AI model: give its forecasts, or say why not."""
+def _verdicts(
+    scored: list[dict], trained_on: int, tested_on: int, settings: dict, seen: list[str] | None = None
+) -> dict:
+    """Pool the windows and judge each AI model: give its forecasts, or say why not.
+
+    An AI model in `seen` that the windows never tested, such as one used only long ago, gets no forecasts.
+    """
     models = np.concatenate([w["models"] for w in scored]) if scored else np.array([])
     report: dict = {
         "trained_on": trained_on,
@@ -1166,8 +1173,8 @@ def _verdicts(scored: list[dict], trained_on: int, tested_on: int, settings: dic
         result: dict = {"tasks_tested": int((models == model).sum())}
         for target, data in pooled.items():
             rows = (models == model) & ~np.isnan(data["real"])
-            if not rows.any():
-                continue
+            if rows.sum() < MIN_TEST_TASKS:
+                continue  # too few known values to judge this head, such as cost on a model with no listed price
             chance = data["pit"][rows]
             has_ranges = not np.isnan(chance).all()
             ours, simple = float(data["ours"][rows].mean()), float(data["simple"][rows].mean())
@@ -1180,6 +1187,7 @@ def _verdicts(scored: list[dict], trained_on: int, tested_on: int, settings: dic
                 "in_50_range": round(float(np.mean((chance > 0.25) & (chance < 0.75))), 4) if has_ranges else None,
                 "in_90_range": round(float(np.mean((chance > 0.05) & (chance < 0.95))), 4) if has_ranges else None,
                 "expected_over_real_total": round(float(data["expected"][rows].sum() / data["real"][rows].sum()), 4),
+                "tasks_tested": int(rows.sum()),
             }
         # Only heads with test results were checked. A head that wasn't tested is never given.
         tested = [target for target in TARGETS if target in result]
@@ -1200,4 +1208,8 @@ def _verdicts(scored: list[dict], trained_on: int, tested_on: int, settings: dic
             served, reason = True, None
         result["failed_checks"] = failed if reason == "not_accurate_enough" else []
         report["models"][model] = {"served": served, "reason": reason, "heads": tested, **result}
+    for model in seen or []:
+        report["models"].setdefault(
+            model, {"served": False, "reason": "not_enough_data", "heads": [], "tasks_tested": 0, "failed_checks": []}
+        )
     return report

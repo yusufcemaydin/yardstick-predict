@@ -67,7 +67,7 @@ These numbers are an example. There is one forecast for each pair of task and mo
 | `usd` | Expected cost in US dollars at the model's list price. `null` when the model's price isn't in the price list. |
 | `reason` | Only when the forecast isn't given: why the numbers are `null`. |
 
-A predictor can be set to forecast only some of `seconds`, `tokens` and `usd`. The others are always `null`.
+A predictor can be set to forecast only some of `seconds`, `tokens` and `usd`. The others are always `null`. A value the test couldn't check for an AI model is `null` too, such as `usd` on a model whose cost it couldn't test.
 
 Expected values are averages, not middles. A few long runs pull the average above the typical run. Expected values add up: the expected total of several tasks is the sum of their forecasts.
 

@@ -340,6 +340,27 @@ def test_a_target_that_never_changes_still_gives_strict_json(loss, seconds):
     assert all(math.isfinite(r["seconds"]["expected"]) for r in model.forecast(rows_for(tasks[:4])))
 
 
+def test_a_head_is_only_judged_on_enough_known_values():
+    tasks = synthetic(300)
+    for task in tasks[200:]:
+        task.usd = None  # no cost known for the newest tasks, as on a model with no listed price
+    model = M.train(tasks, rows_for(tasks))
+    opus = model.meta["report"]["models"]["claude-opus-5-5"]
+    assert opus["served"] and opus["heads"] == ["seconds", "tokens"]
+    forecast = model.forecast(rows_for(tasks[:1]))[0]
+    assert forecast["seconds"]["expected"] > 0 and forecast["usd"] is None
+
+
+def test_an_ai_model_used_only_long_ago_is_still_in_the_report():
+    tasks = synthetic(300)
+    for task in tasks[:60:2]:
+        task.model = "claude-old"
+    model = M.train(tasks, rows_for(tasks))
+    old = model.meta["report"]["models"]["claude-old"]
+    assert old["tasks_tested"] == 0 and not old["served"] and old["reason"] == "not_enough_data"
+    assert model.served("claude-old") == (False, "not_enough_data")
+
+
 @pytest.mark.parametrize(
     "settings, words",
     [
