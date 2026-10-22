@@ -60,7 +60,7 @@ def test_odd_shapes_in_your_settings_are_kept_and_never_crash():
 def test_the_status_line_follows_a_task_from_prompt_to_stop(monkeypatch):
     monkeypatch.setattr(cc, "_start_forecast", lambda session, prompt_at: None)
     send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "Add a login page"})
-    state_path, forecast_path = cc._paths("s1")
+    state_path = cc._state_path("s1")
     started = json.loads(state_path.read_text())["prompt_at"]
     assert cc._prompt_path("s1", started).read_text() == "Add a login page"
     assert cc.status_line("s1", "claude-opus-5-5", started + 1).endswith("· forecasting…")
@@ -70,7 +70,7 @@ def test_the_status_line_follows_a_task_from_prompt_to_stop(monkeypatch):
         {"model": "claude-opus-5-5", "effort": "high", "seconds": 120.0, "tokens": 9, "usd": 0.5},
         {"model": "claude-sonnet-5", "seconds": None, "tokens": None, "usd": None, "reason": "not_enough_data"},
     ]
-    forecast_path.write_text(json.dumps({"prompt_at": started, "forecasts": forecasts}))
+    cc._forecast_path("s1", started).write_text(json.dumps({"prompt_at": started, "forecasts": forecasts}))
     line = plain(cc.status_line("s1", "claude-opus-5-5[1m]", started + 72))
     assert line == "yardstick · 1:12 of ~4 min · ~$1.23"
     at_high = plain(cc.status_line("s1", "claude-opus-5-5", started + 72, effort="high"))
@@ -98,8 +98,9 @@ def test_an_older_forecast_never_replaces_a_newer_one(monkeypatch):
     monkeypatch.setattr("yardstick_predict.forecast.answer", answer)
     send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "First prompt"})
     assert cc.main(commands[0]) == 0
-    latest = json.loads(cc._paths("s1")[0].read_text())["prompt_at"]
+    latest = json.loads(cc._state_path("s1").read_text())["prompt_at"]
     assert plain(cc.status_line("s1", "m", latest + 1)) == "yardstick · 0:01 of ~2 min"  # the second prompt's
+    assert len(list(cc.folder().glob("s1.*.forecast.json"))) == 2  # each prompt's forecast in its own file
 
 
 def test_each_forecast_reads_its_own_prompt(monkeypatch):
@@ -120,7 +121,7 @@ def test_each_forecast_reads_its_own_prompt(monkeypatch):
         assert cc.main(command) == 0
     assert "Second prompt" not in asked[0] and asked[1] == ["Second prompt"]
     assert not list(cc.folder().glob("*.prompt"))  # each forecast took its prompt away
-    latest = json.loads(cc._paths("s1")[0].read_text())["prompt_at"]
+    latest = json.loads(cc._state_path("s1").read_text())["prompt_at"]
     assert plain(cc.status_line("s1", "m", latest + 1)) == "yardstick · 0:01 of ~2 min"
 
 
@@ -177,21 +178,21 @@ def test_a_model_matches_its_dated_name_both_ways_and_never_another_model():
     assert cc._pick(alias, "claude-opus-4-5-20251101", "") == alias[0]
     assert cc._pick([{"model": "claude-opus-4", "seconds": 9.0}], "claude-opus-4-5", "") is None
     assert cc._pick([{"model": "claude-opus-4-5-20250101", "seconds": 8.0}], "claude-opus-4-5-20251101", "") is None
-    state_path, forecast_path = cc._paths("s1")
+    state_path = cc._state_path("s1")
     state_path.write_text(json.dumps({"prompt_at": 100.0}))
-    forecast_path.write_text(json.dumps({"prompt_at": 100.0, "forecasts": dated}))
+    cc._forecast_path("s1", 100.0).write_text(json.dumps({"prompt_at": 100.0, "forecasts": dated}))
     assert plain(cc.status_line("s1", "claude-opus-4-5[1m]", 172.0)) == "yardstick · 1:12 of ~60 s"
     assert plain(cc.status_line("s1", "claude-opus-4", 172.0)) == "yardstick · no forecast for claude-opus-4 yet"
 
 
 def test_the_status_line_takes_the_model_and_effort_as_objects_or_as_text(monkeypatch, capsys):
-    state_path, forecast_path = cc._paths("s1")
+    state_path = cc._state_path("s1")
     state_path.write_text(json.dumps({"prompt_at": 100.0}))
     forecasts = [
         {"model": "claude-opus-5-5", "effort": "max", "seconds": 240.0},
         {"model": "claude-opus-5-5", "effort": "high", "seconds": 120.0},
     ]
-    forecast_path.write_text(json.dumps({"prompt_at": 100.0, "forecasts": forecasts}))
+    cc._forecast_path("s1", 100.0).write_text(json.dumps({"prompt_at": 100.0, "forecasts": forecasts}))
     monkeypatch.setattr(cc, "time", SimpleNamespace(time=lambda: 172.0))
     events = [
         {"session_id": "s1", "model": {"id": "claude-opus-5-5"}, "effort": {"level": "max"}},

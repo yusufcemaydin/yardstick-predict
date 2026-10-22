@@ -43,16 +43,22 @@ def folder() -> Path:
     return found
 
 
-def _paths(session: str) -> tuple[Path, Path]:
+def _state_path(session: str) -> Path:
+    """Where a session's latest prompt time, model and effort level are kept."""
     safe = "".join(c for c in session if c.isalnum() or c in "-_")[:80] or "session"
-    base = folder() / safe
-    return base.with_suffix(".json"), base.with_suffix(".forecast.json")
+    return folder() / f"{safe}.json"
 
 
 def _prompt_path(session: str, prompt_at: float) -> Path:
     """Where the hook leaves a prompt for its forecast. Each prompt has its own file, named by when it was sent."""
-    state_path, _ = _paths(session)
+    state_path = _state_path(session)
     return state_path.with_name(f"{state_path.stem}.{prompt_at!r}.prompt")
+
+
+def _forecast_path(session: str, prompt_at: float) -> Path:
+    """Where a prompt's forecast is saved. Each prompt has its own, so one forecast can never replace another."""
+    state_path = _state_path(session)
+    return state_path.with_name(f"{state_path.stem}.{prompt_at!r}.forecast.json")
 
 
 def _read(path: Path) -> dict:
@@ -81,7 +87,7 @@ def hook() -> int:
     session = str(event.get("session_id") or "") if isinstance(event, dict) else ""
     if not session:
         return 0
-    state_path, _ = _paths(session)
+    state_path = _state_path(session)
     if event.get("hook_event_name") == "UserPromptSubmit":
         prompt = str(event.get("prompt") or "")
         if not prompt.strip():
@@ -171,10 +177,10 @@ def _tidy() -> None:
 def forecast(session: str, prompt_at: float) -> int:
     """Forecast the prompt sent at prompt_at on every AI model and effort level the predictor covers, and save it.
 
-    A newer prompt may come while this runs. Its forecast is the one to show, so this one is saved only
-    if its prompt is still the session's latest when it's done.
+    A newer prompt may come while this runs. Each prompt's forecast has its own file, and the status line
+    shows the latest prompt's, so a slower, older forecast never takes the newer one's place.
     """
-    state_path, forecast_path = _paths(session)
+    state_path = _state_path(session)
     prompt_path = _prompt_path(session, prompt_at)
     try:
         prompt = prompt_path.read_text()
@@ -199,8 +205,7 @@ def forecast(session: str, prompt_at: float) -> int:
         found.update(predictor=predictor.name, forecasts=answer(predictor, parsed)["forecasts"])
     except Exception as error:
         found["error"] = (getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
-    if _read(state_path).get("prompt_at") == prompt_at:
-        _write(forecast_path, found)
+    _write(_forecast_path(session, prompt_at), found)
     return 0
 
 
@@ -275,14 +280,13 @@ def status_line(session: str, model: str, now: float, effort: str = "", transcri
     label = _dim("yardstick")
     if not session:
         return label
-    state_path, forecast_path = _paths(session)
-    state = _read(state_path)
+    state = _read(_state_path(session))
     started = state.get("prompt_at")
     if not started:
         return label
     done = state.get("done_at") or interrupted_at(transcript, started)
     took = _clock((done or now) - started)
-    found = _read(forecast_path)
+    found = _read(_forecast_path(session, started))
     if found.get("prompt_at") != started:
         return f"{label} {_dim('·')} took {took}" if done else f"{label} {_dim('· forecasting…')}"
     if found.get("error"):
