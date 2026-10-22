@@ -152,13 +152,15 @@ def plan_embeddings(predictor: Predictor, key: str | None) -> EmbedPlan:
 
 def newest_that_fit(plan: EmbedPlan, tokens: int) -> int:
     """How many of the newest tasks fit in a number of tokens, with all their texts."""
-    used, tasks, last = 0, 0, None
+    # A task counts only when all its texts fit. The plan lists the newest tasks first, and so does this.
+    per_task: dict[str, int] = {}
     for (task_id, _, _), count in zip(plan.items, plan.counts):
+        per_task[task_id] = per_task.get(task_id, 0) + count
+    used, tasks = 0, 0
+    for count in per_task.values():
         if used + count > tokens:
             break
-        used += count
-        if task_id != last:
-            tasks, last = tasks + 1, task_id
+        used, tasks = used + count, tasks + 1
     return tasks
 
 

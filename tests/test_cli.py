@@ -123,6 +123,16 @@ def test_the_cost_is_said_plainly_and_free_tokens_count_only_on_a_new_account():
     assert "uses about 2,000,000 tokens" in said(None, exact=False) and "an estimate" in said(None, exact=False)
 
 
+def test_a_task_counts_toward_the_free_tokens_only_when_all_its_texts_fit():
+    from yardstick_predict.pipeline import EmbedPlan, newest_that_fit
+
+    items = [("newest", "prompt", "a"), ("newest", "context", "b"), ("older", "prompt", "c"), ("older", "context", "d")]
+    plan = EmbedPlan(items, [10, 10, 10, 10], embeddings.Cost(40, True, 0.06, 30))
+    assert newest_that_fit(plan, 30) == 1  # the older task's prompt fits, but its context doesn't
+    assert newest_that_fit(plan, 40) == 2
+    assert newest_that_fit(plan, 19) == 0
+
+
 def test_pressing_enter_on_the_free_tokens_question_assumes_no_credits(capsys, ready, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda question="": "")
     assert cli.get_key("voyage-4", can_ask=True) == KEY
