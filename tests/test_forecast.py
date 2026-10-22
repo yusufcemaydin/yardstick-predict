@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import jsonschema
@@ -155,6 +156,27 @@ def test_your_own_text_features_see_each_rows_model_effort_and_agent(stub, voyag
         assert np.array_equal(row.vectors["setup"], np.array(fake_vector(setup), dtype=np.float32))
     sent = [text for r in voyage.requests for text in r["input"]]
     assert sorted(sent) == sorted(["Add a login page", *setups])  # each text is sent once, the prompt too
+
+
+def test_numbers_that_json_cant_hold_become_null(stub):
+    predictor, model = stub
+    curve = {"direct": {"mu": 1.0, "sigma": 0.5}, "work": {"mu": 4.0, "sigma": 1.0}}
+    model.result = {
+        "shape": "two_part_lognormal",
+        "direct_probability": math.nan,
+        "seconds": {"expected": math.inf, "distribution": {**curve, "direct": {"mu": math.nan, "sigma": 0.5}}},
+        "tokens": {"expected": 1000.0, "distribution": {**curve, "work": {"mu": 4.0, "sigma": math.inf}}},
+        "usd": {"expected": math.nan, "distribution": curve},
+    }
+    tasks, distribution, _ = parse({**request(), "distribution": True})
+    result = answer(predictor, tasks, distribution)
+    json.dumps(result, allow_nan=False)  # strict JSON readers reject NaN and infinity
+    jsonschema.validate(result, schema("forecast-response.v1.json"))
+    forecast = result["forecasts"][0]
+    assert (forecast["seconds"], forecast["tokens"], forecast["usd"]) == (None, 1000, None)
+    shape = forecast["distribution"]
+    assert shape["direct_probability"] is None and shape["seconds"] is None and shape["tokens"] is None
+    assert shape["usd"] == curve
 
 
 def test_an_untrained_predictor_says_so():

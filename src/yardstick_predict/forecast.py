@@ -240,13 +240,18 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
 
 
 def _number(value) -> float | None:
-    return None if value is None else round(float(value), 6)
+    """A number for the answer. JSON has no NaN or infinity, so those become None, which is null."""
+    if value is None or not math.isfinite(float(value)):
+        return None
+    return round(float(value), 6)
 
 
 def _curve(distribution: dict | None) -> dict | None:
+    """A curve for the answer. A curve needs all its numbers, so one with NaN or infinity in it becomes null."""
     if not distribution:
         return None
-    return {part: {k: round(float(v), 6) for k, v in values.items()} for part, values in distribution.items()}
+    curve = {part: {k: _number(v) for k, v in values.items()} for part, values in distribution.items()}
+    return None if any(v is None for values in curve.values() for v in values.values()) else curve
 
 
 def _round(target: str, value: float) -> float | int | None:
