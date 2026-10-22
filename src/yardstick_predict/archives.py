@@ -641,19 +641,22 @@ def _codex_task(turn: _CodexTurn, payload: dict, event: str, meta: dict, path: P
 
 
 def _attach_codex_helpers(tasks: dict[str, Task], threads: list[_CodexThread]) -> None:
-    """Add each helper turn's tokens to the task of the parent's turn that started last before it.
+    """Add each helper turn's tokens to the task of the main thread's turn that started last before it.
 
-    That parent turn spawned the helper or sent it more work. So a helper's tokens count even when its
-    first reply comes after that turn finished, and a reused helper's later turns count toward the
-    later parent turns that sent them.
+    That turn spawned the helper or sent it more work. So a helper's tokens count even when its first
+    reply comes after that turn finished, and a reused helper's later turns count toward the later
+    turns that sent them. A helper spawned by a helper counts toward the main thread at the top.
     """
     by_id = {thread.id: thread for thread in threads}
     for thread in threads:
-        parent = by_id.get(thread.parent or "")
-        if parent is None:
+        main, seen = by_id.get(thread.parent or ""), {thread.id}
+        while main is not None and main.parent and main.id not in seen:
+            seen.add(main.id)
+            main = by_id.get(main.parent)
+        if main is None or main.parent:
             continue
         for _, started, calls in thread.turns:
-            sent = max(((start, turn_id) for turn_id, start, _ in parent.turns if start <= started), default=None)
+            sent = max(((start, turn_id) for turn_id, start, _ in main.turns if start <= started), default=None)
             task = tasks.get(f"codex:{sent[1]}") if sent else None
             if task is None:
                 continue

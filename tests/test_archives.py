@@ -267,6 +267,23 @@ def test_a_codex_helper_whose_first_reply_comes_after_its_parent_finished_still_
     assert tasks[0].input_tokens == 1200
 
 
+def test_a_codex_helper_spawned_by_a_helper_counts_toward_the_main_task(tmp_path):
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Split the work", calls=[(1000, 0, 100)], seconds=100)
+    parent.save(mtime=START)
+    helper = CodexSession(tmp_path, "helper", START + 10, parent="parent")
+    helper.turn("h1", "Helper part", calls=[(200, 0, 20)], seconds=5)
+    helper.save(mtime=START)
+    nested = CodexSession(tmp_path, "nested", START + 12, parent="helper")
+    nested.turn("n1", "Nested part", calls=[(50, 0, 5)], seconds=2)
+    nested.save(mtime=START)
+
+    tasks = read_archive(codex_archive(tmp_path), now=LATER)
+    assert [t.prompt for t in tasks] == ["Split the work"]
+    assert tasks[0].calls == 3
+    assert tasks[0].input_tokens == 1250
+
+
 def test_a_reused_codex_helper_charges_each_turn_to_the_task_that_sent_it(tmp_path):
     parent = CodexSession(tmp_path, "parent", START)
     parent.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=100)
