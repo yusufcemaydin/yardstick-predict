@@ -177,6 +177,9 @@ class Predictor:
             values = dict(zip(_COLUMNS, row))
             for flag in ("direct", "stopped", "idle"):
                 values[flag] = bool(values[flag])
+            # A task stored by an older version has an empty finish time: it isn't known.
+            if values["finished_at"] == "":
+                values["finished_at"] = None
             found.append(Task(**values))
         return found
 

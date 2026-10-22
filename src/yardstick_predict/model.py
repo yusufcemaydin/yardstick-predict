@@ -181,12 +181,12 @@ def target_value(task: Task, target: str) -> float | None:
 
 
 def finish_times(tasks: list[Task]) -> np.ndarray:
-    """When each task finished: its start plus its seconds. A task's outcome is known only from then on.
+    """When each task really finished, waits for the person included. A task's outcome is known only from then on.
 
-    Seconds leave out time spent waiting for a person, so for a task that waited this is a lower bound:
-    it really finished later.
+    A task stored by an older version doesn't know when it finished, so its start plus its seconds stands in.
+    Seconds leave out time spent waiting for a person, so for such a task that waited, it really finished later.
     """
-    return np.array([t.started_at + t.seconds for t in tasks], dtype=float)
+    return np.array([t.started_at + t.seconds if t.finished_at is None else t.finished_at for t in tasks], dtype=float)
 
 
 def recency_weights(tasks: list[Task], half_life_days: float | None) -> np.ndarray:

@@ -271,10 +271,22 @@ class CodexSession:
             "response_item",
             {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Fixed."}]},
         )
+        finished = int(self.clock)
         if aborted:
-            self.add("event_msg", {"type": "turn_aborted", "turn_id": turn_id, "reason": "interrupted"})
+            self.add(
+                "event_msg",
+                {"type": "turn_aborted", "turn_id": turn_id, "reason": "interrupted", "completed_at": finished},
+            )
         else:
-            self.add("event_msg", {"type": "task_complete", "turn_id": turn_id, "duration_ms": int(seconds * 1000)})
+            self.add(
+                "event_msg",
+                {
+                    "type": "task_complete",
+                    "turn_id": turn_id,
+                    "duration_ms": int(seconds * 1000),
+                    "completed_at": finished,
+                },
+            )
 
     def save(self, mtime: float | None = None):
         with open(self.path, "w") as handle:

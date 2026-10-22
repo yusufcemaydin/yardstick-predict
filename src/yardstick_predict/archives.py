@@ -69,6 +69,8 @@ class Task:
     idle: bool
     skills: str = ""
     """The skills the agent used, one name per line."""
+    finished_at: float | None = None
+    """When the task really finished, time spent waiting for the person included. None when it isn't known."""
 
     @property
     def tokens(self) -> int:
@@ -437,6 +439,7 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                 stopped=stopped,
                 idle=_longest_gap(start, last, moments, waits) > IDLE_GAP_SECONDS,
                 skills="\n".join(sorted(skills)),
+                finished_at=last,
             )
         )
     return tasks
@@ -653,11 +656,11 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
 def _codex_task(turn: _CodexTurn, payload: dict, event: str, meta: dict, path: Path, archive_name: str) -> Task | None:
     if not turn.prompt or not turn.calls or not turn.turn_id:
         return None
+    finished = _timestamp(payload.get("completed_at")) or turn.last_moment or turn.started_at
     duration = payload.get("duration_ms")
     if isinstance(duration, (int, float)) and duration > 0:
         seconds = duration / 1000
     else:
-        finished = _timestamp(payload.get("completed_at")) or turn.last_moment or turn.started_at
         seconds = finished - turn.started_at
     new_input, cache_write, cache_read, output, usd = _totals(turn.calls)
     return Task(
@@ -684,6 +687,7 @@ def _codex_task(turn: _CodexTurn, payload: dict, event: str, meta: dict, path: P
         direct=not turn.used_tools,
         stopped=event != "task_complete" or bool(payload.get("error")),
         idle=turn.longest_gap > IDLE_GAP_SECONDS,
+        finished_at=finished,
     )
 
 
