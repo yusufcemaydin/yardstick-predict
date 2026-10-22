@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import KEY
+from conftest import KEY, fake_vector
 
 from yardstick_predict import embeddings
 
@@ -38,6 +38,16 @@ def test_a_low_limit_account_still_finishes_with_smaller_requests(voyage):
     assert any("smaller" in w for w in waits)
     accepted = [r for r in voyage.requests if sum(len(t.split()) + 1 for t in r["input"]) <= 30]
     assert sum(len(r["input"]) for r in accepted) == 40  # every text went through once, in a small request
+
+
+def test_what_a_split_batch_embedded_is_kept_when_a_later_part_fails(voyage):
+    voyage.most_tokens = 30
+    texts = ["short one", "short two", "word " * 40, "word " * 40]  # the long texts never fit, even alone
+    found = []
+    with pytest.raises(embeddings.VoyageError):
+        for positions, vectors in embeddings.embed(texts, "voyage-4", KEY):
+            found.append((positions, vectors))
+    assert found == [([0, 1], [fake_vector("short one"), fake_vector("short two")])]  # paid for, so not lost
 
 
 def test_a_wrong_key_is_refused_at_once(voyage):

@@ -196,35 +196,40 @@ def embed(
     batch_tokens = 0
     for position, tokens in enumerate(counts):
         if batch and (len(batch) == MAX_TEXTS_PER_REQUEST or batch_tokens + tokens > limit * 0.95):
-            yield batch, _embed_batch([texts[i] for i in batch], model, key, on_wait)
+            yield from _embed_batch(batch, texts, model, key, on_wait)
             batch, batch_tokens = [], 0
         batch.append(position)
         batch_tokens += tokens
     if batch:
-        yield batch, _embed_batch([texts[i] for i in batch], model, key, on_wait)
+        yield from _embed_batch(batch, texts, model, key, on_wait)
 
 
-def _embed_batch(texts: list[str], model: str, key: str, on_wait: Callable[[str], None] | None) -> list[list[float]]:
+def _embed_batch(
+    batch: list[int], texts: list[str], model: str, key: str, on_wait: Callable[[str], None] | None
+) -> Iterator[tuple[list[int], list[list[float]]]]:
     """Embed one batch. When Voyage keeps limiting it, split it in half and send smaller requests.
 
     An account without a payment method may allow fewer tokens a minute than one full batch holds.
-    Smaller requests are slower, but they finish.
+    Smaller requests are slower, but they finish. Each half is yielded as it arrives, so when a later
+    half fails, the vectors already paid for are not lost.
     """
-    body = {"input": texts, "model": model, "output_dimension": DIMENSIONS, "truncation": True}
+    body = {"input": [texts[i] for i in batch], "model": model, "output_dimension": DIMENSIONS, "truncation": True}
     try:
-        reply = _post_with_retries(body, key, on_wait, attempts=4 if len(texts) > 1 else 8)
+        reply = _post_with_retries(body, key, on_wait, attempts=4 if len(batch) > 1 else 8)
     except VoyageError as error:
-        if error.status != 429 or len(texts) == 1:
+        if error.status != 429 or len(batch) == 1:
             raise
         if on_wait:
             on_wait("Voyage keeps limiting requests this size, so this sends smaller ones.")
-        half = len(texts) // 2
-        return _embed_batch(texts[:half], model, key, on_wait) + _embed_batch(texts[half:], model, key, on_wait)
+        half = len(batch) // 2
+        yield from _embed_batch(batch[:half], texts, model, key, on_wait)
+        yield from _embed_batch(batch[half:], texts, model, key, on_wait)
+        return
     record_usage(key, model, int((reply.get("usage") or {}).get("total_tokens") or 0))
     data = sorted(reply.get("data") or [], key=lambda item: item.get("index", 0))
-    if len(data) != len(texts):
-        raise VoyageError(200, f"expected {len(texts)} embeddings and got {len(data)}")
-    return [item["embedding"] for item in data]
+    if len(data) != len(batch):
+        raise VoyageError(200, f"expected {len(batch)} embeddings and got {len(data)}")
+    yield batch, [item["embedding"] for item in data]
 
 
 # What it costs, counting the free tokens ------------------------------------------------------------------
