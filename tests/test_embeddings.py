@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 from conftest import KEY, fake_vector
 
@@ -70,6 +73,30 @@ def test_usage_is_counted_against_the_free_tokens(voyage):
     assert embeddings.free_tokens_left(KEY) == embeddings.FREE_TOKENS - 4
     embeddings.set_free_tokens(KEY, "used")
     assert embeddings.free_tokens_left(KEY) == 0
+
+
+def test_usage_recorded_by_several_processes_at_once_is_never_lost(tmp_path):
+    go = tmp_path / "go"
+    script = (
+        "import pathlib, sys, time\n"
+        "from yardstick_predict import embeddings\n"
+        "print('ready', flush=True)\n"
+        "while not pathlib.Path(sys.argv[1]).exists():\n"
+        "    time.sleep(0.001)\n"
+        "for _ in range(200):\n"
+        "    embeddings.record_usage('key', 'voyage-4', 1)\n"
+    )
+    command = [sys.executable, "-c", script, str(go)]
+    workers = [subprocess.Popen(command, stdout=subprocess.PIPE, text=True) for _ in range(4)]
+    try:
+        ready = [worker.stdout.readline() for worker in workers]
+    finally:
+        go.touch()  # all four start counting at the same moment
+        codes = [worker.wait(timeout=60) for worker in workers]
+        for worker in workers:
+            worker.stdout.close()
+    assert ready == ["ready\n"] * 4 and codes == [0] * 4
+    assert embeddings.account("key")["used"] == {"voyage-4": 800}
 
 
 def test_cost_counts_free_tokens_and_list_price():

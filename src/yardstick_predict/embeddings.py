@@ -8,6 +8,7 @@ from your computer's password store, and it is sent only to Voyage.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
@@ -17,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -239,6 +241,38 @@ def _ledger_path():
     return store.home() / "voyage-usage.json"
 
 
+@contextmanager
+def _ledger_held() -> Iterator[None]:
+    """Keep other processes out of the ledger until this one is done with it.
+
+    Two forecasts can record usage at the same moment. Without this, one could read the ledger while
+    the other is still writing it, and the count it saves would undo the other's.
+    """
+    lock = os.open(store.private_home() / "voyage-usage.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(lock, msvcrt.LK_LOCK, 1)
+                    break
+                except OSError as error:  # Windows stops trying after ten seconds. Keep waiting.
+                    if error.errno != errno.EDEADLOCK:
+                        raise
+            try:
+                yield
+            finally:
+                msvcrt.locking(lock, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock, fcntl.LOCK_EX)  # closing the file lets go
+            yield
+    finally:
+        os.close(lock)
+
+
 def _ledger() -> dict:
     try:
         return json.loads(_ledger_path().read_text())
@@ -253,23 +287,27 @@ def _save_ledger(ledger: dict) -> None:
 
 def account(key: str) -> dict:
     """What yardstick knows about this key's Voyage account. The key itself is never stored."""
-    return _ledger().get(fingerprint(key), {"free_tokens": "unknown", "asked": False, "used": {}})
+    with _ledger_held():
+        ledger = _ledger()
+    return ledger.get(fingerprint(key), {"free_tokens": "unknown", "asked": False, "used": {}})
 
 
 def set_free_tokens(key: str, status: str) -> None:
     """Record whether the account had its free tokens when yardstick first used it: 'new', 'used' or 'unknown'."""
-    ledger = _ledger()
-    entry = ledger.setdefault(fingerprint(key), {"used": {}, "first_seen": time.time()})
-    entry["free_tokens"] = status
-    entry["asked"] = True
-    _save_ledger(ledger)
+    with _ledger_held():
+        ledger = _ledger()
+        entry = ledger.setdefault(fingerprint(key), {"used": {}, "first_seen": time.time()})
+        entry["free_tokens"] = status
+        entry["asked"] = True
+        _save_ledger(ledger)
 
 
 def record_usage(key: str, model: str, tokens: int) -> None:
-    ledger = _ledger()
-    entry = ledger.setdefault(fingerprint(key), {"free_tokens": "unknown", "used": {}, "first_seen": time.time()})
-    entry["used"][model] = entry["used"].get(model, 0) + tokens
-    _save_ledger(ledger)
+    with _ledger_held():
+        ledger = _ledger()
+        entry = ledger.setdefault(fingerprint(key), {"free_tokens": "unknown", "used": {}, "first_seen": time.time()})
+        entry["used"][model] = entry["used"].get(model, 0) + tokens
+        _save_ledger(ledger)
 
 
 def free_tokens_left(key: str | None) -> int | None:
