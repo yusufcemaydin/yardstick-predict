@@ -143,9 +143,9 @@ def _info(task: TaskRequest, model: str, defaults: dict) -> features.TaskInfo:
     )
 
 
-def _embed(predictor: Predictor, items: list[tuple[str, str, str]]) -> dict[str, dict[str, np.ndarray]]:
-    """Embed each task's texts with the predictor's own embedding model."""
-    vectors: dict[str, dict[str, np.ndarray]] = {}
+def _embed(predictor: Predictor, items: list[tuple[int, str, str]]) -> dict[str, dict[int, np.ndarray]]:
+    """Embed each row's texts with the predictor's own embedding model."""
+    vectors: dict[str, dict[int, np.ndarray]] = {}
     if not items:
         return vectors
     key, _ = embeddings.find_key()
@@ -154,7 +154,7 @@ def _embed(predictor: Predictor, items: list[tuple[str, str, str]]) -> dict[str,
             "no_embedding_key",
             "This predictor uses Voyage embeddings. Set VOYAGE_API_KEY or run yardstick-predict to save a key.",
         )
-    # The same text, such as one prompt forecast at several effort levels, is sent once.
+    # The same text, such as one prompt forecast on several models or effort levels, is sent once.
     texts = list(dict.fromkeys(text for _, _, text in items))
     found: dict[int, np.ndarray] = {}
     try:
@@ -164,8 +164,8 @@ def _embed(predictor: Predictor, items: list[tuple[str, str, str]]) -> dict[str,
     except embeddings.VoyageError as error:
         raise RequestError("embedding_failed", str(error)) from None
     where = {text: position for position, text in enumerate(texts)}
-    for task_id, name, text in items:
-        vectors.setdefault(name, {})[task_id] = found[where[text]]
+    for row, name, text in items:
+        vectors.setdefault(name, {})[row] = found[where[text]]
     return vectors
 
 
@@ -179,32 +179,30 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
     chosen = pipeline.chosen_features(predictor)
     defaults = model.meta.get("defaults", {})
     pairs = [(task, name, *model.served(name)) for task in tasks for name in task.models]
-    # Only the texts of tasks with at least one model to forecast are sent to Voyage.
-    wanted = {task.id for task, _, served, _ in pairs if served}
+    # A row for each model to forecast. As in training, its features see its model, effort level and agent.
+    # A task with no model to forecast has no row, so its texts aren't sent to Voyage.
+    infos = [_info(task, name, defaults) for task, name, served, _ in pairs if served]
     items = [
-        (task.id, name, text)
-        for task in tasks
-        if task.id in wanted
+        (row, name, text)
+        for row, info in enumerate(infos)
         for name in chosen
-        if features.is_text(name) and (text := features.text(name, _info(task, "", {}))).strip()
+        if features.is_text(name) and (text := features.text(name, info)).strip()
     ]
     vectors = _embed(predictor, items)
     table = pipeline.benchmark_table(predictor)
     rows = []
-    for task, name, served, _ in pairs:
-        if served:
-            info = _info(task, name, defaults)
-            rows.append(
-                Features(
-                    model=name,
-                    effort=info.effort,
-                    agent=info.agent,
-                    origin=info.origin,
-                    prompt_chars=len(task.prompt),
-                    vectors={field: found[task.id] for field, found in vectors.items() if task.id in found},
-                    numbers=features.numbers(chosen, info, table),
-                )
+    for row, info in enumerate(infos):
+        rows.append(
+            Features(
+                model=info.model,
+                effort=info.effort,
+                agent=info.agent,
+                origin=info.origin,
+                prompt_chars=len(info.prompt),
+                vectors={field: found[row] for field, found in vectors.items() if row in found},
+                numbers=features.numbers(chosen, info, table),
             )
+        )
     results = iter(model.forecast(rows))
     forecasts = []
     for task, name, served, reason in pairs:

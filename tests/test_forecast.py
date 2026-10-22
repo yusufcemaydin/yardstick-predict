@@ -9,6 +9,7 @@ import pytest
 from conftest import KEY, fake_vector
 from test_model import rows_for, synthetic
 
+from yardstick_predict import features, pipeline
 from yardstick_predict import model as M
 from yardstick_predict.forecast import RequestError, answer, parse
 from yardstick_predict.store import Predictor
@@ -103,6 +104,57 @@ def test_a_longer_prompt_is_forecast_to_take_longer(trained):
     short, _, _ = parse(request(prompt="fix"))
     long, _, _ = parse(request(prompt="word " * 70))
     assert answer(trained, long)["forecasts"][0]["seconds"] > answer(trained, short)["forecasts"][0]["seconds"]
+
+
+class Stub:
+    """A stand-in for a trained model. It forecasts every AI model, keeps the rows it gets and answers `result`."""
+
+    def __init__(self):
+        self.meta: dict = {"defaults": {}}
+        self.rows: list = []
+        self.result: dict = {"shape": None, "direct_probability": None, "seconds": None, "tokens": None, "usd": None}
+
+    def served(self, model):
+        return True, None
+
+    def forecast(self, rows):
+        self.rows += rows
+        return [self.result for _ in rows]
+
+
+@pytest.fixture
+def stub(voyage, monkeypatch):
+    """A predictor whose model is a Stub."""
+    monkeypatch.setenv("VOYAGE_API_KEY", KEY)
+    predictor = Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    predictor.model_dir.mkdir()
+    (predictor.model_dir / "model.json").write_text("{}")
+    model = Stub()
+    monkeypatch.setattr(pipeline, "load_model", lambda _: model)
+    return predictor, model
+
+
+def test_your_own_text_features_see_each_rows_model_effort_and_agent(stub, voyage, monkeypatch):
+    predictor, model = stub
+    model.meta["defaults"] = {
+        "claude-opus-5-5": {"effort": "high", "agent": "claude-code"},
+        "gpt-6.1-sol": {"effort": "medium", "agent": "codex"},
+    }
+    monkeypatch.setattr(features, "_CUSTOM", {})
+    features.register_feature("setup", "text", lambda info: f"{info.model} {info.effort} {info.agent}")
+    predictor.config["features"] = ["prompt", "setup"]
+    predictor.save_config()
+    first = {"id": "a", "prompt": "Add a login page", "models": ["claude-opus-5-5", "gpt-6.1-sol"]}
+    second = {**first, "id": "b", "models": ["claude-opus-5-5"], "effort": "max", "agent": "pi"}
+    tasks, _, _ = parse({"version": 1, "tasks": [first, second]})
+    answer(predictor, tasks)
+    # Like in training: the row's own model, and the request's effort and agent or the model's usual ones.
+    setups = ["claude-opus-5-5 high claude-code", "gpt-6.1-sol medium codex", "claude-opus-5-5 max pi"]
+    assert len(model.rows) == len(setups)
+    for row, setup in zip(model.rows, setups):
+        assert np.array_equal(row.vectors["setup"], np.array(fake_vector(setup), dtype=np.float32))
+    sent = [text for r in voyage.requests for text in r["input"]]
+    assert sorted(sent) == sorted(["Add a login page", *setups])  # each text is sent once, the prompt too
 
 
 def test_an_untrained_predictor_says_so():
