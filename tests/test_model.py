@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+import os
 import random
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -175,6 +177,29 @@ def test_saving_and_loading_gives_the_same_forecasts(tmp_path):
     after = M.load(tmp_path / "model").forecast(rows)
     assert [r["seconds"]["expected"] for r in before] == pytest.approx([r["seconds"]["expected"] for r in after])
     assert not list((tmp_path / "model").glob("*.pkl"))
+
+
+def test_a_save_that_fails_keeps_the_old_model(tmp_path, monkeypatch):
+    folder = tmp_path / "predictor" / "model"
+    old_tasks, new_tasks = synthetic(60), synthetic(60, seed=1)
+    rows = rows_for(old_tasks[:3])
+    M.train(old_tasks, rows_for(old_tasks)).save(folder)
+    before = M.load(folder).forecast(rows)
+    new = M.train(new_tasks, rows_for(new_tasks))
+    real_rename, failed = os.rename, []
+
+    def rename(source, target, *args, **kwargs):
+        if Path(target) == folder and not failed:  # the first move into the model's place fails
+            failed.append(source)
+            raise OSError("The disk went away.")
+        return real_rename(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rename", rename)
+    with pytest.raises(OSError):
+        new.save(folder)
+    monkeypatch.undo()
+    assert failed and M.load(folder).forecast(rows) == before
+    assert [path.name for path in folder.parent.iterdir()] == ["model"]
 
 
 def test_similar_tasks_never_look_at_the_future():

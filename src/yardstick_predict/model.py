@@ -667,17 +667,28 @@ class Model:
         return verdict["served"], verdict["reason"]
 
     def save(self, folder: Path) -> None:
+        """Write the whole model to a new folder, then swap it in.
+
+        The old model is only moved aside until the new one is in its place, so a failed save keeps it.
+        """
         folder.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".model-", dir=folder.parent))
-        for name, booster in self.boosters.items():
-            booster.save_model(str(staging / f"{name}.json"))
-        (staging / "model.json").write_text(json.dumps(self.meta, indent=1) + "\n")
-        for name, (vectors, results) in self.pools.items():
-            np.save(staging / f"similar-{name}-vectors.npy", vectors.astype(np.float32), allow_pickle=False)
-            np.save(staging / f"similar-{name}-results.npy", results.astype(np.float32), allow_pickle=False)
-        if folder.exists():
-            shutil.rmtree(folder)
-        staging.rename(folder)
+        old = staging.with_name(staging.name + "-old")
+        try:
+            for name, booster in self.boosters.items():
+                booster.save_model(str(staging / f"{name}.json"))
+            (staging / "model.json").write_text(json.dumps(self.meta, indent=1) + "\n")
+            for name, (vectors, results) in self.pools.items():
+                np.save(staging / f"similar-{name}-vectors.npy", vectors.astype(np.float32), allow_pickle=False)
+                np.save(staging / f"similar-{name}-results.npy", results.astype(np.float32), allow_pickle=False)
+            if folder.exists():
+                folder.rename(old)
+            staging.rename(folder)
+        finally:
+            if old.exists() and not folder.exists():
+                old.rename(folder)  # the new model never arrived, so the old one goes back
+            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(old, ignore_errors=True)
 
 
 def load(folder: Path) -> Model:
