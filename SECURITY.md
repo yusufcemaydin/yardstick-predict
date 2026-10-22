@@ -26,4 +26,4 @@ Wrong forecasts aren't security problems. Report those with the "Forecast was wa
 
 ## Supported versions
 
-No version has been released yet. Once there are releases, security fixes go into the latest one.
+Security fixes go into the latest release. Older releases don't get them, so upgrade to the latest to stay safe.
