@@ -1,19 +1,40 @@
 from __future__ import annotations
 
+import http.client
 import json
+import os
 import sys
 import textwrap
+from fractions import Fraction
 
+import numpy as np
 import pytest
 from builders import ClaudeSession, history, usage
 from conftest import KEY
 
-from yardstick_predict import benchmarks, features, model_types
-from yardstick_predict.archives import read_archive
+from yardstick_predict import benchmarks, features, model_types, prices
+from yardstick_predict.archives import TEXT_CHARS, read_archive
 from yardstick_predict.cli import main
 from yardstick_predict.store import Predictor
 
 START = 1_780_000_000.0
+
+
+@pytest.fixture
+def skills_home(tmp_path, monkeypatch):
+    """A home folder of its own, where a test installs skills."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows finds the home folder here, not in HOME
+    features.skill_descriptions.cache_clear()
+    yield tmp_path / ".claude" / "skills"
+    features.skill_descriptions.cache_clear()
+
+
+def install(folder, name: str, text: str):
+    (folder / name).mkdir(parents=True, exist_ok=True)
+    path = folder / name / "SKILL.md"
+    path.write_bytes(text.encode())
+    return path
 
 
 def test_the_prompt_is_always_first_and_unknown_features_are_refused():
@@ -83,6 +104,23 @@ def test_the_reader_records_which_skills_a_task_used(tmp_path):
     assert task.skills == "artifact-design\nfrontend-design"
 
 
+def test_the_skills_feature_knows_only_the_skills_known_before_a_task_runs(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Design the page")
+    tool = session.reply(3, tool="Skill")
+    session.lines[-1]["message"]["content"][0]["input"] = {"skill": "artifact-design"}
+    session.tool_result(tool, 1, line["promptId"])
+    session.reply(2, calls_usage=usage())
+    session.prompt("/review the page")
+    session.reply(4, calls_usage=usage())
+    session.save(mtime=START)
+    first, second = read_archive({"name": "c", "format": "claude-code", "path": str(tmp_path)}, now=START + 86400)
+    # The first task used a skill, but nothing said so before it ran.
+    assert first.skills == "artifact-design" and features.TaskInfo.of(first).skills == []
+    # The second task's prompt invokes a skill, and the conversation used another one before it.
+    assert features.TaskInfo.of(second).skills == ["artifact-design", "review"]
+
+
 def test_benchmarks_come_from_a_public_list_with_one_spelling_for_every_source():
     listing = {
         "data": [
@@ -113,6 +151,7 @@ from yardstick_predict import model as xgboost_model
 
 features.register_feature("words", "number", lambda info: float(len(info.prompt.split())))
 features.register_feature("summary", "text", lambda info: info.extra.get("summary") or info.prompt[:40])
+features.register_feature("ticket", "number", lambda info: info.extra.get("ticket"))  # past tasks have no extra
 
 
 class Steady:
@@ -155,16 +194,18 @@ def test_your_own_features_train_and_forecast_through_a_plugin(tmp_path, capsys,
     monkeypatch.setenv("VOYAGE_API_KEY", KEY)
     records = tmp_path / "records"
     history(records, tasks=300, start=START)
-    code = main(
-        ["create", "--yes", "--archive", f"claude-code={records}", "--plugin", plugin, "--features", "words,summary"]
-    )
+    chosen = "words,summary,ticket"
+    code = main(["create", "--yes", "--archive", f"claude-code={records}", "--plugin", plugin, "--features", chosen])
     out = capsys.readouterr().out
     assert code == 0, out
     predictor = Predictor("default")
-    assert predictor.config["features"] == ["prompt", "words", "summary"] and predictor.config["plugins"] == [plugin]
+    assert predictor.config["features"] == ["prompt", "words", "summary", "ticket"]
+    assert predictor.config["plugins"] == [plugin]
     assert len(predictor.embedded("summary")) == 300
     meta = json.loads((predictor.model_dir / "model.json").read_text())
     assert meta["numbers"] == ["words"] and meta["text_fields"] == ["prompt", "summary"]
+    # A feature that reads only a request's extra has no value for any past task, so nothing can be learned from it.
+    assert meta["features_without_values"] == ["ticket"]
 
     request = {
         "version": 1,
@@ -192,3 +233,152 @@ def test_your_own_model_type_plugs_in(tmp_path, capsys, voyage, monkeypatch, plu
     assert forecast["seconds"] == 60.0 and forecast["tokens"] is None
     with pytest.raises(ValueError, match="Unknown model type"):
         model_types.get("nonexistent")
+
+
+def test_a_skill_description_is_read_from_the_frontmatter_in_every_yaml_form(skills_home):
+    files = {
+        "plain": "---\nname: plain\ndescription: Starts here\n  and goes on.\n---\nBody",
+        "next-line": "---\ndescription:\n  Written on the next line\n  and the one after.\nname: next-line\n---\n",
+        "double": '---\nname: double\ndescription: "Quoted, with a\\ttab and\n  a second line"\n---\n',
+        "single": "---\nname: single\ndescription: 'It''s quoted\n  over two lines'\n---\n",
+        "indented": "---\nname: indented\ndescription: |2-\n    Two more spaces.\n---\n",
+        "comment": "---\nname: comment\ndescription: Plain text # a note, not part of it\n---\n",
+        "crlf": "---\r\nname: crlf\r\ndescription: >\r\n  Folded over\r\n  two lines.\r\n---\r\n",
+        "empty": "---\ndescription:\nname: empty\n---\n",
+        "body-only": "---\nname: body-only\n---\ndescription: in the body, not the frontmatter\n",
+        "no-frontmatter": "description: there is no frontmatter here\n",
+    }
+    for name, text in files.items():
+        install(skills_home, name, text)
+    assert features.skill_descriptions() == {
+        "plain": "Starts here and goes on.",
+        "next-line": "Written on the next line and the one after.",
+        "double": "Quoted, with a\ttab and a second line",
+        "single": "It's quoted over two lines",
+        "indented": "Two more spaces.",
+        "comment": "Plain text",
+        "crlf": "Folded over two lines.",
+    }
+
+
+def test_skills_installed_as_links_are_found_and_a_link_that_loops_back_ends(skills_home, tmp_path):
+    real = tmp_path / "elsewhere"
+    install(real, "linked", "---\nname: linked\ndescription: Installed as a link.\n---\n")
+    install(skills_home, "plain", "---\nname: plain\ndescription: In its own folder.\n---\n")
+    try:
+        os.symlink(real / "linked", skills_home / "linked", target_is_directory=True)
+        os.symlink(skills_home, skills_home / "plain" / "loop", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this computer doesn't let a test make links")
+    assert features.skill_descriptions() == {"linked": "Installed as a link.", "plain": "In its own folder."}
+
+
+def test_no_skills_means_no_text_and_no_look_through_the_skill_folders(skills_home, monkeypatch):
+    monkeypatch.setattr(features, "_skill_files", lambda roots: pytest.fail("the skill folders were read"))
+    assert features.skills_text([]) == "" and features.skills_text(["", "  "]) == ""
+    assert features.text("skills", features.TaskInfo(prompt="Fix it", model="m")) == ""
+
+
+def test_another_process_reuses_what_the_skill_folders_held_until_they_change(skills_home, monkeypatch):
+    path = install(skills_home, "tdd", "---\nname: tdd\ndescription: Write the test first.\n---\n")
+    assert features.skills_text(["tdd"]) == "tdd: Write the test first."
+    real = features._skill_files
+    features.skill_descriptions.cache_clear()  # as in another process
+    monkeypatch.setattr(features, "_skill_files", lambda roots: pytest.fail("the skill folders were read again"))
+    assert features.skills_text(["tdd"]) == "tdd: Write the test first."
+
+    path.write_text("---\nname: tdd\ndescription: Write the failing test first.\n---\n")
+    changed = os.stat(path).st_mtime_ns + 1_000_000_000
+    os.utime(path, ns=(changed, changed))
+    monkeypatch.setattr(features, "_skill_files", real)
+    features.skill_descriptions.cache_clear()
+    assert features.skills_text(["tdd"]) == "tdd: Write the failing test first."
+    install(skills_home, "review", "---\nname: review\ndescription: Read the change.\n---\n")
+    features.skill_descriptions.cache_clear()
+    assert features.skills_text(["review"]) == "review: Read the change."  # a new skill is found too
+
+
+def test_number_features_take_numpy_numbers_but_not_bools_or_numbers_that_arent_finite(monkeypatch):
+    monkeypatch.setattr(features, "_CUSTOM", {})
+    values = {
+        "an_int": np.int64(3),
+        "a_float": np.float32(1.5),
+        "a_fraction": Fraction(1, 4),
+        "a_bool": True,
+        "a_numpy_bool": np.True_,
+        "not_a_number": float("nan"),
+        "endless": np.inf,
+        "a_text": "4",
+    }
+    for name, value in values.items():
+        features.register_feature(name, "number", lambda info, value=value: value)
+    found = features.numbers(list(values), features.TaskInfo(prompt="Fix it", model="m"), None)
+    assert found == {"an_int": 3.0, "a_float": 1.5, "a_fraction": 0.25}
+    assert all(type(value) is float for value in found.values())
+
+
+def test_a_prompt_is_embedded_as_the_records_keep_it(monkeypatch):
+    def text(prompt: str) -> str:
+        return features.text("prompt", features.TaskInfo(prompt=prompt, model="m"))
+
+    assert text("  fix the login page \n") == "fix the login page"
+    assert len(text("x" * (TEXT_CHARS + 500))) == TEXT_CHARS
+    cut_at_a_space = "a" * (TEXT_CHARS - 1) + "  and more"
+    stored = cut_at_a_space.strip()[:TEXT_CHARS]  # as the reader keeps a task's prompt
+    assert text(cut_at_a_space) == text(stored) == "a" * (TEXT_CHARS - 1)
+
+
+def test_sonnet_4_and_4_5_cost_more_above_200000_input_tokens():
+    below = prices.call_cost("claude-sonnet-4-5-20250929", 1000, 0, 0, 199_000, 1000)
+    assert below == pytest.approx((1000 * 3 + 199_000 * 0.3 + 1000 * 15) / 1e6)
+    above = prices.call_cost("claude-sonnet-4-5[1m]", 1000, 0, 0, 600_000, 1000)
+    assert above == pytest.approx((1000 * 6 + 600_000 * 0.6 + 1000 * 22.5) / 1e6)
+    writes = prices.call_cost("claude-sonnet-4", 100_000, 60_000, 40_001, 0, 0)  # cache writes count toward it
+    assert writes == pytest.approx((100_000 * 6 + 60_000 * 7.5 + 40_001 * 12) / 1e6)
+    later = prices.call_cost("claude-sonnet-4-6", 1000, 0, 0, 600_000, 1000)  # 4.6 and later have no premium
+    assert later == pytest.approx((1000 * 3 + 600_000 * 0.3 + 1000 * 15) / 1e6)
+
+
+def test_codex_models_have_their_list_prices():
+    listed = {
+        "gpt-5-codex": (1.25, 10, 0.125),
+        "gpt-5.1-codex": (1.25, 10, 0.125),
+        "gpt-5.1-codex-max": (1.25, 10, 0.125),
+        "gpt-5.1-codex-mini": (0.25, 2, 0.025),
+        "gpt-5.2-codex": (1.75, 14, 0.175),
+    }
+    for model, (new_input, output, cache_read) in listed.items():
+        price = prices.price(model)
+        assert (price["input"], price["output"], price["cache_read"]) == (new_input, output, cache_read), model
+
+
+def test_a_model_list_in_an_odd_shape_is_refused_or_skipped_cleanly():
+    for listing in ([], "text", {"data": None}, {"data": "models"}):
+        with pytest.raises(ValueError):
+            benchmarks.parse(listing)
+    odd = {
+        "id": "openai/gpt-5",
+        "pricing": ["not", "a", "price"],
+        "top_provider": "somewhere",
+        "created": True,
+        "supported_parameters": "reasoning",
+        "context_length": float("inf"),
+    }
+    table = benchmarks.parse({"data": [None, "x", {"id": 5}, odd]})
+    assert table == {"gpt-5": {"benchmark_reasons": 0.0}}
+
+
+def test_a_model_list_download_cut_off_midway_is_a_connection_problem(monkeypatch):
+    class CutOff:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            raise http.client.IncompleteRead(b'{"data": [')
+
+    monkeypatch.setattr(benchmarks.urllib.request, "urlopen", lambda request, timeout: CutOff())
+    with pytest.raises(OSError, match="broke"):
+        benchmarks.download()
