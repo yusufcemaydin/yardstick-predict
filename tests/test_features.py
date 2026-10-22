@@ -34,6 +34,7 @@ def test_skills_are_embedded_by_their_descriptions(tmp_path, monkeypatch):
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: tdd\ndescription: Write the test first, then the code.\n---\nBody")
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows finds the home folder here, not in HOME
     features.skill_descriptions.cache_clear()
     try:
         text = features.skills_text(["superpowers:tdd", "unknown-skill", "custom: does a thing"])
