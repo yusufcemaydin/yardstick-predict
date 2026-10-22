@@ -389,7 +389,6 @@ def cmd_home(args) -> int:
     for name in names:
         cmd_refresh(argparse.Namespace(predictor=name, yes=False, ask_first=True))
         say()
-    say('Forecast with: yardstick-predict predict --model claude-opus-5-5 --prompt "Add a login page"')
     return 0
 
 
@@ -523,9 +522,27 @@ def train_and_report(predictor: Predictor, train) -> int:
         say(str(error))
         return 1
     print_report(model)
-    say()
-    say('Forecast with: yardstick-predict predict --model claude-opus-5-5 --prompt "Add a login page"')
+    say_how_to_use(model)
     return 0
+
+
+def say_how_to_use(model) -> None:
+    """Which AI models get forecasts, and how to ask for one, with their real names."""
+    tested = sorted(model.meta["report"].get("models", {}).items(), key=lambda kv: -kv[1]["tasks_tested"])
+    served = [name for name, result in tested if result["served"]]
+    say()
+    if not served:
+        say("No AI model passed the test yet, so forecasts come back empty, with the reason.")
+        say("Run yardstick-predict again once you have more tasks. It adds them and retrains.")
+        return
+    names = served[0] if len(served) == 1 else ", ".join(served[:-1]) + " and " + served[-1]
+    models = " ".join(f"--model {name}" for name in served[:2])
+    say(f"Ready. It forecasts {names}.")
+    say("Before you start a task, ask what it will take:")
+    say(f'  yardstick-predict predict {models} --prompt "Add a login page with tests" --pretty')
+    say("It answers with the expected seconds, tokens and dollars on each model you name.")
+    say("A program asks the same way: it sends JSON to yardstick-predict predict and reads JSON back.")
+    say("Run yardstick-predict every week or so. It adds your new tasks and retrains.")
 
 
 def cmd_refresh(args) -> int:

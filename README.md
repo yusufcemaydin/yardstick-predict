@@ -53,13 +53,35 @@ yardstick-predict
 
 It finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Then it trains and shows how well it forecast your newest tasks.
 
-**Then forecast:**
+**Then, before you start a task, ask what it will take:**
 
 ```bash
-yardstick-predict predict --model claude-opus-5-5 --prompt "Add a login page with tests"
+yardstick-predict predict --model claude-opus-5-5 --prompt "Add a login page with tests" --pretty
 ```
 
-Run `yardstick-predict` again later. It tells you how many new tasks it found and what embedding them costs, and asks before it refreshes.
+It answers with the expected seconds, tokens and dollars. These numbers are an example:
+
+```json
+{
+  "version": 1,
+  "predictor": "default",
+  "embedding_model": "voyage-4",
+  "forecasts": [
+    {
+      "task": "task",
+      "model": "claude-opus-5-5",
+      "seconds": 245.0,
+      "tokens": 1830000,
+      "usd": 0.92,
+      "reason": null
+    }
+  ]
+}
+```
+
+Name more models with more `--model` flags to compare them. Use the answer to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
+
+Run `yardstick-predict` every week or so. It tells you how many new tasks it found and what embedding them costs, and asks before it refreshes.
 
 ## Features the model learns from
 
@@ -92,6 +114,26 @@ echo '{"version": 1, "tasks": [
   {"id": "a", "prompt": "Fix the flaky test", "models": ["claude-opus-5-5", "gpt-6.1-sol"]},
   {"id": "b", "prompt": "Write the release notes", "models": ["claude-opus-5-5"], "context": "We ship on Fridays."}
 ]}' | yardstick-predict predict
+```
+
+From Python, an orchestrator can pick the cheapest model for a task like this:
+
+```python
+import json
+import subprocess
+
+request = {
+    "version": 1,
+    "tasks": [{"id": "login", "prompt": "Add a login page with tests", "models": ["claude-opus-5-5", "gpt-6.1-sol"]}],
+}
+done = subprocess.run(["yardstick-predict", "predict"], input=json.dumps(request), capture_output=True, text=True)
+answer = json.loads(done.stdout)
+if "error" in answer:
+    raise SystemExit(answer["error"]["message"])
+
+priced = [f for f in answer["forecasts"] if f["usd"] is not None]
+cheapest = min(priced, key=lambda f: f["usd"])
+print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minutes and ${cheapest['usd']:.2f}.")
 ```
 
 - **`seconds`, `tokens` and `usd`** are expected values: averages, not middles. They add up, so the expected total of ten tasks is the sum of their ten forecasts.

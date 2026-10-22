@@ -43,6 +43,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready):
     assert code == 0, out
     assert "420 tasks" in out
     assert "claude-opus-5-5: forecasts on" in out
+    assert "Ready. It forecasts claude-opus-5-5" in out and "yardstick-predict predict --model claude-opus-5-5" in out
     predictor = Predictor("default")
     assert predictor.config["features"] == ["prompt", "context"]
     assert predictor.config["embedding"]["model"] == "voyage-4"
