@@ -187,16 +187,39 @@ def _keep_most_complete(tasks: dict[str, Task], task: Task) -> None:
         tasks[task.id] = task
 
 
-def codex_parent(path: str) -> str | None:
-    """The parent thread of a Codex helper thread's record file, or None for a main thread."""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            first = json.loads(handle.readline() or "{}")
-    except (OSError, ValueError):
-        return None
-    source = (first.get("payload") or {}).get("source") if isinstance(first, dict) else None
-    spawn = source.get("subagent", {}).get("thread_spawn") if isinstance(source, dict) else None
-    return str(spawn["parent_thread_id"]) if isinstance(spawn, dict) and spawn.get("parent_thread_id") else None
+def codex_families(paths: Iterable[str]) -> dict[str, str]:
+    """Each Codex record file's family: the main thread at the top of its chain of helper threads.
+
+    A helper's tokens count toward a task in that main thread, so a family is read together.
+    """
+    links: dict[str, tuple[str, str | None]] = {}
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                first = json.loads(handle.readline() or "{}")
+        except (OSError, ValueError):
+            first = {}
+        meta = first.get("payload") if isinstance(first, dict) and first.get("type") == "session_meta" else None
+        meta = meta if isinstance(meta, dict) else {}
+        links[path] = (str(meta.get("id") or Path(path).stem), _codex_spawn(meta)[1])
+    parents = dict(links.values())
+    families = {}
+    for path, (top, _) in links.items():
+        seen = {top}
+        while parents.get(top) and parents[top] not in seen:
+            top = parents[top]
+            seen.add(top)
+        families[path] = top
+    return families
+
+
+def _codex_spawn(meta: dict) -> tuple[bool, str | None]:
+    """From a Codex thread's session_meta: whether it's a helper thread, and the thread that spawned it."""
+    source = meta.get("source")
+    subagent = source.get("subagent") if isinstance(source, dict) else None
+    spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+    parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+    return isinstance(source, dict) and "subagent" in source, str(parent) if parent else None
 
 
 # Claude Code ------------------------------------------------------------------------------------------
@@ -595,11 +618,9 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
         if task is not None:
             tasks.append(task)
     thread_id = str(meta.get("id") or path.stem)
-    source = meta.get("source")
-    spawn = source.get("subagent", {}).get("thread_spawn") if isinstance(source, dict) else None
-    if isinstance(source, dict) and "subagent" in source:
-        parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
-        return [], _CodexThread(thread_id, str(parent), turns) if parent else None
+    helper, parent = _codex_spawn(meta)
+    if helper:
+        return [], _CodexThread(thread_id, parent, turns) if parent else None
     return tasks, _CodexThread(thread_id, None, turns)
 
 

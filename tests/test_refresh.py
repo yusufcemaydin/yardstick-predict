@@ -84,6 +84,48 @@ def test_a_codex_helper_thread_that_appears_later_is_added_to_its_parent(tmp_pat
     assert stored(predictor, "Split the work").input_tokens == 1500
 
 
+def test_when_one_codex_helper_changes_its_unchanged_siblings_still_count(tmp_path):
+    parent = CodexSession(tmp_path, "parent-thread", START)
+    parent.turn("t1", "Split the work", calls=[(1000, 0, 100)], seconds=100)
+    parent.save(mtime=START)
+    first = CodexSession(tmp_path, "first-helper", START + 10, parent="parent-thread")
+    first.turn("h1", "First part", calls=[(200, 0, 20)], seconds=5)
+    first.save(mtime=START)
+    second = CodexSession(tmp_path, "second-helper", START + 20, parent="parent-thread")
+    second.turn("h2", "Second part", calls=[(300, 0, 30), (300, 0, 30)], seconds=5)
+    second.save(mtime=START)
+    predictor = predictor_for({"name": "codex", "format": "codex", "path": str(tmp_path)})
+    assert stored(predictor, "Split the work").calls == 4
+
+    # The first helper keeps working after the refresh. The second one is done and doesn't change.
+    first = CodexSession(tmp_path, "first-helper", START + 10, parent="parent-thread")
+    first.turn("h1", "First part", calls=[(200, 0, 20)] * 4, seconds=5)
+    first.save(mtime=START + 200)
+    found = scan(predictor, now=LATER)
+    assert [t.calls for t in found.updated_tasks] == [7]
+    save_scan(predictor, found)
+    assert stored(predictor, "Split the work").input_tokens == 1000 + 4 * 200 + 2 * 300
+
+
+def test_a_codex_helper_that_a_helper_spawns_later_is_added_to_the_main_task(tmp_path):
+    parent = CodexSession(tmp_path, "parent-thread", START)
+    parent.turn("t1", "Split the work", calls=[(1000, 0, 100)], seconds=100)
+    parent.save(mtime=START)
+    helper = CodexSession(tmp_path, "helper-thread", START + 10, parent="parent-thread")
+    helper.turn("h1", "Helper part", calls=[(200, 0, 20)], seconds=5)
+    helper.save(mtime=START)
+    predictor = predictor_for({"name": "codex", "format": "codex", "path": str(tmp_path)})
+    assert stored(predictor, "Split the work").calls == 2
+
+    nested = CodexSession(tmp_path, "nested-thread", START + 12, parent="helper-thread")
+    nested.turn("n1", "Nested part", calls=[(50, 0, 5)], seconds=2)
+    nested.save(mtime=START + 200)
+    found = scan(predictor, now=LATER)
+    assert [t.calls for t in found.updated_tasks] == [3]
+    save_scan(predictor, found)
+    assert stored(predictor, "Split the work").input_tokens == 1250
+
+
 def test_max_tasks_trains_on_the_same_tasks_it_embeds(tmp_path, monkeypatch):
     session = ClaudeSession(tmp_path, "s1", START)
     for prompt in ("Oldest", "Middle", "Newest finished"):

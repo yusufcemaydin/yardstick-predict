@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import benchmarks, embeddings, features, model_types
-from .archives import SETTLE_SECONDS, Task, codex_parent, read_archive, record_files
+from .archives import SETTLE_SECONDS, Task, codex_families, read_archive, record_files
 from .store import Predictor
 
 
@@ -42,12 +42,12 @@ def scan(predictor: Predictor, now: float | None = None) -> Scan:
                     main = str(parent.parent) + ".jsonl"
                     if main in current:
                         changed.add(main)
-        if archive["format"] == "codex":
-            # A Codex helper thread adds to its parent's task. When it changes, read the parent again.
-            for path in list(changed):
-                parent = codex_parent(path)
-                if parent:
-                    changed.update(p for p in current if parent in Path(p).name)
+        if archive["format"] == "codex" and changed:
+            # A Codex helper thread adds to a task in the main thread at the top of its family.
+            # When any thread in a family changes, read the whole family again.
+            family = codex_families(current)
+            touched = {family[path] for path in changed}
+            changed.update(path for path in current if family[path] in touched)
         found = read_archive(archive, only=changed, now=now) if changed else []
         fresh = [t for t in found if t.id not in known_calls and t.id not in seen]
         grown = [t for t in found if t.id in known_calls and t.calls > known_calls[t.id]]
