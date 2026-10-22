@@ -215,8 +215,6 @@ class _Room:
     """How many tokens one request may hold. It shrinks when the account allows fewer tokens a minute."""
 
     tokens: float
-    passed: int = 0
-    """The most tokens a request has got through with."""
 
 
 def embed(
@@ -255,7 +253,7 @@ def _embed_batch(
 
     An account without a payment method may allow fewer tokens a minute than one full batch holds. When
     Voyage says tokens are the limit, the batch is split at once, and later batches hold no more than the
-    most that got through. When Voyage limits requests instead, it waits and tries again first. Each half
+    biggest piece of it that got through. When Voyage limits requests instead, it waits and tries again first. Each half
     is yielded as it arrives, so when a later half fails, the vectors already paid for are not lost.
     """
     body = {"input": [texts[i] for i in batch], "model": model, "output_dimension": DIMENSIONS, "truncation": True}
@@ -273,12 +271,14 @@ def _embed_batch(
                 else "Voyage keeps limiting requests this size, so this sends smaller ones."
             )
         half = len(batch) // 2
-        yield from _embed_batch(batch[:half], texts, counts, model, key, on_wait, room)
-        yield from _embed_batch(batch[half:], texts, counts, model, key, on_wait, room)
-        if tokens_limit:
-            room.tokens = min(room.tokens, room.passed)  # later batches start from a size that got through
+        largest = 0  # the biggest piece of this batch that got through
+        for part in (batch[:half], batch[half:]):
+            for positions, vectors in _embed_batch(part, texts, counts, model, key, on_wait, room):
+                largest = max(largest, sum(counts[i] for i in positions))
+                yield positions, vectors
+        if tokens_limit and largest:
+            room.tokens = min(room.tokens, largest)  # later batches start from a size that got through
         return
-    room.passed = max(room.passed, sum(counts[i] for i in batch))
     record_usage(key, model, int((reply.get("usage") or {}).get("total_tokens") or 0))
     data = sorted(reply.get("data") or [], key=lambda item: item.get("index", 0))
     if len(data) != len(batch):

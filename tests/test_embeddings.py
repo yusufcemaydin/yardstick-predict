@@ -65,6 +65,16 @@ def test_a_tokens_limit_splits_a_batch_at_once_and_later_batches_start_smaller(v
     assert [len(r["input"]) for r in voyage.requests] == [2, 1, 1, 1, 1, 1, 1]  # later batches hold one text
 
 
+def test_after_a_split_later_batches_hold_no_more_than_got_through_in_it(voyage):
+    texts = [f"task number {i} with a few words" for i in range(6)]
+    found = embeddings.embed(texts, "voyage-4-large", KEY, counts=[50_000] * 6)
+    first = next(found)  # two texts at once, before the account's limit is reached
+    voyage.most_tokens = 10  # from now on one text of 8 tokens fits, two don't
+    rest = list(found)
+    assert sorted(p for positions, _ in [first, *rest] for p in positions) == list(range(6))
+    assert [len(r["input"]) for r in voyage.requests] == [2, 2, 1, 1, 1, 1]  # only one request was too big
+
+
 def test_a_requests_limit_or_a_single_text_still_waits_and_tries_again(voyage, monkeypatch):
     slept = []
     monkeypatch.setattr(embeddings.time, "sleep", slept.append)
