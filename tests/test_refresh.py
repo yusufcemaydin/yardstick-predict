@@ -4,7 +4,8 @@ import os
 
 from builders import ClaudeSession, CodexSession, usage
 
-from yardstick_predict.pipeline import read_all, save_scan, scan
+from yardstick_predict import model_types
+from yardstick_predict.pipeline import embedding_items, read_all, save_scan, scan, train
 from yardstick_predict.store import Predictor
 
 START = 1_780_000_000.0
@@ -81,3 +82,34 @@ def test_a_codex_helper_thread_that_appears_later_is_added_to_its_parent(tmp_pat
     assert [t.calls for t in found.updated_tasks] == [3]
     save_scan(predictor, found)
     assert stored(predictor, "Split the work").input_tokens == 1500
+
+
+def test_max_tasks_trains_on_the_same_tasks_it_embeds(tmp_path, monkeypatch):
+    session = ClaudeSession(tmp_path, "s1", START)
+    for prompt in ("Oldest", "Middle", "Newest finished"):
+        session.prompt(prompt)
+        session.reply(5)
+        session.clock += 60
+    session.prompt("Newest, stopped")
+    session.reply(5, tool="Bash")
+    session.interrupt()
+    session.save(mtime=START)
+    predictor = predictor_for({"name": "claude-code", "format": "claude-code", "path": str(tmp_path)})
+    predictor.config.update(max_tasks=2, model={"type": "capture"})
+
+    given: list = []
+
+    class Captured:
+        meta = {"tasks": 0, "report": {}}
+
+        def save(self, folder):
+            pass
+
+    def capture(tasks, rows, settings):
+        given.extend(tasks)
+        return Captured()
+
+    monkeypatch.setitem(model_types._TYPES, "capture", (capture, lambda folder: Captured()))
+    train(predictor)
+    embedded = [text for _, _, text in embedding_items(predictor.tasks(), ["prompt"], limit=2)]
+    assert sorted(t.prompt for t in given) == sorted(embedded) == ["Middle", "Newest finished"]

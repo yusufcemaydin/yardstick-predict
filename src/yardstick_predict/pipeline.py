@@ -109,6 +109,15 @@ def load_plugins(predictor: Predictor) -> None:
     model_types.load_plugins(predictor.config.get("plugins") or [])
 
 
+def learnable(tasks: list[Task], limit: int | None = None) -> list[Task]:
+    """The tasks the model learns from, newest first. Stopped tasks and tasks left waiting are left out.
+
+    With `limit`, only the newest that many. Embedding and training both pick tasks here, so they agree.
+    """
+    kept = sorted((t for t in tasks if not t.stopped and not t.idle), key=lambda t: (t.started_at, t.id), reverse=True)
+    return kept[: int(limit)] if limit else kept
+
+
 def embedding_items(
     tasks: list[Task], chosen: list[str], have: dict[str, set[str]] | None = None, limit: int | None = None
 ) -> list[tuple[str, str, str]]:
@@ -119,11 +128,8 @@ def embedding_items(
     """
     have = have or {}
     fields = [name for name in chosen if features.is_text(name)]
-    tasks = sorted((t for t in tasks if not t.stopped and not t.idle), key=lambda t: t.started_at, reverse=True)
-    if limit:
-        tasks = tasks[: int(limit)]
     items = []
-    for task in tasks:
+    for task in learnable(tasks, limit):
         info = features.TaskInfo.of(task)
         for name in fields:
             if task.id in have.get(name, set()):
@@ -235,7 +241,8 @@ def train(predictor: Predictor):
     load_plugins(predictor)
     tasks = predictor.tasks()
     if predictor.config.get("max_tasks"):
-        tasks = sorted(tasks, key=lambda t: t.started_at)[-int(predictor.config["max_tasks"]) :]
+        # The same newest tasks that were embedded, oldest first.
+        tasks = learnable(tasks, predictor.config["max_tasks"])[::-1]
     model_settings = settings(predictor)
     trainer, _ = model_types.get(model_settings.get("type", "xgboost"))
     model = trainer(tasks, feature_rows(predictor, tasks), model_settings)
