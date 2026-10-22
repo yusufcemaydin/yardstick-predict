@@ -143,6 +143,20 @@ def _info(task: TaskRequest, model: str, defaults: dict) -> features.TaskInfo:
     )
 
 
+def _usable_texts(model, chosen: list[str]) -> list[str]:
+    """The text features the model can use. Each needs enough past tasks with that text to compare with.
+
+    With fewer, the model sees no similar tasks for it, so embedding it would cost tokens for nothing.
+    A model type of your own gets every text feature, since only it knows what it uses.
+    """
+    from .model import MIN_NEIGHBORS, Model
+
+    names = [name for name in chosen if features.is_text(name)]
+    if not isinstance(model, Model):
+        return names
+    return [name for name in names if name in model.pools and len(model.pools[name][0]) >= MIN_NEIGHBORS]
+
+
 def _embed(predictor: Predictor, items: list[tuple[int, str, str]]) -> dict[str, dict[int, np.ndarray]]:
     """Embed each row's texts with the predictor's own embedding model."""
     vectors: dict[str, dict[int, np.ndarray]] = {}
@@ -180,13 +194,15 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
     defaults = model.meta.get("defaults", {})
     pairs = [(task, name, *model.served(name)) for task in tasks for name in task.models]
     # A row for each model to forecast. As in training, its features see its model, effort level and agent.
-    # A task with no model to forecast has no row, so its texts aren't sent to Voyage.
+    # A task with no model to forecast has no row, so its texts aren't sent to Voyage. Neither are texts
+    # the model can't use.
     infos = [_info(task, name, defaults) for task, name, served, _ in pairs if served]
+    usable = _usable_texts(model, chosen)
     items = [
         (row, name, text)
         for row, info in enumerate(infos)
-        for name in chosen
-        if features.is_text(name) and (text := features.text(name, info)).strip()
+        for name in usable
+        if (text := features.text(name, info)).strip()
     ]
     vectors = _embed(predictor, items)
     table = pipeline.benchmark_table(predictor)

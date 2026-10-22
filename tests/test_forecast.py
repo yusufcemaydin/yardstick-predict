@@ -179,6 +179,24 @@ def test_numbers_that_json_cant_hold_become_null(stub):
     assert shape["usd"] == curve
 
 
+def test_a_forecast_embeds_only_the_texts_the_model_can_use(voyage, monkeypatch):
+    monkeypatch.setenv("VOYAGE_API_KEY", KEY)
+    predictor = Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    predictor.config["features"] = ["prompt", "context", "skills"]
+    predictor.save_config()
+    tasks = synthetic(900)
+    few = tasks[: M.MIN_NEIGHBORS - 1]  # too few past contexts to compare with, and no task used a skill
+    vectors = {
+        "prompt": {t.id: np.array(fake_vector(t.prompt), dtype=np.float32) for t in tasks},
+        "context": {t.id: np.array(fake_vector("we talked before"), dtype=np.float32) for t in few},
+    }
+    M.train(tasks, rows_for(tasks, vectors)).save(predictor.model_dir)
+    found, _, _ = parse(request(context="Earlier we added a signup page.", skills=["tdd"]))
+    forecasts = answer(predictor, found)["forecasts"]
+    assert [r["input"] for r in voyage.requests] == [["Add a login page"]]  # only the prompt goes to Voyage
+    assert forecasts[0]["seconds"] > 0 and forecasts == answer(predictor, parse(request())[0])["forecasts"]
+
+
 def test_an_untrained_predictor_says_so():
     predictor = Predictor.create("empty", [], {"model": "voyage-4", "dimensions": 256})
     tasks, _, _ = parse(request())
