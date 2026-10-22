@@ -13,7 +13,7 @@
     },
     "predictor": {
       "type": "string",
-      "description": "Which predictor to use. Default: the only one, or 'default'."
+      "description": "Which predictor to use. Default: your default predictor, set with `yardstick-predict default NAME`."
     },
     "distribution": {
       "type": "boolean",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from pathlib import Path
 
 import jsonschema
@@ -11,7 +12,7 @@ from conftest import KEY
 
 from yardstick_predict import benchmarks, cli, embeddings
 from yardstick_predict.cli import main
-from yardstick_predict.store import Predictor, predictor_names
+from yardstick_predict.store import Predictor, default_name, predictor_names
 
 START = 1_780_000_000.0
 SCHEMAS = Path(__file__).resolve().parent.parent / "schemas"
@@ -38,12 +39,13 @@ def run(capsys, *args, stdin: str | None = None, monkeypatch=None) -> tuple[int,
     return code, capsys.readouterr().out
 
 
-def test_express_takes_every_default_in_one_line(capsys, records, ready):
+def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeypatch):
     code, out = run(capsys, "create", "--express", "--archive", f"claude-code={records}")
     assert code == 0, out
     assert "420 tasks" in out
-    assert "claude-opus-5-5: forecasts on" in out
-    assert "Ready. It forecasts claude-opus-5-5" in out and "yardstick-predict predict --model claude-opus-5-5" in out
+    assert re.search(r"claude-opus-5-5\s+forecasts on", out)
+    assert "Forecasts are on for claude-opus-5-5" in out and 'yardstick-predict predict "Add a login page' in out
+    assert default_name() == "default"  # the first predictor is the default
     predictor = Predictor("default")
     assert predictor.config["features"] == ["prompt", "context"]
     assert predictor.config["embedding"]["model"] == "voyage-4"
@@ -59,6 +61,13 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready):
     by_model = {f["model"]: f for f in result["forecasts"]}
     assert by_model["claude-opus-5-5"]["seconds"] > 0
     assert by_model["gpt-unknown"]["reason"] == "unknown_model"
+
+    # In a terminal, a task in quotes gets a table, on every model the predictor forecasts.
+    monkeypatch.setattr(cli, "terminal_output", lambda: True)
+    code, out = run(capsys, "predict", "fix the api")
+    assert code == 0 and re.search(r"claude-opus-5-5\s+\d+ (s|min|h)\s+[\d.]+[kM]? tokens\s+\$", out)
+    assert "predictor default, updated just now" in out and "{" not in out
+    monkeypatch.setattr(cli, "terminal_output", lambda: False)
 
     code, out = run(capsys, "status", "--json")
     status = json.loads(out)["predictors"][0]
@@ -167,12 +176,38 @@ def test_features_and_advanced_settings_are_chosen_with_flags(capsys, records, r
 
 
 def test_bad_choices_get_a_plain_reason(capsys, records, ready):
-    with pytest.raises(SystemExit) as caught:
-        main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "horoscope"])
-    assert "Unknown feature" in str(caught.value)
-    with pytest.raises(SystemExit) as caught:
-        main(["create", "--yes", "--archive", f"claude-code={records}", "--shape", "weibull", "--loss", "crps"])
-    assert "crps" in str(caught.value)
+    assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "horoscope"]) == 1
+    assert "Unknown feature" in capsys.readouterr().err
+    assert main(["create", "--yes", "--archive", f"claude-code={records}", "--shape", "weibull", "--loss", "crps"]) == 1
+    assert "crps" in capsys.readouterr().err
+
+
+def test_a_new_predictor_is_named_first(monkeypatch):
+    replies = iter(["", "Not A Name", "default", "work"])
+    monkeypatch.setattr("builtins.input", lambda question="": next(replies))
+    assert cli.ask_name([]) == "default"  # the first predictor is called default unless you pick a name
+    assert cli.ask_name(["default"]) == "work"  # an empty, a bad and a taken name are each asked again
+
+
+def test_commands_use_the_default_predictor_you_choose(capsys):
+    for name in ("default", "work"):
+        Predictor.create(name, [], {"model": "voyage-4", "dimensions": 256})
+    assert default_name() == "default" and cli.pick_predictor(None).name == "default"
+    assert main(["default", "work"]) == 0
+    assert default_name() == "work" and cli.pick_predictor(None).name == "work"
+    assert cli.pick_predictor("default").name == "default"  # a name always wins
+    main(["default"])
+    assert "Your default predictor is work" in capsys.readouterr().out
+    assert main(["default", "nope"]) == 1 and "no predictor called 'nope'" in capsys.readouterr().err
+
+    for name in ("home", "lab"):
+        Predictor.create(name, [], {"model": "voyage-4", "dimensions": 256})
+    assert default_name() == "work"
+    (Predictor("work").dir / "predictor.json").unlink()
+    (Predictor("default").dir / "predictor.json").unlink()
+    assert default_name() is None  # several left, none chosen
+    with pytest.raises(SystemExit, match="no default"):
+        cli.pick_predictor(None)
 
 
 def test_predict_reads_a_json_request_and_never_asks(capsys, records, ready, monkeypatch):

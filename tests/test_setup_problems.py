@@ -20,7 +20,7 @@ def test_a_missing_mac_library_gets_the_exact_fix(monkeypatch, capsys):
     monkeypatch.setattr(builtins, "__import__", no_xgboost)
     monkeypatch.setenv(cli.RELAUNCHED, "1")  # as if it had already restarted once, so it reports instead
     assert cli.main(["status"]) == 1
-    assert "brew install libomp" in capsys.readouterr().out
+    assert "brew install libomp" in capsys.readouterr().err
     assert "Reinstall yardstick-predict" in cli.xgboost_problem(["status"])
 
     assert cli.main(["predict", "--model", "m", "--prompt", "x"]) == 1

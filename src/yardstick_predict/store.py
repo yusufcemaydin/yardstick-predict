@@ -42,6 +42,32 @@ def predictor_names() -> list[str]:
     return sorted(p.name for p in root.iterdir() if (p / "predictor.json").is_file())
 
 
+def default_name() -> str | None:
+    """The predictor a command uses when it names none: the one you chose, else 'default', else the only one."""
+    names = predictor_names()
+    try:
+        chosen = json.loads((home() / "settings.json").read_text()).get("default")
+    except (OSError, ValueError, AttributeError):
+        chosen = None
+    if chosen in names:
+        return chosen
+    if "default" in names:
+        return "default"
+    return names[0] if len(names) == 1 else None
+
+
+def set_default(name: str) -> None:
+    path = private_home() / "settings.json"
+    try:
+        settings = json.loads(path.read_text())
+    except (OSError, ValueError):
+        settings = {}
+    if not isinstance(settings, dict):
+        settings = {}
+    settings["default"] = name
+    path.write_text(json.dumps(settings, indent=2) + "\n")
+
+
 class Predictor:
     """One predictor: its archives, its embedding model, its dataset and its trained model."""
 

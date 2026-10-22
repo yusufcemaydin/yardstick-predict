@@ -2,6 +2,8 @@
 
 `yardstick-predict predict` reads one JSON request on standard input and writes one JSON answer on standard output. It never asks questions. The answer always says which format version it follows.
 
+In a terminal, `yardstick-predict predict "TASK"` shows the same forecasts as a small table. Add `--json` to get this format there too.
+
 Within version 1, new fields may be added. Fields are never renamed or removed. A change that would break a program reading version 1 gets version 2.
 
 The [request schema](../schemas/forecast-request.v1.json) and the [answer schema](../schemas/forecast-response.v1.json) describe the same rules in a form programs can check automatically.
@@ -39,7 +41,7 @@ The [request schema](../schemas/forecast-request.v1.json) and the [answer schema
 | `tasks[].project` | no | The project's folder name, for features you add yourself. |
 | `tasks[].extra` | no | Any values your own features need. They reach them as `info.extra`. |
 | `distribution` | no | `true` to get each forecast's full curve. Default: `false`. |
-| `predictor` | no | Which predictor to use. Default: the predictor called `default`, or the only one. |
+| `predictor` | no | Which predictor to use. Default: your default predictor, set with `yardstick-predict default NAME`. |
 
 ## The answer
 

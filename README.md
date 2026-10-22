@@ -8,9 +8,14 @@
 yardstick-predict learns from your own past Claude Code and Codex runs. Give it a prompt and an AI model, and it forecasts the expected seconds, tokens and dollars. It's built for orchestrators: programs that run many coding agents and decide which model runs each task, what runs side by side, and what fits a budget or a usage limit.
 
 ```console
-$ yardstick-predict predict --model claude-opus-5-5 --prompt "Add a login page with tests"
-{"version": 1, "predictor": "default", "embedding_model": "voyage-4", "forecasts": [
-  {"task": "task", "model": "claude-opus-5-5", "seconds": 245.0, "tokens": 1830000, "usd": 0.92}]}
+$ yardstick-predict predict "Add a login page with tests"
+
+  Add a login page with tests
+
+  claude-opus-5-5   4 min   1.8M tokens   $0.92
+  gpt-6.1-sol       5 min   950k tokens   $0.41
+
+  Expected values from your own runs · predictor default, updated 2 days ago · add --json for details
 ```
 
 The numbers above are an example. Yours come from your own history.
@@ -56,29 +61,10 @@ It finds your past runs, asks which features to use, shows the exact cost of eac
 **Then, before you start a task, ask what it will take:**
 
 ```bash
-yardstick-predict predict --model claude-opus-5-5 --prompt "Add a login page with tests" --pretty
+yardstick-predict predict "Add a login page with tests"
 ```
 
-It answers with the expected seconds, tokens and dollars. These numbers are an example:
-
-```json
-{
-  "version": 1,
-  "predictor": "default",
-  "embedding_model": "voyage-4",
-  "forecasts": [
-    {
-      "task": "task",
-      "model": "claude-opus-5-5",
-      "seconds": 245.0,
-      "tokens": 1830000,
-      "usd": 0.92
-    }
-  ]
-}
-```
-
-Name more models with more `--model` flags to compare them. Use the answer to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
+It shows the expected time, tokens and cost on each AI model your predictor covers. `--model` names the models yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
 
 Run `yardstick-predict` every week or so. It tells you how many new tasks it found and what embedding them costs, and asks before it refreshes.
 
@@ -199,10 +185,11 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | Command | What it does |
 |---|---|
 | `yardstick-predict` | Sets up your first predictor, or finds new runs and offers to refresh. |
-| `yardstick-predict create [NAME]` | Creates a predictor. `--express` takes every default. `--archive codex=PATH` adds a folder of records. |
+| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express` takes every default. `--archive codex=PATH` adds a folder of records. |
 | `yardstick-predict refresh` | Adds new runs, embeds them and retrains. |
-| `yardstick-predict predict` | Forecasts tasks. JSON in, JSON out. |
+| `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each predictor, its features and how it did on its test. `--json` for programs. |
+| `yardstick-predict default [NAME]` | Shows or sets your default predictor: the one commands use when they name none. `--predictor NAME` picks another for one command. |
 
 ## Update or remove it
 
