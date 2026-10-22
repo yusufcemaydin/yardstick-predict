@@ -371,7 +371,7 @@ def cmd_home(args) -> int:
     if not names:
         say("yardstick-predict forecasts how long a coding-agent task will take and what it will cost.")
         say("It learns from your own past Claude Code and Codex runs. Nothing leaves your computer except")
-        say("your prompts, which are sent to Voyage to embed.")
+        say("the text you choose to embed, such as your prompts, and that goes only to Voyage.")
         say()
         if not interactive():
             say("No predictor yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --yes")
