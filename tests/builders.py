@@ -186,13 +186,21 @@ class ClaudeSession:
 
 
 class CodexSession:
-    """Builds one Codex session file."""
+    """Builds one Codex session file. `name` names the file, for a thread spread over several files."""
 
-    def __init__(self, root: Path, session: str, start: float, originator="codex_exec", parent: str | None = None):
+    def __init__(
+        self,
+        root: Path,
+        session: str,
+        start: float,
+        originator="codex_exec",
+        parent: str | None = None,
+        name: str | None = None,
+    ):
         day = datetime.fromtimestamp(start, tz=timezone.utc)
         folder = root / f"{day:%Y}" / f"{day:%m}" / f"{day:%d}"
         folder.mkdir(parents=True, exist_ok=True)
-        self.path = folder / f"rollout-{session}.jsonl"
+        self.path = folder / f"rollout-{name or session}.jsonl"
         self.clock = start
         self.total = {
             "input_tokens": 0,

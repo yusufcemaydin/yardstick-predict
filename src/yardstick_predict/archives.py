@@ -559,7 +559,7 @@ class _ThreadTurn:
 
 @dataclass
 class _CodexThread:
-    """One Codex thread: its id, the thread that spawned it, and its turns."""
+    """One Codex thread as one record file holds it: its id, the thread that spawned it, and its turns."""
 
     id: str
     parent: str | None
@@ -710,45 +710,60 @@ def _attach_codex_helpers(tasks: dict[str, Task], threads: list[_CodexThread]) -
     Older records name no turn. There a helper's turn counts toward its parent thread's turn that started
     last before it, as that turn spawned the helper or sent it more work, and so on up to the main thread.
     A helper's tokens then count even when its first reply comes after that turn finished.
-    """
-    by_id = {thread.id: thread for thread in threads}
-    owners: dict[str, tuple[_CodexThread, _ThreadTurn]] = {}
-    # Main threads first: a helper forked from its parent starts with a copy of the parent's turn.
-    for thread in sorted(threads, key=lambda t: t.parent is not None):
-        for turn in thread.turns:
-            owners.setdefault(turn.id, (thread, turn))
 
-    def main_turn(thread: _CodexThread, turn: _ThreadTurn) -> str | None:
+    A thread can be spread over several files, such as a session resumed into a new file, and a file can
+    be copied. A helper forked from its parent also starts with a copy of the parent's turn. So each turn
+    counts once, from its fullest copy, and a copy of a main thread's turn adds nothing: it's in its task.
+    """
+    parents: dict[str, str | None] = {}
+    for thread in threads:
+        if thread.parent or thread.id not in parents:
+            parents[thread.id] = thread.parent
+
+    def key(thread_id: str, turn: _ThreadTurn) -> str:
+        return turn.id or f"{thread_id} {turn.started}"  # calls before a thread's first turn have no turn id
+
+    owners: dict[str, tuple[str, _ThreadTurn]] = {}
+    # Main threads first, so a helper's copy of a main thread's turn never takes its place.
+    for thread in sorted(threads, key=lambda t: parents[t.id] is not None):
+        for turn in thread.turns:
+            kept = owners.get(key(thread.id, turn))
+            if kept is None or (parents[kept[0]] and len(turn.calls) > len(kept[1].calls)):
+                owners[key(thread.id, turn)] = (thread.id, turn)
+    turns: dict[str, list[_ThreadTurn]] = {}
+    for thread_id, turn in owners.values():
+        turns.setdefault(thread_id, []).append(turn)
+
+    def main_turn(thread_id: str, turn: _ThreadTurn) -> str | None:
         """The main thread's turn behind a helper's turn. None when the records don't hold it."""
         seen = set()
-        while thread.parent:
-            if (thread.id, turn.id) in seen:
+        while parents[thread_id]:
+            if key(thread_id, turn) in seen:
                 return None
-            seen.add((thread.id, turn.id))
+            seen.add(key(thread_id, turn))
             if turn.root:
                 if turn.root not in owners:
                     return None
-                thread, turn = owners[turn.root]
+                thread_id, turn = owners[turn.root]
                 continue
-            parent = by_id.get(thread.parent)
-            earlier = [t for t in parent.turns if t.started <= turn.started] if parent else []
+            parent = parents[thread_id]
+            earlier = [t for t in turns.get(parent, []) if t.started <= turn.started]
             if not earlier:
                 return None
-            thread, turn = parent, max(earlier, key=lambda t: (t.started, t.id))
+            thread_id, turn = parent, max(earlier, key=lambda t: (t.started, t.id))
         return turn.id
 
-    for thread in threads:
-        if not thread.parent:
+    for thread_id, turn in owners.values():
+        if not parents[thread_id]:
             continue
-        for turn in thread.turns:
-            sent = main_turn(thread, turn)
-            task = tasks.get(f"codex:{sent}") if sent else None
-            if task is None:
-                continue
-            new_input, cache_write, cache_read, output, usd = _totals(turn.calls)
-            task.input_tokens += new_input
-            task.cache_write_tokens += cache_write
-            task.cache_read_tokens += cache_read
-            task.output_tokens += output
-            task.usd = None if task.usd is None or usd is None else task.usd + usd
-            task.calls += len(turn.calls)
+        sent = main_turn(thread_id, turn)
+        task = tasks.get(f"codex:{sent}") if sent else None
+        if task is None:
+            continue
+        new_input, cache_write, cache_read, output, usd = _totals(turn.calls)
+        task.input_tokens += new_input
+        task.cache_write_tokens += cache_write
+        task.cache_read_tokens += cache_read
+        task.output_tokens += output
+        task.usd = None if task.usd is None or usd is None else task.usd + usd
+        task.calls += len(turn.calls)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 
 import pytest
 from builders import ClaudeSession, CodexSession, usage
@@ -415,6 +416,72 @@ def test_a_codex_helper_turn_naming_a_turn_missing_from_the_records_isnt_charged
 
     [task] = read_archive(codex_archive(tmp_path), now=LATER)
     assert (task.calls, task.input_tokens) == (1, 1000)
+
+
+def one_helper(tmp_path, helper_calls=1):
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Split the work", calls=[(1000, 0, 100)], seconds=100)
+    parent.save(mtime=START)
+    helper = CodexSession(tmp_path, "helper", START + 10, parent="parent")
+    helper.turn("h1", "Helper part", calls=[(200, 0, 20)] * helper_calls, seconds=5)
+    helper.save(mtime=START)
+    return helper
+
+
+def test_a_codex_helper_file_copied_into_another_folder_counts_once(tmp_path):
+    helper = one_helper(tmp_path)
+    (tmp_path / "backup").mkdir()
+    shutil.copy(helper.path, tmp_path / "backup" / helper.path.name)
+
+    [task] = read_archive(codex_archive(tmp_path), now=LATER)
+    assert (task.calls, task.input_tokens) == (2, 1200)
+
+
+def test_a_codex_helper_copy_saved_before_it_finished_adds_nothing_to_the_whole_one(tmp_path):
+    one_helper(tmp_path, helper_calls=3)
+    early = CodexSession(tmp_path / "backup", "helper", START + 10, parent="parent")
+    early.turn("h1", "Helper part", calls=[(200, 0, 20)], seconds=5)
+    early.lines.pop()  # saved while the helper was still working
+    early.save(mtime=START)
+
+    [task] = read_archive(codex_archive(tmp_path), now=LATER)
+    assert (task.calls, task.input_tokens) == (4, 1600)
+
+
+def test_a_codex_thread_resumed_into_a_new_file_keeps_the_turns_of_both_files(tmp_path):
+    first = CodexSession(tmp_path, "parent", START)
+    first.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=100)
+    first.save(mtime=START)
+    second = CodexSession(tmp_path, "parent", START + 200, name="parent-resumed")
+    second.turn("t2", "Ask the same helper for more", calls=[(1000, 0, 100)], seconds=100)
+    second.save(mtime=START + 300)
+    # The helper's thread is spread over two files the same way, one job in each.
+    helper = CodexSession(tmp_path, "helper", START + 10, parent="parent")
+    helper.turn("h1", "First job", calls=[(200, 0, 20)], seconds=5)
+    helper.save(mtime=START)
+    resumed = CodexSession(tmp_path, "helper", START + 210, parent="parent", name="helper-resumed")
+    resumed.turn("h2", "Second job", calls=[(300, 0, 30), (300, 0, 30)], seconds=5)
+    resumed.save(mtime=START + 300)
+
+    tasks = {t.prompt: t for t in read_archive(codex_archive(tmp_path), now=LATER)}
+    first_task, second_task = tasks["Start a helper"], tasks["Ask the same helper for more"]
+    assert (first_task.calls, first_task.input_tokens) == (2, 1200)
+    assert (second_task.calls, second_task.input_tokens) == (3, 1600)
+
+
+def test_a_forked_codex_helper_doesnt_count_its_copy_of_the_parent_turn_again(tmp_path):
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=10, root="t1")
+    parent.save(mtime=START)
+    # A helper forked from its parent starts with a copy of the parent's turn so far.
+    helper = CodexSession(tmp_path, "helper", START, parent="parent")
+    helper.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=0, root="t1")
+    helper.lines.pop()
+    helper.turn("h1", "Helper part", calls=[(200, 0, 20)], seconds=5, root="t1")
+    helper.save(mtime=START)
+
+    [task] = read_archive(codex_archive(tmp_path), now=LATER)
+    assert (task.calls, task.input_tokens) == (2, 1200)
 
 
 def test_the_context_keeps_the_conversation_in_order(tmp_path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 from dataclasses import fields
 
@@ -180,6 +181,25 @@ def test_when_two_archives_hold_the_same_task_the_most_complete_copy_wins(tmp_pa
     found = scan(predictor, now=LATER)
     assert [(t.prompt, t.calls) for t in found.new_tasks] == [("Second shared task", 3)]
     assert found.per_archive == {"backup": 0, "live": 1}
+
+
+def test_when_two_archives_hold_the_same_codex_helper_it_counts_once(tmp_path):
+    archives = [
+        {"name": "backup", "format": "codex", "path": str(tmp_path / "backup")},
+        {"name": "live", "format": "codex", "path": str(tmp_path / "live")},
+    ]
+    for folder in ("backup", "live"):
+        parent = CodexSession(tmp_path / folder, "parent-thread", START)
+        parent.turn("t1", "Split the work", calls=[(1000, 0, 100)], seconds=100)
+        parent.save(mtime=START)
+        helper = CodexSession(tmp_path / folder, "helper-thread", START + 10, parent="parent-thread")
+        helper.turn("h1", "Helper part", calls=[(200, 0, 20)], seconds=5)
+        helper.save(mtime=START)
+    # The live folder also keeps a stray copy of the helper's file.
+    shutil.copy(helper.path, helper.path.with_name("rollout-helper-thread-copy.jsonl"))
+
+    found = read_all(archives, now=LATER)
+    assert [(t.prompt, t.calls, t.input_tokens) for t in found.new_tasks] == [("Split the work", 2, 1200)]
 
 
 def test_max_tasks_trains_on_the_same_tasks_it_embeds(tmp_path, monkeypatch):
