@@ -1170,10 +1170,13 @@ def _verdicts(scored: list[dict], trained_on: int, tested_on: int, settings: dic
                 continue
             chance = data["pit"][rows]
             has_ranges = not np.isnan(chance).all()
+            ours, simple = float(data["ours"][rows].mean()), float(data["simple"][rows].mean())
             result[target] = {
-                "score": round(float(data["ours"][rows].mean()), 4),
-                "simple_rule_score": round(float(data["simple"][rows].mean()), 4),
-                "better_than_simple_rule": round(float(1 - data["ours"][rows].mean() / data["simple"][rows].mean()), 4),
+                "score": round(ours, 4),
+                "simple_rule_score": round(simple, 4),
+                # On a target that never changes, the simple rule's expected value is exactly right, so its
+                # score is 0. Dividing by 0 gives NaN, so its score counts as at least 0.0001, the smallest shown.
+                "better_than_simple_rule": round((simple - ours) / max(simple, 1e-4), 4),
                 "in_50_range": round(float(np.mean((chance > 0.25) & (chance < 0.75))), 4) if has_ranges else None,
                 "in_90_range": round(float(np.mean((chance > 0.05) & (chance < 0.95))), 4) if has_ranges else None,
                 "expected_over_real_total": round(float(data["expected"][rows].sum() / data["real"][rows].sum()), 4),

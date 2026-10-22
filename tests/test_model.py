@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import random
@@ -318,6 +319,25 @@ def test_every_advanced_setting_trains_and_forecasts(settings):
         assert model.meta["report"]["models"]["claude-opus-5-5"]["seconds"]["in_90_range"] is None
     elif settings.get("family") == "weibull":
         assert result["shape"] == "two_part_weibull"
+
+
+@pytest.mark.parametrize(
+    "loss, seconds",
+    [
+        ("gamma", {"claude-opus-5-5": 10.0, "gpt-6.1-sol": 10.0}),
+        ("tweedie", {"claude-opus-5-5": 10.0, "gpt-6.1-sol": 10.0}),
+        ("gamma", {"claude-opus-5-5": 10.0, "gpt-6.1-sol": 20.0}),
+    ],
+)
+def test_a_target_that_never_changes_still_gives_strict_json(loss, seconds):
+    tasks = synthetic(300)
+    for t in tasks:
+        t.seconds = seconds[t.model]
+    model = M.train(tasks, rows_for(tasks), {"head": "expected", "loss": loss})
+    json.dumps(model.meta, allow_nan=False)  # fails on NaN and infinity, as strict JSON readers do
+    for result in model.meta["report"]["models"].values():
+        assert result["seconds"]["better_than_simple_rule"] <= 0  # nothing beats a rule that is always right
+    assert all(math.isfinite(r["seconds"]["expected"]) for r in model.forecast(rows_for(tasks[:4])))
 
 
 @pytest.mark.parametrize(
