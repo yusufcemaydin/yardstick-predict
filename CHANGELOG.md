@@ -2,7 +2,7 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-22
 
 Records are read more accurately again, and this time your predictors catch up by themselves: the next refresh reads all your records again, once, and embeds only the texts that changed. Training is several times faster, and more so on computers with many processor cores.
 
@@ -174,6 +174,7 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
+[0.3.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yusufcemaydin/yardstick-predict/releases/tag/v0.1.0
