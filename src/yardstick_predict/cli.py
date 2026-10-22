@@ -243,24 +243,73 @@ def choose_archives(can_ask: bool, given: list[str]) -> list[dict]:
     return chosen
 
 
-def choose_features(can_ask: bool, given: str | None) -> list[str]:
-    """The prompt, plus the features a person picks or a program names."""
-    from . import features
+def choose_features(can_ask: bool, args):
+    """The features a person picks on the Features screen, or a program names with flags."""
+    from . import features, menu
 
     try:
-        if given is not None:
-            return features.check([name.strip() for name in given.split(",") if name.strip()])
-        if not can_ask:
-            return features.check(list(features.DEFAULT))
-        ui.heading("Features")
-        ui.note("The prompt, the AI model and its effort level are always used. You can add:")
-        chosen = ["prompt"]
-        for name, description in features.available().items():
-            if ui.ask(f"{ui.bold(name)}: {description}. Add it?", name in features.DEFAULT):
-                chosen.append(name)
-        return features.check(chosen)
+        if args.features is not None or not can_ask:
+            return menu.from_flags(args.features, args.llm_provider, args.llm_model)
+        custom = {name: says for name, says in features.available().items() if name not in features.BUILT_IN}
+        return menu.ask(custom)
     except ValueError as error:
         raise SystemExit(str(error)) from None
+
+
+def feature_summary(config: dict) -> str:
+    """A predictor's features in plain words, with the options it uses and how LLM analysis runs."""
+    from . import features, llm
+
+    found = [group.title for group in features.MENU if group.always]
+    for name in config.get("features") or ["prompt"]:
+        group = next((g for g in features.MENU if g.key == name), None)
+        if name == "prompt":
+            continue
+        if group is None:
+            found.append(name)
+            continue
+        label, chosen = group.title, features.options(config, name)
+        if len(group.options) > 1 and len(chosen) < len(group.options):
+            label += f" ({', '.join(o.says for o in group.options if o.key in chosen)})"
+        how = config.get("llm") or {}
+        if name == "llm" and how.get("provider") in llm.PROVIDERS:
+            label += f", by {llm.title(how['model'])} through {llm.PROVIDERS[how['provider']].title.lower()}"
+        found.append(label)
+    return "; ".join(found)
+
+
+def analysis_lines(asks: int, how: dict) -> list[str]:
+    """What LLM analysis of this many tasks costs, or how it counts toward a subscription, in plain words."""
+    from . import llm
+
+    provider = llm.PROVIDERS[how["provider"]]
+    model = llm.title(how["model"])
+    if not provider.billed:
+        requests = -(-asks // provider.batch)
+        return [
+            f"LLM analysis: {asks:,} tasks with {model} through your {provider.title.lower()}, "
+            f"in about {requests:,} requests. It counts toward your plan's usage limits."
+        ]
+    usd = llm.cost(asks, how["model"])
+    price = f"about ${usd:,.2f} at list price" if usd is not None else "its price isn't in yardstick's list"
+    return [f"LLM analysis: {asks:,} tasks with {model}, {price}."]
+
+
+def analyze_with_progress(predictor: Predictor, asks: list) -> None:
+    """Run LLM analysis with a progress bar. When it can't run, training goes on without it."""
+    from .pipeline import run_analysis
+
+    ui.heading("LLM analysis")
+    ui.note("Each batch is saved as it arrives, so you can stop and resume later.")
+    answered, problem = run_analysis(predictor, asks, lambda done, total: ui.progress(done, total, "tasks"))
+    if not answered and problem:
+        ui.fail(problem)
+        ui.note("Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again.")
+        return
+    missed = len(asks) - answered
+    ui.ok(f"Analyzed {answered:,} tasks." + (f" {missed:,} weren't answered." if missed else ""))
+    if problem:
+        ui.note(f"{problem} A refresh tries the rest again, up to twice for a task it refused.")
 
 
 def advanced_settings(args) -> dict:
@@ -320,7 +369,12 @@ def print_report(model) -> None:
         tested = result["tasks_tested"]
         label = ui.bold(name) + " " * (pad - len(name))
         if result["served"]:
-            ui.line(f"{label}   {flag('ok')}" + ui.join(["forecasts on", f"tested on {tested:,} tasks"]))
+            notes = ["forecasts on", f"tested on {tested:,} tasks"]
+            if "conversation" in result:
+                notes.append(
+                    "uses the conversation so far" if result["conversation"] else "leaves the conversation out"
+                )
+            ui.line(f"{label}   {flag('ok')}" + ui.join(notes))
             scores = [(names[t], result[t]) for t in names if t in result]
             if scores:
                 better = [f"{n} {s['better_than_simple_rule']:.0%}" for n, s in scores]
@@ -513,7 +567,18 @@ def cmd_create(args) -> int:
     if not archives:
         raise SystemExit("No records to learn from. Add a folder with --archive FORMAT=PATH.")
     ui.working("Reading your records. A big history takes a minute")
-    from .pipeline import embedding_items, newest_that_fit, price, read_all, refresh_benchmarks, save_scan, train
+    from . import features, llm
+    from .pipeline import (
+        analysis_plan,
+        embedding_items,
+        newest_that_fit,
+        plan_embeddings,
+        price,
+        read_all,
+        refresh_benchmarks,
+        save_scan,
+        train,
+    )
 
     found = read_all(archives)
     counts = [(archive["name"], found.per_archive.get(archive["name"], 0)) for archive in archives]
@@ -532,8 +597,9 @@ def cmd_create(args) -> int:
             f"Only {ready} of those tasks can be learned from. Training needs at least {least}. "
             "Nothing was spent. Add more records, or try again after more runs."
         )
-    chosen = choose_features(can_ask, args.features)
-    items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks)
+    picked = choose_features(can_ask, args)
+    chosen, settings = picked.features, picked.config()
+    items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks, config=settings)
 
     model_name = args.embedding or (None if can_ask else "voyage-4")
     if model_name is None:
@@ -572,17 +638,28 @@ def cmd_create(args) -> int:
     limit = args.max_tasks
     free = plan.cost.free_left
     if can_ask and free is not None and plan.cost.tokens > free and free > 0:
-        fit = newest_that_fit(plan, free)
+        # The descriptions LLM analysis writes are embedded too. Leave room for them.
+        described = "llm" in chosen and "description" in features.options(settings, "llm")
+        fit = newest_that_fit(plan, free, llm.DESCRIPTION_TOKENS if described else 0)
         if fit >= least and ui.ask(f"Only the newest {fit:,} tasks fit in your free tokens. Use just those?", True):
             limit = fit
         elif fit < least:
             ui.note(f"Your free tokens cover only {fit:,} tasks, fewer than the {least} training needs.")
     if limit and limit != args.max_tasks:
-        items = embedding_items(found.new_tasks, chosen, limit=limit)
+        items = embedding_items(found.new_tasks, chosen, limit=limit, config=settings)
         plan = price(items, model_name, key)
         for text in cost_lines(plan.cost, model_name, plan.tasks):
             ui.line(text)
-    if can_ask and not ui.ask("Embed them and train the predictor now?", True):
+    asks = analysis_plan(found.new_tasks, settings, {}, limit)
+    if asks:
+        for text in analysis_lines(len(asks), settings["llm"]):
+            ui.line(text)
+        if "description" in features.options(settings, "llm"):
+            ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
+    question = (
+        "Analyze and embed them, and train the predictor now?" if asks else "Embed them and train the predictor now?"
+    )
+    if can_ask and not ui.ask(question, True):
         ui.note("Stopped. Nothing was created.")
         return 0
     if not can_ask and not args.yes:
@@ -592,7 +669,7 @@ def cmd_create(args) -> int:
 
     predictor = Predictor.create(name, archives, {"model": model_name, "dimensions": embeddings.DIMENSIONS})
     with locks.held(predictor.dir / "refresh.lock"):  # a refresh started meanwhile is told to try again later
-        predictor.config.update(features=chosen, model=model_settings, plugins=list(args.plugin))
+        predictor.config.update(settings, model=model_settings, plugins=list(args.plugin))
         if args.max_tasks:
             predictor.config["max_tasks"] = int(args.max_tasks)
         predictor.save_config()
@@ -600,6 +677,10 @@ def cmd_create(args) -> int:
         warning = refresh_benchmarks(predictor)
         if warning:
             ui.note(warning)
+        if asks:
+            analyze_with_progress(predictor, asks)
+        if asks:
+            plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
         if plan.items and not embed_with_progress(predictor, plan, key):
             return 1
         model = train_and_report(predictor, train)
@@ -687,14 +768,17 @@ def cmd_refresh(args) -> int:
 
 def _refresh(args, predictor: Predictor) -> int:
     from .pipeline import (
+        analysis_plan,
         chosen_features,
         load_plugins,
         model_ready,
+        outdated,
         plan_embeddings,
         refresh_benchmarks,
         save_scan,
         scan,
         train,
+        upgrade,
     )
 
     load_plugins(predictor)
@@ -713,6 +797,12 @@ def _refresh(args, predictor: Predictor) -> int:
     behind = bool(predictor.config.get("needs_training"))
     if behind and has_model:
         ui.note("Training didn't finish last time. The model is out of date.")
+    elif has_model and outdated(predictor):
+        behind = True
+        ui.note("This model was made by an older version, which used fewer features. It needs training again.")
+    if upgrade(predictor):
+        behind = True
+        ui.note("The skills feature now reads only skills known before a task starts. They'll be embedded again.")
     model_name = predictor.embedding_model
     key, _ = embeddings.find_key()
     from . import features
@@ -723,14 +813,19 @@ def _refresh(args, predictor: Predictor) -> int:
     # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished.
     updated = {task.id: task for task in found.updated_tasks}
     everything = [updated.get(task.id, task) for task in predictor.tasks()] + found.new_tasks
-    pending = embedding_items(everything, chosen, have, predictor.config.get("max_tasks"))
+    labels = predictor.llm_labels() if "llm" in chosen else None
+    pending = embedding_items(everything, chosen, have, predictor.config.get("max_tasks"), predictor.config, labels)
     plan = price(pending, model_name, key)
-    nothing_new = not found.new_tasks and not found.updated_tasks and not plan.items and not behind
+    asks = analysis_plan(everything, predictor.config, labels or {}, predictor.config.get("max_tasks"))
+    nothing_new = not found.new_tasks and not found.updated_tasks and not plan.items and not asks and not behind
     if nothing_new and has_model:
         ui.ok("Nothing new. The model is up to date.")
         return 0
     if plan.items:
         for text in cost_lines(plan.cost, model_name, plan.tasks):
+            ui.line(text)
+    if asks:
+        for text in analysis_lines(len(asks), predictor.config["llm"]):
             ui.line(text)
     if can_ask:
         if not ui.ask("Refresh now? This adds the new tasks, embeds them and retrains.", not ask_first):
@@ -739,7 +834,7 @@ def _refresh(args, predictor: Predictor) -> int:
     elif not args.yes:
         ui.line("Add --yes to go ahead.")
         return 2
-    if plan.items:
+    if plan.items or asks:
         key = key or get_key(model_name, can_ask)
         if not key:
             return 1
@@ -747,9 +842,11 @@ def _refresh(args, predictor: Predictor) -> int:
     warning = refresh_benchmarks(predictor)
     if warning:
         ui.note(warning)
-    if plan.items:
+    if asks:
+        analyze_with_progress(predictor, asks)
+    if plan.items or asks:
         plan = plan_embeddings(predictor, key)
-        if not embed_with_progress(predictor, plan, key):
+        if plan.items and not embed_with_progress(predictor, plan, key):
             return 1
     model = train_and_report(predictor, train)
     if model is None:
@@ -771,7 +868,8 @@ def cmd_predict(args) -> int:
             for number, (model, effort) in enumerate(pairs, start=1):
                 task = {"id": "task" if len(pairs) == 1 else f"task-{number}", "prompt": prompt, "models": [model]}
                 # A prompt given on the command line was typed by a person. A JSON request says who for itself.
-                task.update(context=args.context or "", skills=args.skill, origin="person")
+                # The folder it's asked from is the project, so the project's recent tasks count, as in training.
+                task.update(context=args.context or "", skills=args.skill, origin="person", project=Path.cwd().name)
                 if effort:
                     task["effort"] = effort
                 asked.append(task)
@@ -907,6 +1005,8 @@ def cmd_status(args) -> int:
             "default": name == default,
             "embedding_model": predictor.embedding_model,
             "features": predictor.config.get("features") or ["prompt"],
+            "options": predictor.config.get("options") or {},
+            "llm": predictor.config.get("llm"),
             "model": predictor.config.get("model") or {},
             "archives": predictor.config["archives"],
             "tasks": predictor.count_tasks(),
@@ -923,7 +1023,7 @@ def cmd_status(args) -> int:
     if not found:
         ui.out("There's no predictor yet. Run yardstick-predict to create one.")
         return 0
-    from .pipeline import load_model
+    from .pipeline import load_model, outdated
 
     for entry in found:
         ui.out()
@@ -935,9 +1035,11 @@ def cmd_status(args) -> int:
             f"updated {ago(entry['refreshed_at'])}",
         ]
         ui.line(ui.join(facts))
-        ui.line(f"Features: {', '.join(entry['features'])}")
         predictor = Predictor(entry["name"])
-        if model_ready(predictor):
+        ui.line(f"Features: {feature_summary(predictor.config)}")
+        if model_ready(predictor) and outdated(predictor):
+            ui.note("Its model was made by an older version. Train it again with: yardstick-predict refresh")
+        elif model_ready(predictor):
             model = load_model(predictor)
             ui.line(f"Trained on {model.meta['tasks']:,} tasks.")
             print_report(model)
@@ -1046,8 +1148,17 @@ def make_parser() -> argparse.ArgumentParser:
         help="Take every default and go ahead without questions: all your records, the prompt, voyage-4.",
     )
     create.add_argument(
-        "--features", help="The features to add to the prompt, such as context,skills,benchmarks. Default: none."
+        "--features",
+        help="The optional features, such as context,skills:named,benchmarks,llm. A feature alone gets all its "
+        "options. Default: context.",
     )
+    create.add_argument(
+        "--llm-provider",
+        choices=["anthropic", "openai", "claude", "codex"],
+        help="How LLM analysis is paid for: an Anthropic or OpenAI API key, or a Claude or ChatGPT subscription "
+        "through Claude Code or Codex. Default: anthropic.",
+    )
+    create.add_argument("--llm-model", help="The AI model LLM analysis uses. Default: claude-opus-5-5 with a key.")
     create.add_argument(
         "--plugin", action="append", default=[], metavar="MODULE", help="A module that adds features or model types."
     )

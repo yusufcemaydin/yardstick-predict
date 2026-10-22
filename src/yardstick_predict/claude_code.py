@@ -80,6 +80,10 @@ def _write(path: Path, data: dict) -> None:
 
 def hook() -> int:
     """Start a forecast when a prompt is sent, and note the time when the agent stops. Prints nothing."""
+    from .llm import INSIDE
+
+    if os.environ.get(INSIDE):
+        return 0  # Claude Code started by LLM analysis, to read tasks: forecasting it would start another
     try:
         event = json.load(sys.stdin)
     except ValueError:
@@ -95,7 +99,11 @@ def hook() -> int:
         transcript = _record(event)
         model, effort = last_model_and_effort(transcript)
         prompt_at = time.time()
-        _write(state_path, {"prompt_at": prompt_at, "model": model, "effort": effort, "transcript": transcript})
+        cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else ""
+        _write(
+            state_path,
+            {"prompt_at": prompt_at, "model": model, "effort": effort, "transcript": transcript, "cwd": cwd},
+        )
         _prompt_path(session, prompt_at).write_text(prompt)
         _start_forecast(session, prompt_at)
         _tidy()
@@ -204,22 +212,71 @@ def forecast(session: str, prompt_at: float) -> int:
     try:
         from . import cli
         from .forecast import answer, parse
+        from .pipeline import recent_tasks
 
         predictor = cli.request_predictor(None)
         pairs = cli.effort_pairs(predictor, cli.forecast_models(predictor), None)
-        # A person typed the prompt in Claude Code, after the conversation so far.
-        context = conversation_before(_read(state_path).get("transcript"), prompt, prompt_at)
-        task = {"prompt": prompt, "origin": "person", "agent": "claude-code", "context": context}
+        state = _read(state_path)
+        transcript = state.get("transcript")
+        # As in training, the size at the first call: the conversation so far plus the new prompt. A new
+        # conversation gets 0, and the forecast fills in a new conversation's usual size.
+        size = conversation_size(transcript, prompt_at)
+        # A person typed the prompt in Claude Code, after the conversation so far, in this project.
+        task = {
+            "prompt": prompt,
+            "origin": "person",
+            "agent": "claude-code",
+            "context": conversation_before(transcript, prompt, prompt_at),
+            "session": session,
+            "conversation_tokens": size + len(prompt) // 4 if size else 0,
+        }
+        if isinstance(state.get("cwd"), str) and state["cwd"]:
+            task["project"] = Path(state["cwd"]).name
         tasks = [
             {"id": f"t{number}", **task, "models": [model], **({"effort": effort} if effort else {})}
             for number, (model, effort) in enumerate(pairs)
         ]
         parsed, _, _ = parse({"version": 1, "tasks": tasks})
-        found.update(predictor=predictor.name, forecasts=answer(predictor, parsed)["forecasts"])
+        # The project's tasks since the last refresh tell the most about this one. They're read, not saved.
+        # They only add detail, so a forecast still comes when they can't be read.
+        recent = []
+        if isinstance(transcript, str):
+            try:
+                recent = recent_tasks(predictor, transcript)
+            except Exception:
+                recent = []
+        found.update(predictor=predictor.name, forecasts=answer(predictor, parsed, recent=recent)["forecasts"])
     except Exception as error:
         found["error"] = (getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
     _write(_forecast_path(session, prompt_at), found)
     return 0
+
+
+def conversation_size(transcript: object, sent_at: float) -> int:
+    """How big the conversation was when a prompt was sent, in tokens: all the last reply read and wrote.
+
+    Training reads the size from a task's first call, which also holds the new prompt. A prompt is small
+    next to a conversation, so the two agree closely. 0 for a new conversation.
+    """
+    from .archives import _claude_call, _lines, _timestamp
+
+    if not isinstance(transcript, str) or not transcript:
+        return 0
+    size = 0
+    try:
+        for line in _lines(Path(transcript)):
+            moment = _timestamp(line.get("timestamp"))
+            if moment is not None and moment >= sent_at:
+                break
+            if line.get("type") != "assistant" or line.get("isSidechain"):
+                continue
+            found = _claude_call(line)
+            if found:
+                call = found[1]
+                size = call.new_input + call.cache_write_5m + call.cache_write_1h + call.cache_read + call.output
+    except OSError:
+        return 0
+    return size
 
 
 def conversation_before(transcript: object, prompt: str, sent_at: float) -> str:

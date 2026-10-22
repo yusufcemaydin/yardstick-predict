@@ -18,11 +18,14 @@ and a reason says why. Within version 1, fields may be added but are never renam
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from . import embeddings, features, pipeline, prices
+from .archives import Task
+from .history import Past
 from .store import Predictor
 
 FORMAT_VERSION = 1
@@ -57,6 +60,10 @@ class TaskRequest:
     agent: str | None = None
     origin: str = "program"
     project: str = ""
+    session: str = ""
+    """The conversation the task is in, as the agent's records name it, for what came before it."""
+    conversation_tokens: int = 0
+    """How big the conversation is so far, in tokens. 0 when unknown or new."""
     extra: dict = field(default_factory=dict)
 
 
@@ -94,11 +101,14 @@ def parse(data: object) -> tuple[list[TaskRequest], bool, str | None]:
             raise bad(f'Task {task_id!r} needs "models": a list of model names.')
         if len(models) > MAX_MODELS:
             raise bad(f"Task {task_id!r} lists more than {MAX_MODELS} models.")
-        for name in ("context", "effort", "agent", "origin", "project"):
+        for name in ("context", "effort", "agent", "origin", "project", "session"):
             if task.get(name) is not None and not isinstance(task.get(name), str):
                 raise bad(f'In task {task_id!r}, "{name}" must be a string.')
         if task.get("origin") not in (None, "program", "person"):
             raise bad(f'In task {task_id!r}, "origin" must be "program" or "person".')
+        size = task.get("conversation_tokens")
+        if size is not None and (not isinstance(size, int) or isinstance(size, bool) or size < 0):
+            raise bad(f'In task {task_id!r}, "conversation_tokens" must be a whole number, 0 or more.')
         skills = task.get("skills") or []
         if not isinstance(skills, list) or not all(isinstance(s, str) for s in skills):
             raise bad(f'In task {task_id!r}, "skills" must be a list of skill names.')
@@ -116,6 +126,8 @@ def parse(data: object) -> tuple[list[TaskRequest], bool, str | None]:
                 agent=task.get("agent"),
                 origin=task.get("origin") or "program",
                 project=task.get("project") or "",
+                session=task.get("session") or "",
+                conversation_tokens=size or 0,
                 extra=extra,
             )
         )
@@ -128,7 +140,7 @@ def parse(data: object) -> tuple[list[TaskRequest], bool, str | None]:
     return found, distribution, predictor
 
 
-def _info(task: TaskRequest, model: str, defaults: dict) -> features.TaskInfo:
+def _info(task: TaskRequest, model: str, defaults: dict, skills: list[str], llm: dict) -> features.TaskInfo:
     known = defaults.get(model, {})
     return features.TaskInfo(
         prompt=task.prompt,
@@ -137,10 +149,22 @@ def _info(task: TaskRequest, model: str, defaults: dict) -> features.TaskInfo:
         agent=task.agent or known.get("agent", ""),
         origin=task.origin,
         context=task.context,
-        skills=task.skills,
+        skills=skills,
         project=task.project,
         extra=task.extra,
+        llm=llm,
     )
+
+
+def _known_skills(task: TaskRequest, past: Past, config: dict, now: float) -> list[str]:
+    """The skills known before the task starts: the request's own, and those the predictor's options add."""
+    chosen = features.options(config, "skills")
+    found = set(task.skills)
+    if "named" in chosen:
+        found.update(features.named_skills(task.prompt))
+    if "earlier" in chosen:
+        found.update(past.earlier_skills(task.session, now))
+    return sorted(found)
 
 
 def _usable_texts(model, chosen: list[str]) -> list[str]:
@@ -149,10 +173,10 @@ def _usable_texts(model, chosen: list[str]) -> list[str]:
     With fewer, the model sees no similar tasks for it, so embedding it would cost tokens for nothing.
     A model type of your own gets every text feature, since only it knows what it uses.
     """
-    from .model import MIN_NEIGHBORS, Model
+    from .model import MIN_NEIGHBORS, Choice, Model
 
     names = [name for name in chosen if features.is_text(name)]
-    if not isinstance(model, Model):
+    if not isinstance(model, (Model, Choice)):
         return names
     return [name for name in names if name in model.pools and len(model.pools[name][0]) >= MIN_NEIGHBORS]
 
@@ -183,20 +207,37 @@ def _embed(predictor: Predictor, items: list[tuple[int, str, str]]) -> dict[str,
     return vectors
 
 
-def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = False) -> dict:
-    """Forecast every task on every model it lists."""
-    from .model import Features
+def answer(
+    predictor: Predictor, tasks: list[TaskRequest], distribution: bool = False, recent: list[Task] | None = None
+) -> dict:
+    """Forecast every task on every model it lists.
+
+    What came before each task, in its project and its conversation, comes from the predictor's tasks plus
+    `recent`: tasks read from the records just now, newer than the last refresh.
+    """
+    from .model import Features, OutdatedModel
 
     if not pipeline.model_ready(predictor):
         raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
-    model = pipeline.load_model(predictor)
+    try:
+        model = pipeline.load_model(predictor)
+    except OutdatedModel as error:
+        raise RequestError("not_trained", str(error)) from None
     chosen = pipeline.chosen_features(predictor)
     defaults = model.meta.get("defaults", {})
     pairs = [(task, name, *model.served(name)) for task in tasks for name in task.models]
+    now = time.time()
+    newer = {t.id: t for t in recent or []}
+    past = Past([t for t in predictor.tasks() if t.id not in newer] + list(newer.values()))
+    labels = _llm_labels(predictor, tasks, chosen) if any(served for _, _, served, _ in pairs) else {}
     # A row for each model to forecast. As in training, its features see its model, effort level and agent.
     # A task with no model to forecast has no row, so its texts aren't sent to Voyage. Neither are texts
     # the model can't use.
-    infos = [_info(task, name, defaults) for task, name, served, _ in pairs if served]
+    served_pairs = [(task, name) for task, name, served, _ in pairs if served]
+    infos = [
+        _info(task, name, defaults, _known_skills(task, past, predictor.config, now), labels.get(task.id, {}))
+        for task, name in served_pairs
+    ]
     usable = _usable_texts(model, chosen)
     items = [
         (row, name, text)
@@ -207,7 +248,10 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
     vectors = _embed(predictor, items)
     table = pipeline.benchmark_table(predictor)
     rows = []
-    for row, info in enumerate(infos):
+    for row, ((task, _), info) in enumerate(zip(served_pairs, infos)):
+        before = past.numbers(
+            task.project, task.session, now, task.origin, task.conversation_tokens, info.agent, task.prompt
+        )
         rows.append(
             Features(
                 model=info.model,
@@ -216,7 +260,8 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
                 origin=info.origin,
                 prompt_chars=len(info.prompt),
                 vectors={field: found[row] for field, found in vectors.items() if row in found},
-                numbers=features.numbers(chosen, info, table),
+                numbers={**features.numbers(chosen, info, table), **before},
+                started_at=now,
             )
         )
     results = iter(model.forecast(rows))
@@ -253,6 +298,15 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
         "embedding_model": predictor.embedding_model,
         "forecasts": forecasts,
     }
+
+
+def _llm_labels(predictor: Predictor, tasks: list[TaskRequest], chosen: list[str]) -> dict[str, dict]:
+    """What LLM analysis says about each task, when the predictor uses it. Nothing when it can't be reached."""
+    if "llm" not in chosen:
+        return {}
+    from . import llm
+
+    return llm.analyze_requests(predictor, tasks)
 
 
 def _number(value) -> float | None:

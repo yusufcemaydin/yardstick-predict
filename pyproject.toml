@@ -28,6 +28,14 @@ dependencies = [
     "scikit-learn>=1.3; sys_platform == 'darwin'",
 ]
 
+[project.optional-dependencies]
+# Only for LLM analysis paid with an API key: the providers' own official libraries. A subscription uses the
+# Claude Code or Codex command already on your computer and needs neither.
+llm = [
+    "anthropic>=1.12,<2",
+    "openai>=3.26,<4",
+]
+
 [project.urls]
 Homepage = "https://github.com/yusufcemaydin/yardstick-predict"
 Issues = "https://github.com/yusufcemaydin/yardstick-predict/issues"

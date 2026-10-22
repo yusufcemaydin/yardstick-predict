@@ -164,7 +164,8 @@ def test_your_own_features_train_and_forecast_through_a_plugin(tmp_path, capsys,
     assert predictor.config["features"] == ["prompt", "words", "summary"] and predictor.config["plugins"] == [plugin]
     assert len(predictor.embedded("summary")) == 300
     meta = json.loads((predictor.model_dir / "model.json").read_text())
-    assert meta["numbers"] == ["words"] and meta["text_fields"] == ["prompt", "summary"]
+    assert "words" in meta["numbers"] and "prompt_lines" in meta["numbers"]  # with the ones always used
+    assert meta["text_fields"] == ["prompt", "summary"]
 
     request = {
         "version": 1,

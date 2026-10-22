@@ -75,7 +75,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Skills the agent will use, by name. A predictor with the skills feature embeds their descriptions."
+            "description": "Skills known before the task starts, by name. A predictor with the skills feature embeds their descriptions, with the skills the prompt names and those used earlier in the conversation."
           },
           "extra": {
             "type": "object",
@@ -83,7 +83,16 @@
           },
           "project": {
             "type": "string",
-            "description": "The project's folder name. Features you add can use it."
+            "description": "The project's folder name. The forecast uses the project's recent tasks from your records, and features you add can use it."
+          },
+          "session": {
+            "type": "string",
+            "description": "The conversation the task is in, by its id in the agent's records. The forecast uses what its earlier tasks took."
+          },
+          "conversation_tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How big the conversation is so far, in tokens. 0 or left out for a new one."
           }
         }
       }

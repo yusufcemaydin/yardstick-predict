@@ -125,6 +125,7 @@ class Predictor:
                 "CREATE TABLE IF NOT EXISTS embeddings (task_id, field, vector, PRIMARY KEY (task_id, field))"
             )
             self._db.execute("CREATE TABLE IF NOT EXISTS files (path PRIMARY KEY, size, mtime)")
+            self._db.execute("CREATE TABLE IF NOT EXISTS llm_labels (task_id PRIMARY KEY, labels)")
         return self._db
 
     def close(self) -> None:
@@ -207,3 +208,27 @@ class Predictor:
     def get_embeddings(self, field: str) -> dict[str, np.ndarray]:
         rows = self.db.execute("SELECT task_id, vector FROM embeddings WHERE field = ?", (field,))
         return {task_id: np.frombuffer(blob, dtype=np.float32) for task_id, blob in rows}
+
+    def forget_embeddings(self, field: str) -> None:
+        """Drop every embedding of one feature, such as one whose text changed. The next refresh embeds it again."""
+        self.db.execute("DELETE FROM embeddings WHERE field = ?", (field,))
+        self.db.commit()
+
+    # What LLM analysis said about each task -------------------------------------------------------------
+
+    def llm_labels(self) -> dict[str, dict]:
+        found = {}
+        for task_id, text in self.db.execute("SELECT task_id, labels FROM llm_labels"):
+            try:
+                labels = json.loads(text)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(labels, dict):
+                found[task_id] = labels
+        return found
+
+    def put_llm_labels(self, labels: dict[str, dict]) -> None:
+        self.db.executemany(
+            "INSERT OR REPLACE INTO llm_labels VALUES (?, ?)", [(i, json.dumps(found)) for i, found in labels.items()]
+        )
+        self.db.commit()

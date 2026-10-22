@@ -1,12 +1,14 @@
 """Features: what the model knows about a task before it runs.
 
-The prompt is always used. These can be added:
+Always used, at no cost: the prompt's meaning and layout, the AI model, the effort level, the agent, who
+started the task, its similar past tasks, the project's recent tasks and the conversation so far. These
+can be added:
 
-- context: the conversation before the prompt, embedded.
-- skills: the skills the agent used, embedded by their descriptions.
+- context: the end of the conversation before the prompt, embedded.
+- skills: the skills known before the task starts, embedded by their descriptions: those named in the
+  prompt, and those used earlier in the conversation.
 - benchmarks: public facts about each AI model, such as its prices and context size.
-
-Every task also brings its AI model, thinking level, agent, who started it and its prompt's length.
+- llm: an AI model reads each task before it starts and describes the work.
 
 Developers can add their own features with register_feature(). A text feature is embedded like the
 prompt. A number feature goes to the model as it is.
@@ -14,6 +16,7 @@ prompt. A number feature goes to the model as it is.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import textwrap
@@ -28,17 +31,25 @@ from .archives import TEXT_CHARS, Task
 REQUIRED = "prompt"
 BUILT_IN = {
     "context": "the end of the conversation before the prompt, embedded",
-    "skills": "the skills the agent used, embedded by their descriptions",
+    "skills": "the skills named in the prompt or used earlier in the conversation, embedded by their descriptions",
     "benchmarks": "public facts about each AI model: prices, context size, longest answer and release date",
+    "llm": "an AI model reads each task before it starts and describes the work",
 }
 DEFAULT = ("prompt", "context")
-TEXT = {"prompt", "context", "skills"}
+TEXT = {"prompt", "context", "skills", "llm"}
 CONTEXT_CHARS = 1_500
 """How much of the conversation, from its end, the context feature embeds."""
 SKILLS_CHARS = 4_000
+LEVELS = {"minimal": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5, "ultra": 5}
+"""Effort levels in order. As one scale, a level with few tasks can learn from the levels next to it."""
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _CUSTOM: dict[str, tuple[str, Callable[[TaskInfo], object]]] = {}
+_LIST_ITEM = re.compile(r"(?m)^[ \t]*(?:[-*•]|\d+[.)])[ \t]")
+_FILE_NAME = re.compile(
+    r"[\w./-]+\.(?:py|ts|tsx|js|jsx|mjs|md|json|go|rs|swift|kt|java|css|scss|html|sql|ya?ml|toml|sh|rb|php|c|h|cpp)\b"
+)
+_LINK = re.compile(r"https?://")
 
 
 @dataclass
@@ -52,11 +63,15 @@ class TaskInfo:
     origin: str = "program"
     context: str = ""
     skills: list[str] = field(default_factory=list)
+    """The skills known before the task starts. The ones the agent goes on to use aren't known yet."""
     project: str = ""
     extra: dict = field(default_factory=dict)
+    llm: dict = field(default_factory=dict)
+    """What an AI model said about the task before it ran, when the predictor uses LLM analysis."""
 
     @classmethod
-    def of(cls, task: Task) -> TaskInfo:
+    def of(cls, task: Task, skills: list[str] | None = None, llm: dict | None = None) -> TaskInfo:
+        """A recorded task. `skills` are the ones known before it started; by default, those its prompt names."""
         return cls(
             prompt=task.prompt,
             model=task.model,
@@ -64,9 +79,91 @@ class TaskInfo:
             agent=task.agent,
             origin=task.origin,
             context=task.context,
-            skills=[s for s in task.skills.split("\n") if s],
+            skills=named_skills(task.prompt) if skills is None else skills,
             project=task.project,
+            llm=llm or {},
         )
+
+
+@dataclass(frozen=True)
+class Option:
+    key: str
+    says: str
+
+
+@dataclass(frozen=True)
+class Group:
+    """One feature as the setup shows it, with the options under it."""
+
+    key: str
+    title: str
+    says: str
+    options: tuple[Option, ...] = ()
+    always: bool = False
+
+
+MENU = (
+    Group(
+        "task",
+        "Task",
+        "what the prompt means and how it's laid out, the AI model, the effort level and who started it",
+        always=True,
+    ),
+    Group(
+        "similar",
+        "Similar past tasks",
+        "the closest matches, how much they varied, and a first guess from the prompt's meaning",
+        always=True,
+    ),
+    Group("history", "History", "the project's recent tasks, the conversation so far and its size", always=True),
+    Group(
+        "context",
+        "Conversation",
+        "the end of the conversation before each prompt",
+        (Option("meaning", "its meaning, read by Voyage"),),
+    ),
+    Group(
+        "skills",
+        "Skills",
+        "the skills known before a task starts, read by Voyage with their descriptions",
+        (Option("named", "skills named in the prompt"), Option("earlier", "skills used earlier in the conversation")),
+    ),
+    Group(
+        "benchmarks",
+        "Model facts",
+        "public facts about each AI model",
+        (Option("facts", "prices, context size, longest answer and release date"),),
+    ),
+    Group(
+        "llm",
+        "LLM analysis",
+        "an AI model reads each task before it starts and describes the work",
+        (
+            Option("kind", "the kind of task and its expected size"),
+            Option("description", "a short description of the work, read by Voyage"),
+        ),
+    ),
+)
+"""The features as the setup lists them. The first three are always used."""
+
+
+def options(config: dict, name: str) -> list[str]:
+    """The options a predictor uses for one feature. A feature saved before it had options uses them all."""
+    group = next((g for g in MENU if g.key == name), None)
+    every = [o.key for o in group.options] if group else []
+    chosen = (config.get("options") or {}).get(name)
+    return [o for o in every if o in chosen] if isinstance(chosen, list) else every
+
+
+def named_skills(prompt: str) -> list[str]:
+    """The installed skills a prompt names as a slash command, like /review. A path like /src/app isn't one."""
+    known = skill_descriptions()
+    names = set(_COMMAND.findall(prompt)) | set(_SLASH.findall(prompt))
+    return sorted(name for name in names if name in known or name.split(":")[-1] in known)
+
+
+_COMMAND = re.compile(r"<command-name>/?([\w:.-]+)</command-name>")
+_SLASH = re.compile(r"(?:^|(?<=[\s(]))/([a-z][\w:-]*)(?![\w/-])", re.MULTILINE)
 
 
 def register_feature(name: str, kind: str, function: Callable[[TaskInfo], object]) -> None:
@@ -107,21 +204,49 @@ def text(name: str, info: TaskInfo) -> str:
         return info.context[-CONTEXT_CHARS:]
     if name == "skills":
         return skills_text(info.skills)
+    if name == "llm":
+        return str(info.llm.get("description") or "")[:TEXT_CHARS]
     value = _CUSTOM[name][1](info)
     return str(value)[:TEXT_CHARS] if value else ""
 
 
 def numbers(chosen: list[str], info: TaskInfo, table: dict | None) -> dict[str, float]:
-    """The number features of a task."""
-    found: dict[str, float] = {}
+    """The number features of a task: the ones always used, then the chosen ones."""
+    found = shape(info.prompt)
+    if info.effort in LEVELS:
+        found["effort_level"] = float(LEVELS[info.effort])
     for name in chosen:
         if name == "benchmarks":
             found.update(benchmarks.facts(table or {}, info.model))
+        elif name == "llm":
+            from . import llm
+
+            found.update(llm.numbers(info.llm))
         elif name in _CUSTOM and _CUSTOM[name][0] == "number":
             value = _CUSTOM[name][1](info)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 found[name] = float(value)
     return found
+
+
+def _file_names(prompt: str) -> int:
+    """How many words of the prompt are or hold a file name. Each word is cut short, so a long run of text
+    without spaces stays quick to search."""
+    return sum(1 for word in prompt.split() if _FILE_NAME.search(word[:300]))
+
+
+def shape(prompt: str) -> dict[str, float]:
+    """How the prompt is laid out: its list items, file names, links and lines, and whether it ends in a question.
+
+    A prompt that lists ten steps or names twelve files usually means more work than one that doesn't.
+    """
+    return {
+        "prompt_list_items": math.log1p(len(_LIST_ITEM.findall(prompt))),
+        "prompt_file_names": math.log1p(_file_names(prompt)),
+        "prompt_links": math.log1p(len(_LINK.findall(prompt))),
+        "prompt_lines": math.log1p(prompt.count("\n") + 1),
+        "prompt_asks": float(prompt.rstrip().endswith("?")),
+    }
 
 
 # Skills -------------------------------------------------------------------------------------------------

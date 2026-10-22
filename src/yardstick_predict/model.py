@@ -13,9 +13,17 @@ the curve's center and its width, by maximum likelihood: the curves under which 
 is most likely.
 
 The features are the AI model, the thinking level, the agent, who started the task and the prompt's
-length, plus the chosen features. Each embedded feature, such as the prompt, becomes what the most
-similar past tasks really took. That works better than feeding the trees the embedding itself, which
-is many weak numbers the trees overfit.
+length, plus the numbers the pipeline adds, such as the prompt's shape and the project's recent tasks,
+and the chosen features. Each embedded feature, such as the prompt, becomes what the most similar past
+tasks really took. For the prompt that's the closest task, the closest ten and the closest hundred, how
+much they varied, and an average where closer, newer tasks count more. That works better than feeding
+the trees the embedding itself, which is many weak numbers the trees overfit. The whole embedding still
+gets one say: a weighted sum of all its numbers, with the weights kept small, makes a first guess of
+each outcome, and the trees get that guess.
+
+The conversation a task is in tells a lot about a person's sessions, and can mislead about a program's
+one-off runs. So training makes two versions, with and without the conversation, tests both, and each
+AI model's forecasts use the version that did better.
 
 The trees start from the simple rule: each AI model's own curve, the spread of its past tasks. A model
 with few tasks has its curve pulled toward the curve of all models. Trees are added only while they beat
@@ -37,7 +45,7 @@ import tempfile
 import time
 import warnings
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -80,6 +88,36 @@ NEIGHBORS = 100
 MIN_NEIGHBORS = 10
 NEIGHBOR_POOL = 20_000
 """The newest tasks a forecast compares its embedded features with."""
+CLOSE = 10
+"""How many of the closest past tasks the close-match features average over."""
+CLOSE_POWER = 4
+"""In the weighted average of similar tasks, each counts by its closeness to this power, times how recent it is."""
+RICH = ("prompt",)
+"""The embedded features whose similar tasks get every summary. The others get the five averages."""
+RICH_COLUMNS = 22
+JOINT = "prompt_and_context"
+"""The prompt and its context side by side, to find past tasks similar in both."""
+CONVERSATION = (
+    "session_tasks_before",
+    "previous_seconds",
+    "previous_tokens",
+    "previous_usd",
+    "previous_direct",
+    "minutes_since_previous",
+    "conversation_tokens",
+    "conversation_tokens_program",
+    "prompt_context_closeness",
+)
+"""Number features about the conversation a task is in. Each AI model uses them only if they did better on the test."""
+GUESSES = ("guess_seconds", "guess_tokens", "guess_usd", "guess_direct")
+GUESS_ALPHAS = (0.3, 3.0, 30.0, 300.0)
+"""How hard the first guess's weights are pulled toward 0. Training picks the one that guesses best."""
+GUESS_BLOCKS = 10
+"""Training's first guesses are made stretch by stretch of time, each from the ones before it."""
+FORMAT = 3
+"""The saved model's format. A model saved in an older format has to be trained again."""
+VERSIONS = {True: "conversation", False: "plain"}
+"""The two versions training makes: with the conversation's inputs, and without them."""
 MIN_TASKS = 30
 """Fewer finished tasks than this, and there is nothing to train on."""
 MIN_PART_TASKS = 30
@@ -114,6 +152,10 @@ TREES = {
 
 class NotEnoughData(Exception):
     pass
+
+
+class OutdatedModel(Exception):
+    """The saved model was made by an older version, which read different features. It has to be trained again."""
 
 
 def settings_for(given: dict | None) -> dict:
@@ -167,6 +209,8 @@ class Features:
     """One embedding for each embedded feature the task has, such as its prompt."""
     numbers: dict[str, float] = field(default_factory=dict)
     """The task's number features, such as its model's benchmarks."""
+    started_at: float | None = None
+    """When the task started, for how recent each similar past task is. A forecast leaves it out: it means now."""
 
 
 def usable(tasks: list[Task]) -> list[Task]:
@@ -427,16 +471,27 @@ def similar_tasks(
     earlier_only: bool,
     started: np.ndarray | None = None,
     finished: np.ndarray | None = None,
+    rich: bool = False,
+    pool_started: np.ndarray | None = None,
+    half_life_days: float | None = None,
 ):
-    """For each query, the average of what the most similar past tasks took, and how similar they were.
+    """For each query, what the most similar past tasks took, and how similar they were.
+
+    The first five columns are averages over the NEIGHBORS most similar: log seconds, log tokens, log
+    dollars, the share that answered directly, and their closeness. With `rich`, RICH_COLUMNS more follow:
+    the closest task's outcomes and closeness, the same averages over the CLOSE closest, how much the
+    outcomes varied, the typical outcome of direct answers and of work kept apart, and an average where
+    closer and newer tasks count more.
 
     With `earlier_only`, the queries are the pool itself in time order. Each one only looks at the
     NEIGHBOR_POOL tasks just before it, the same reach a forecast has, so training never peeks at the future.
     Given each task's start and finish times, it also skips tasks that hadn't finished when the query started.
+    Otherwise `started` holds each query's start and `pool_started` each past task's, for how recent they are.
     """
-    out = np.full((len(queries), 5), np.nan, dtype=np.float64)
+    out = np.full((len(queries), 5 + (RICH_COLUMNS if rich else 0)), np.nan, dtype=np.float64)
     if len(pool) == 0:
         return out
+    pool_started = started if earlier_only else pool_started
     empty = ~np.any(pool, axis=1)
     for start in range(0, len(queries), 512):
         stop = min(start + 512, len(queries))
@@ -458,13 +513,154 @@ def similar_tasks(
         picked[~valid] = np.nan
         with np.errstate(invalid="ignore"), warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            means = np.nanmean(picked, axis=1)
-            closeness = np.nanmean(np.where(valid, similarity, np.nan), axis=1)
-        chunk = np.column_stack([means, closeness])
+            columns = [np.nanmean(picked, axis=1), np.nanmean(np.where(valid, similarity, np.nan), axis=1)]
+            if rich:
+                age = None
+                if started is not None and pool_started is not None:
+                    age = (started[start:stop, None] - pool_started[low:high][top]) / 86400
+                columns += _close_matches(picked, similarity, valid, age, half_life_days)
+        chunk = np.column_stack([c.reshape(stop - start, -1) for c in columns])
         chunk[valid.sum(axis=1) < MIN_NEIGHBORS] = np.nan
         out[start:stop] = chunk
     out[~has] = np.nan
     return out
+
+
+def _close_matches(picked, similarity, valid, age_days, half_life_days) -> list[np.ndarray]:
+    """The rich summaries of each query's similar tasks, as similar_tasks describes them."""
+    order = np.argsort(-np.where(valid, similarity, -np.inf), axis=1)
+    picked = np.take_along_axis(picked, order[:, :, None], axis=1)
+    similarity, valid = np.take_along_axis(similarity, order, axis=1), np.take_along_axis(valid, order, axis=1)
+    closeness = np.where(valid, similarity, np.nan)
+    outcome, direct = picked[:, :, :3], picked[:, :, 3]
+    weight = np.where(valid, np.clip(similarity, 0.0, None) ** CLOSE_POWER, 0.0)
+    if age_days is not None and half_life_days:
+        weight = weight * 0.5 ** (np.maximum(np.take_along_axis(age_days, order, axis=1), 0.0) / half_life_days)
+    weight = weight[:, :, None] * ~np.isnan(outcome)
+    total = weight.sum(axis=1)
+    weighted = np.nansum(np.nan_to_num(outcome) * weight, axis=1) / np.where(total > 0, total, np.nan)
+    return [
+        picked[:, 0, :],
+        closeness[:, 0],
+        np.nanmean(picked[:, :CLOSE, :], axis=1),
+        np.nanmean(closeness[:, :CLOSE], axis=1),
+        np.nanstd(outcome, axis=1),
+        np.nanmean(np.where((direct == 0.0)[:, :, None], outcome, np.nan), axis=1),
+        np.nanmean(np.where((direct == 1.0)[:, :, None], outcome, np.nan), axis=1),
+        weighted,
+    ]
+
+
+def _length_one(vector) -> np.ndarray:
+    vector = np.asarray(vector, dtype=np.float32)
+    return vector / max(float(np.linalg.norm(vector)), 1e-9)
+
+
+def _with_conversation(rows: list[Features], use: bool, joint: bool) -> list[Features]:
+    """The rows as one version of the model sees them.
+
+    With the conversation, a row with both a prompt and a context also gets how close their meanings are,
+    and with `joint`, the two side by side as one more embedding to find similar past tasks by. Without the
+    conversation, its numbers are left out.
+    """
+    found = []
+    for r in rows:
+        numbers, vectors = dict(r.numbers), dict(r.vectors)
+        if use:
+            prompt, context = r.vectors.get("prompt"), r.vectors.get("context")
+            if prompt is not None and context is not None:
+                numbers["prompt_context_closeness"] = float(_length_one(prompt) @ _length_one(context))
+            if joint and prompt is not None:
+                other = _length_one(context) if context is not None else np.zeros(len(prompt), dtype=np.float32)
+                vectors[JOINT] = np.concatenate([_length_one(prompt), other])
+        else:
+            for name in CONVERSATION:
+                numbers.pop(name, None)
+        found.append(replace(r, numbers=numbers, vectors=vectors))
+    return found
+
+
+# The first guess: a weighted sum of the whole embedding --------------------------------------------------
+
+
+def _guess_inputs(rows: list[Features], fields: list[str], sizes: list[int]) -> np.ndarray:
+    """Each row's embeddings side by side at length 1, each followed by a 1 when the row has it and a 0 when not."""
+    parts = []
+    for name, size in zip(fields, sizes):
+        vectors, has = _unit([r.vectors.get(name) for r in rows], size)
+        parts += [vectors, has[:, None].astype(np.float32)]
+    return np.hstack(parts).astype(float)
+
+
+class _Ridge:
+    """Least squares with the weights pulled toward 0, solved once for any pull strength."""
+
+    def __init__(self, x: np.ndarray) -> None:
+        self.center = x.mean(axis=0)
+        self.x = x - self.center
+        # The smaller of the two square matrices is the quicker to split up: with more numbers per row than
+        # rows, the rows' own one.
+        self.by_column = self.x.shape[1] <= self.x.shape[0]
+        gram = self.x.T @ self.x if self.by_column else self.x @ self.x.T
+        self.values, self.vectors = np.linalg.eigh(gram)
+
+    def fit(self, y: np.ndarray, alpha: float) -> tuple[np.ndarray, float]:
+        """The weights and the constant: a row's guess is its numbers times the weights, plus the constant."""
+        mean = float(y.mean())
+        if self.by_column:
+            weights = self.vectors @ ((self.vectors.T @ (self.x.T @ (y - mean))) / (self.values + alpha))
+        else:
+            weights = self.x.T @ (self.vectors @ ((self.vectors.T @ (y - mean)) / (self.values + alpha)))
+        return weights, mean - float(self.center @ weights)
+
+
+def _fit_guess(
+    inputs: np.ndarray, results: np.ndarray, started: np.ndarray | None = None, finished: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A first guess of each outcome from the whole embedding.
+
+    Training splits the tasks, oldest first, into GUESS_BLOCKS stretches of time. Each stretch's guesses come
+    from weights fit only on tasks that had finished before it began, as a forecast's guess knows only earlier
+    tasks. The first stretch has nothing before it, so it gets no guess. Returns those guesses, and the weights
+    and constants fit on every task, for forecasts. An outcome with too few known values gets no guess.
+    """
+    n, outputs = len(inputs), results.shape[1]
+    started = np.arange(n, dtype=float) if started is None else started
+    finished = started if finished is None else finished
+    edges = np.linspace(0, n, GUESS_BLOCKS + 1).astype(int)
+    guesses = np.full((n, outputs), np.nan)
+    weights, constants = np.zeros((inputs.shape[1], outputs)), np.full(outputs, np.nan)
+    solved: dict[bytes, _Ridge] = {}
+
+    def solver(rows: np.ndarray) -> _Ridge:
+        key = rows.tobytes()
+        if key not in solved:
+            solved[key] = _Ridge(inputs[rows])
+        return solved[key]
+
+    for c in range(outputs):
+        y = results[:, c].astype(float)
+        known = ~np.isnan(y)
+        if known.sum() < MIN_TASKS:
+            continue
+        stretches = []
+        for low, high in zip(edges[1:-1], edges[2:]):
+            earlier = known & (np.arange(n) < low) & (finished <= started[low])
+            if high > low and earlier.sum() >= MIN_TASKS:
+                stretches.append((earlier, slice(low, high)))
+        best = None
+        for alpha in GUESS_ALPHAS:
+            guess = np.full(n, np.nan)
+            for earlier, stretch in stretches:
+                w, b = solver(earlier).fit(y[earlier], alpha)
+                guess[stretch] = inputs[stretch] @ w + b
+            scored = known & ~np.isnan(guess)
+            error = float(np.mean((guess[scored] - y[scored]) ** 2)) if scored.any() else math.inf
+            if best is None or error < best[0]:
+                best = (error, alpha, guess)
+        guesses[:, c] = best[2]
+        weights[:, c], constants[c] = solver(known).fit(y[known], best[1])
+    return guesses, weights, constants
 
 
 # Starting points: the simple rule, pooled -------------------------------------------------------------
@@ -505,11 +701,20 @@ def _pooled_values(models: list[str], values: np.ndarray, weight: np.ndarray, lo
 
 
 class Model:
-    def __init__(self, meta: dict, boosters: dict[str, xgb.Booster], pools: dict | None = None) -> None:
+    def __init__(
+        self,
+        meta: dict,
+        boosters: dict[str, xgb.Booster],
+        pools: dict | None = None,
+        guess: tuple[np.ndarray, np.ndarray] | None = None,
+    ) -> None:
         self.meta = meta
         self.boosters = boosters
-        self.pools: dict[str, tuple[np.ndarray, np.ndarray]] = pools or {}
-        """For each embedded feature: the newest past tasks' embeddings, at length 1, and what they took."""
+        self.pools: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = pools or {}
+        """For each embedded feature: the newest past tasks' embeddings at length 1, what they took and
+        when they started."""
+        self.guess = guess
+        """The first guess's weights, one column per outcome, and its constants."""
 
     @property
     def settings(self) -> dict:
@@ -521,7 +726,15 @@ class Model:
 
     # Features into numbers
 
-    def matrix(self, rows: list[Features], similar: dict[str, np.ndarray] | None = None) -> np.ndarray:
+    def prepare(self, rows: list[Features]) -> list[Features]:
+        """The rows as this version of the model reads them: with or without the conversation's inputs."""
+        return _with_conversation(rows, self.meta.get("conversation", False), JOINT in self.meta["text_fields"])
+
+    def matrix(
+        self, rows: list[Features], similar: dict[str, np.ndarray] | None = None, guesses: np.ndarray | None = None
+    ) -> np.ndarray:
+        """The rows as numbers, one column per feature. Training passes what it found for each row; a forecast
+        works it out from what the model saved. Rows come from prepare()."""
         categories = self.meta["categories"]
         columns = []
         for name in CATEGORIES:
@@ -531,14 +744,32 @@ class Model:
         for name in self.meta["numbers"]:
             columns.append([r.numbers.get(name, np.nan) for r in rows])
         matrix = np.array(columns, dtype=float).T.reshape(len(rows), len(columns))
+        now = time.time()
+        started = np.array([now if r.started_at is None else r.started_at for r in rows], dtype=float)
         for name in self.meta["text_fields"]:
             if similar is not None:
                 block = similar[name]
             else:
-                pool, results = self.pools[name]
+                pool, results, pool_started = self.pools[name]
                 queries, has = _unit([r.vectors.get(name) for r in rows], pool.shape[1])
-                block = similar_tasks(pool, results, queries, has, earlier_only=False)
+                block = similar_tasks(
+                    pool,
+                    results,
+                    queries,
+                    has,
+                    earlier_only=False,
+                    started=started,
+                    rich=name in self.meta["rich_fields"],
+                    pool_started=pool_started,
+                    half_life_days=self.settings["half_life_days"],
+                )
             matrix = np.hstack([matrix, block])
+        spec = self.meta["guess"]
+        if spec:
+            if guesses is None:
+                weights, constants = self.guess
+                guesses = _guess_inputs(rows, spec["fields"], spec["sizes"]) @ weights + constants
+            matrix = np.hstack([matrix, guesses])
         return matrix
 
     def dmatrix(self, matrix: np.ndarray, margin: np.ndarray, label=None, weight=None) -> xgb.DMatrix:
@@ -573,7 +804,7 @@ class Model:
 
     def curves(self, rows: list[Features]) -> dict:
         """The two-part curve of each row, for every head. Widths include the final correction."""
-        matrix = self.matrix(rows)
+        matrix = self.matrix(self.prepare(rows))
         models = [r.model for r in rows]
         out: dict = {"p_direct": None}
         for target in TARGETS:
@@ -592,7 +823,7 @@ class Model:
 
     def expected_values(self, rows: list[Features]) -> dict[str, np.ndarray | None]:
         """For expected-value heads: each row's expected value, for every head."""
-        matrix = self.matrix(rows)
+        matrix = self.matrix(self.prepare(rows))
         models = [r.model for r in rows]
         out: dict = {}
         for target in TARGETS:
@@ -670,32 +901,104 @@ class Model:
         return verdict["served"], verdict["reason"]
 
     def save(self, folder: Path) -> None:
-        """Write the whole model to a new folder, then swap it in.
+        """Write the whole model to a new folder, then swap it in."""
+        _swap_in(folder, self.write)
 
-        The old model is only moved aside until the new one is in its place, so a failed save keeps it.
-        """
-        folder.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=".model-", dir=folder.parent))
-        old = staging.with_name(staging.name + "-old")
-        try:
-            for name, booster in self.boosters.items():
-                booster.save_model(str(staging / f"{name}.json"))
+    def write(self, folder: Path) -> None:
+        """Write the model's files into an empty folder."""
+        for name, booster in self.boosters.items():
+            booster.save_model(str(folder / f"{name}.json"))
+        (folder / "model.json").write_text(json.dumps(self.meta, indent=1) + "\n")
+        for name, (vectors, results, started) in self.pools.items():
+            np.save(folder / f"similar-{name}-vectors.npy", vectors.astype(np.float32), allow_pickle=False)
+            np.save(folder / f"similar-{name}-results.npy", results.astype(np.float32), allow_pickle=False)
+            np.save(folder / f"similar-{name}-started.npy", started.astype(np.float64), allow_pickle=False)
+        if self.guess is not None:
+            np.save(folder / "guess-weights.npy", self.guess[0].astype(np.float64), allow_pickle=False)
+            np.save(folder / "guess-constants.npy", self.guess[1].astype(np.float64), allow_pickle=False)
+
+
+class Choice:
+    """The two versions of the model, with and without the conversation, and which one each AI model uses.
+
+    It reads like one model: forecast(), served(), save() and a meta dict, as model_types describes.
+    """
+
+    def __init__(self, versions: dict[str, Model], meta: dict) -> None:
+        self.versions = versions
+        self.meta = meta
+
+    @classmethod
+    def made(cls, versions: dict[str, Model], uses: dict[str, str]) -> Choice:
+        first = next(iter(versions.values())).meta
+        keep = ("settings", "categories", "defaults", "report", "served", "trained_at", "tasks")
+        meta = {"format": FORMAT, **{k: first[k] for k in keep if k in first}, "versions": sorted(versions)}
+        return cls(versions, {**meta, "uses": uses})
+
+    @property
+    def pools(self) -> dict:
+        """Every version's similar-task pools. A forecast embeds a text only when some version compares it."""
+        found: dict = {}
+        for version in self.versions.values():
+            found.update(version.pools)
+        return found
+
+    def forecast(self, rows: list[Features]) -> list[dict]:
+        found: list = [None] * len(rows)
+        uses, fallback = self.meta["uses"], next(iter(self.versions))
+        for name, version in self.versions.items():
+            mine = [i for i, r in enumerate(rows) if uses.get(r.model, fallback) == name]
+            for i, result in zip(mine, version.forecast([rows[i] for i in mine])):
+                found[i] = result
+        return found
+
+    def served(self, model: str) -> tuple[bool, str | None]:
+        return next(iter(self.versions.values())).served(model)
+
+    def save(self, folder: Path) -> None:
+        def write(staging: Path) -> None:
             (staging / "model.json").write_text(json.dumps(self.meta, indent=1) + "\n")
-            for name, (vectors, results) in self.pools.items():
-                np.save(staging / f"similar-{name}-vectors.npy", vectors.astype(np.float32), allow_pickle=False)
-                np.save(staging / f"similar-{name}-results.npy", results.astype(np.float32), allow_pickle=False)
-            if folder.exists():
-                folder.rename(old)
-            staging.rename(folder)
-        finally:
-            if old.exists() and not folder.exists():
-                old.rename(folder)  # the new model never arrived, so the old one goes back
-            shutil.rmtree(staging, ignore_errors=True)
-            shutil.rmtree(old, ignore_errors=True)
+            for name, version in self.versions.items():
+                (staging / name).mkdir()
+                version.write(staging / name)
+
+        _swap_in(folder, write)
 
 
-def load(folder: Path) -> Model:
+def _swap_in(folder: Path, write) -> None:
+    """Write a model into a new folder with `write`, then swap it in for the old one.
+
+    The old model is only moved aside until the new one is in its place, so a failed save keeps it.
+    """
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".model-", dir=folder.parent))
+    old = staging.with_name(staging.name + "-old")
+    try:
+        write(staging)
+        if folder.exists():
+            folder.rename(old)
+        staging.rename(folder)
+    finally:
+        if old.exists() and not folder.exists():
+            old.rename(folder)  # the new model never arrived, so the old one goes back
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def load(folder: Path) -> Model | Choice:
     """Load a saved model. Every file is plain JSON or plain numbers, so loading runs no code."""
+    meta = json.loads((folder / "model.json").read_text())
+    if not isinstance(meta.get("format"), int) or meta["format"] < FORMAT:
+        raise OutdatedModel(
+            "This predictor's model was trained by an older version of yardstick-predict. "
+            "Train it again with: yardstick-predict refresh"
+        )
+    if meta.get("versions"):
+        return Choice({name: _load_one(folder / name) for name in meta["versions"]}, meta)
+    return _load_one(folder)
+
+
+def _load_one(folder: Path) -> Model:
     meta = json.loads((folder / "model.json").read_text())
     boosters = {}
     for path in folder.glob("*.json"):
@@ -708,15 +1011,26 @@ def load(folder: Path) -> Model:
         pools[name] = (
             np.load(folder / f"similar-{name}-vectors.npy", allow_pickle=False),
             np.load(folder / f"similar-{name}-results.npy", allow_pickle=False),
+            np.load(folder / f"similar-{name}-started.npy", allow_pickle=False),
         )
-    return Model(meta, boosters, pools)
+    guess = None
+    if meta.get("guess"):
+        guess = (
+            np.load(folder / "guess-weights.npy", allow_pickle=False),
+            np.load(folder / "guess-constants.npy", allow_pickle=False),
+        )
+    return Model(meta, boosters, pools, guess)
 
 
 # Training -----------------------------------------------------------------------------------------------
 
 
-def train(tasks: list[Task], rows: list[Features], settings: dict | None = None) -> Model:
-    """Test on the newest tasks, then train the final model on all of them. `rows` match `tasks` one to one."""
+def train(tasks: list[Task], rows: list[Features], settings: dict | None = None) -> Model | Choice:
+    """Test on the newest tasks, then train the final model on all of them. `rows` match `tasks` one to one.
+
+    Both versions, with and without the conversation, are tested. Each AI model gets the one that did
+    better, so the final model is that version, or a Choice of both when AI models differ.
+    """
     settings = settings_for(settings)
     learnable = {t.id for t in usable(tasks)}
     pairs = sorted(((t, r) for t, r in zip(tasks, rows) if t.id in learnable), key=lambda p: (p[0].started_at, p[0].id))
@@ -732,17 +1046,57 @@ def train(tasks: list[Task], rows: list[Features], settings: dict | None = None)
             f"Training needs at least {MIN_TASKS} tasks with a known value for the "
             f"{' or '.join(settings['heads'])} head. This dataset has {known}."
         )
-    report = test(eligible, eligible_rows, settings)
-    final = fit(eligible, eligible_rows, settings)
-    final.meta.update(
-        report=report,
-        served={
-            m: {"served": r["served"], "reason": r["reason"], "heads": r["heads"]} for m, r in report["models"].items()
-        },
-        trained_at=time.time(),
-        tasks=len(eligible),
-    )
-    return final
+    reports = {use: test(eligible, eligible_rows, {**settings, "conversation": use}) for use in VERSIONS}
+    uses = _choose(reports)
+    report = _combined(reports, uses)
+    served = {
+        m: {"served": r["served"], "reason": r["reason"], "heads": r["heads"]} for m, r in report["models"].items()
+    }
+    finals = {}
+    for use in sorted(set(uses.values()) or {True}, reverse=True):
+        final = fit(eligible, eligible_rows, {**settings, "conversation": use})
+        final.meta.update(report=report, served=served, trained_at=time.time(), tasks=len(eligible))
+        finals[VERSIONS[use]] = final
+    if len(finals) == 1:
+        return next(iter(finals.values()))
+    return Choice.made(finals, {m: VERSIONS[use] for m, use in uses.items()})
+
+
+def _choose(reports: dict[bool, dict]) -> dict[str, bool]:
+    """For each AI model, whether its forecasts use the conversation: the version that did better on the test.
+
+    A version whose forecasts can be given beats one whose can't. Otherwise the scores decide, head by head,
+    and a tie goes to the simpler version, without the conversation.
+    """
+    uses: dict[str, bool] = {}
+    for model in sorted(set(reports[True]["models"]) | set(reports[False]["models"])):
+        with_it, without = reports[True]["models"].get(model), reports[False]["models"].get(model)
+        if with_it is None or without is None:
+            uses[model] = without is None
+            continue
+        if with_it["served"] != without["served"]:
+            uses[model] = with_it["served"]
+            continue
+        heads = [h for h in with_it["heads"] if h in without["heads"]]
+        change = [with_it[h]["score"] / max(without[h]["score"], 1e-9) - 1 for h in heads]
+        uses[model] = bool(change) and float(np.mean(change)) < 0
+    return uses
+
+
+def _combined(reports: dict[bool, dict], uses: dict[str, bool]) -> dict:
+    """The test report of the version each AI model uses, with whether it uses the conversation."""
+    report = dict(reports[True])
+    report["models"] = {
+        model: {**reports[use]["models"][model], "conversation": use}
+        for model, use in uses.items()
+        if model in reports[use]["models"]
+    }
+    # The calibration counts cover every model at once, so they come from the version most test tasks use.
+    tasks = Counter()
+    for model, use in uses.items():
+        tasks[use] += report["models"].get(model, {}).get("tasks_tested", 0)
+    report["pit"] = reports[tasks.most_common(1)[0][0] if tasks else True]["pit"]
+    return report
 
 
 def _defaults(tasks: list[Task]) -> dict:
@@ -770,19 +1124,29 @@ def fit(tasks: list[Task], rows: list[Features], settings: dict) -> Model:
     """Fit every head on the tasks, oldest first.
 
     The newest tasks pick each part's number of rounds and the width correction. Then every part is
-    refit on all the tasks with that number of rounds.
+    refit on all the tasks with that number of rounds. The setting "conversation" picks the version: with
+    the conversation's inputs, the default, or without them.
     """
     settings = settings_for(settings)
+    use_conversation = settings.get("conversation", True) is not False
+    has_context = any(r.vectors.get("context") is not None for r in rows)
+    rows = _with_conversation(rows, use_conversation, joint=use_conversation and has_context)
     text_fields = [name for name in dict.fromkeys(n for r in rows for n in r.vectors) if name]
     numbers = sorted({n for r in rows for n in r.numbers})
+    # The first guess reads every embedding the tasks really have. The joint one only repeats two of them.
+    guess_fields = [name for name in text_fields if name != JOINT]
+    sizes = [len(next(r.vectors[name] for r in rows if r.vectors.get(name) is not None)) for name in guess_fields]
     meta: dict = {
-        "format": 2,
+        "format": FORMAT,
         "settings": settings,
         "categories": {
             name: [v for v, _ in Counter(getattr(t, name) for t in tasks).most_common()] for name in CATEGORIES
         },
         "numbers": numbers,
         "text_fields": text_fields,
+        "rich_fields": [name for name in text_fields if name in RICH],
+        "conversation": use_conversation,
+        "guess": {"fields": guess_fields, "sizes": sizes, "outputs": list(GUESSES)} if guess_fields else None,
         "parts": {},
         "expected": {},
         "width_scale": {},
@@ -797,11 +1161,23 @@ def fit(tasks: list[Task], rows: list[Features], settings: dict) -> Model:
         size = len(next(r.vectors[name] for r in rows if r.vectors.get(name) is not None))
         queries, has = _unit([r.vectors.get(name) for r in rows], size)
         similar[name] = similar_tasks(
-            queries, results, queries, has, earlier_only=True, started=started, finished=finished
+            queries,
+            results,
+            queries,
+            has,
+            earlier_only=True,
+            started=started,
+            finished=finished,
+            rich=name in RICH,
+            half_life_days=settings["half_life_days"],
         )
         newest = np.flatnonzero(has)[-NEIGHBOR_POOL:]
-        model.pools[name] = (queries[newest], results[newest])
-    matrix = model.matrix(rows, similar)
+        model.pools[name] = (queries[newest], results[newest], started[newest])
+    guesses = None
+    if guess_fields:
+        guesses, weights, constants = _fit_guess(_guess_inputs(rows, guess_fields, sizes), results, started, finished)
+        model.guess = (weights, constants)
+    matrix = model.matrix(rows, similar, guesses)
     models = [t.model for t in tasks]
     held = max(int(len(tasks) * settings["validation_share"]), 10)
     fit_rows = np.arange(len(tasks) - held)

@@ -87,7 +87,7 @@ def test_the_status_line_follows_a_task_from_prompt_to_stop(monkeypatch):
 def test_an_older_forecast_never_replaces_a_newer_one(monkeypatch):
     commands = forecasts_by_hand(monkeypatch)
 
-    def answer(predictor, tasks):
+    def answer(predictor, tasks, **kwargs):
         if tasks[0].prompt == "First prompt":
             # While the first forecast runs, a second prompt is sent, and its forecast finishes first.
             send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "Second prompt"})
@@ -107,7 +107,7 @@ def test_each_forecast_reads_its_own_prompt(monkeypatch):
     commands = forecasts_by_hand(monkeypatch)
     asked: list[list[str]] = []
 
-    def answer(predictor, tasks):
+    def answer(predictor, tasks, **kwargs):
         asked[-1].append(tasks[0].prompt)
         seconds = 60.0 if tasks[0].prompt == "First prompt" else 120.0
         return {"forecasts": [{"model": "m", "seconds": seconds, "tokens": 9, "usd": None}]}
@@ -129,7 +129,7 @@ def test_the_forecast_says_a_person_typed_the_prompt_after_the_conversation_so_f
     commands = forecasts_by_hand(monkeypatch)
     asked = []
 
-    def answer(predictor, tasks):
+    def answer(predictor, tasks, **kwargs):
         asked.extend(tasks)
         return {"forecasts": []}
 

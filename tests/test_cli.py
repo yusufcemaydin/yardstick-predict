@@ -10,7 +10,7 @@ import pytest
 from builders import ClaudeSession, CodexSession, history
 from conftest import KEY
 
-from yardstick_predict import benchmarks, cli, embeddings, forecast, model_types
+from yardstick_predict import benchmarks, cli, embeddings, forecast, llm, model_types, pipeline
 from yardstick_predict.cli import main
 from yardstick_predict.store import Predictor, default_name, predictor_names
 
@@ -457,3 +457,87 @@ def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, r
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0, out
     assert len(predictor.embedded("prompt")) == 420
+
+
+# LLM analysis, and a model made by an older version -----------------------------------------------------
+
+
+def fake_analysis(seen: list):
+    def analyze(asks, how, fields, on_batch=None):
+        seen.append(len(asks))
+        found = {
+            ask.id: {
+                "kind": "feature",
+                "files": 2.0,
+                "steps": 2.0,
+                "runs_code": True,
+                "looks_up": False,
+                "continues": False,
+                "clarity": "clear",
+                "minutes": 5.0,
+                "description": f"Make the change the prompt asks for: {ask.prompt[:40]}",
+                "by": f"{how['provider']}:{how['model']}",
+                "fields": fields,
+            }
+            for ask in asks
+        }
+        if on_batch is not None:
+            on_batch(found, len(asks))
+        return llm.Analysis(found)
+
+    return analyze
+
+
+def test_llm_analysis_reads_each_task_once_and_its_descriptions_are_embedded(capsys, records, ready, monkeypatch):
+    seen: list[int] = []
+    monkeypatch.setattr(llm, "analyze", fake_analysis(seen))
+    code, out = run(
+        capsys,
+        "create",
+        "--yes",
+        "--archive",
+        f"claude-code={records}",
+        "--features",
+        "context,llm",
+        "--llm-provider",
+        "codex",
+    )
+    assert code == 0, out
+    predictor = Predictor("default")
+    assert predictor.config["llm"] == {"provider": "codex", "model": llm.DEFAULT_CODEX}
+    assert "LLM analysis: 420 tasks with Codex's own model through your chatgpt subscription" in out
+    assert len(predictor.llm_labels()) == 420 and len(predictor.embedded("llm")) == 420
+
+    code, out = run(capsys, "predict", "--model", "claude-opus-5-5", "--prompt", "fix the api")
+    assert code == 0 and json.loads(out)["forecasts"][0]["seconds"] > 0
+    assert seen[-1] == 1  # the forecast's own task was read too
+
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 0 and "Nothing new" in out and seen.count(420) == 1  # nothing was read twice
+
+
+def test_llm_analysis_that_cant_run_says_why_and_training_goes_on(capsys, records, ready, monkeypatch):
+    def broken(asks, how, fields, on_batch=None):
+        return llm.Analysis({}, "No Anthropic API key was found. Set ANTHROPIC_API_KEY to your key.")
+
+    monkeypatch.setattr(llm, "analyze", broken)
+    code, out = run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "llm")
+    assert code == 0 and "about $3.36 at list price" in out
+    assert "ANTHROPIC_API_KEY" in out and "Training goes on without LLM analysis" in out
+    assert Predictor("default").llm_labels() == {}  # nothing was noted, so a refresh tries them all again
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 0 and "LLM analysis: 420 tasks" in out
+
+
+def test_a_model_made_by_an_older_version_is_trained_again_on_refresh(capsys, records, ready):
+    assert run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "")[0] == 0
+    predictor = Predictor("default")
+    path = predictor.model_dir / "model.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "format": 2}))
+    assert pipeline.outdated(predictor)
+
+    code, out = run(capsys, "predict", "--model", "claude-opus-5-5", "--prompt", "fix the api")
+    assert code == 1  # a forecast from it would read the wrong features
+
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 0 and "made by an older version" in out and not pipeline.outdated(predictor)
