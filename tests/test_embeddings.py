@@ -53,6 +53,30 @@ def test_what_a_split_batch_embedded_is_kept_when_a_later_part_fails(voyage):
     assert found == [([0, 1], [fake_vector("short one"), fake_vector("short two")])]  # paid for, so not lost
 
 
+def test_a_tokens_limit_splits_a_batch_at_once_and_later_batches_start_smaller(voyage, monkeypatch):
+    slept = []
+    monkeypatch.setattr(embeddings.time, "sleep", slept.append)
+    voyage.most_tokens = 10  # one text of 8 tokens fits, two don't
+    texts = [f"task number {i} with a few words" for i in range(6)]
+    waits = []
+    found = list(embeddings.embed(texts, "voyage-4-large", KEY, counts=[50_000] * 6, on_wait=waits.append))
+    assert sorted(p for positions, _ in found for p in positions) == list(range(6))
+    assert slept == [] and not any("waits" in w for w in waits)  # no waiting: smaller requests go through now
+    assert [len(r["input"]) for r in voyage.requests] == [2, 1, 1, 1, 1, 1, 1]  # later batches hold one text
+
+
+def test_a_requests_limit_or_a_single_text_still_waits_and_tries_again(voyage, monkeypatch):
+    slept = []
+    monkeypatch.setattr(embeddings.time, "sleep", slept.append)
+    voyage.fail_next = [(429, "You have exceeded your RPM rate limit.")]
+    list(embeddings.embed(["first text", "second text"], "voyage-4", KEY))
+    assert [r["input"] for r in voyage.requests] == [["first text", "second text"]] * 2  # the same batch again
+    voyage.fail_next = [(429, "You have exceeded your TPM rate limit.")]
+    list(embeddings.embed(["one text"], "voyage-4", KEY))
+    assert [r["input"] for r in voyage.requests[2:]] == [["one text"]] * 2
+    assert slept == [1.0, 1.0]
+
+
 def test_a_wrong_key_is_refused_at_once(voyage):
     with pytest.raises(embeddings.VoyageError) as caught:
         embeddings.check_key("wrong-key", "voyage-4")

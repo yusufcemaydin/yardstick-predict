@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -155,14 +156,23 @@ def _post(body: dict, key: str, timeout: float = 120) -> dict:
         raise VoyageError(0, f"couldn't reach Voyage ({error})") from None
 
 
-def _post_with_retries(body: dict, key: str, on_wait: Callable[[str], None] | None = None, attempts: int = 8) -> dict:
-    """Send one request. Wait and try again when Voyage is busy or limiting requests."""
+def _post_with_retries(
+    body: dict,
+    key: str,
+    on_wait: Callable[[str], None] | None = None,
+    attempts: int = 8,
+    split: bool = False,
+) -> dict:
+    """Send one request. Wait and try again when Voyage is busy or limiting requests.
+
+    With `split`, a limit on tokens a minute is raised at once, so the caller sends smaller requests instead.
+    """
     for attempt in range(attempts):
         try:
             return _post(body, key)
         except VoyageError as error:
             retry = error.status == 429 or error.status >= 500 or error.status == 0
-            if not retry or attempt == attempts - 1:
+            if not retry or attempt == attempts - 1 or (split and _tokens_limit(error)):
                 raise
             delay = min(60.0, 2.0**attempt)
             if on_wait:
@@ -177,11 +187,33 @@ def _post_with_retries(body: dict, key: str, on_wait: Callable[[str], None] | No
     raise AssertionError("unreachable")
 
 
+def _tokens_limit(error: VoyageError) -> bool:
+    """Whether Voyage refused a request for the account's limit on tokens a minute, not on requests.
+
+    Voyage says which limit it hit, as in "You have exceeded your TPM rate limit". A message that names
+    both limits doesn't say which one it was, so it counts as a limit on requests.
+    """
+    if error.status != 429:
+        return False
+    tokens = re.search(r"\bTPM\b|tokens per minute", error.detail, re.IGNORECASE)
+    requests = re.search(r"\bRPM\b|requests per minute", error.detail, re.IGNORECASE)
+    return tokens is not None and requests is None
+
+
 def check_key(key: str, model: str) -> None:
     """Make one tiny request to confirm the key works. Raises VoyageError when it doesn't."""
     body = {"input": ["yardstick-predict key check"], "model": model, "output_dimension": DIMENSIONS}
     reply = _post_with_retries(body, key)
     record_usage(key, model, int((reply.get("usage") or {}).get("total_tokens") or 0))
+
+
+@dataclass
+class _Room:
+    """How many tokens one request may hold. It shrinks when the account allows fewer tokens a minute."""
+
+    tokens: float
+    passed: int = 0
+    """The most tokens a request has got through with."""
 
 
 def embed(
@@ -194,39 +226,56 @@ def embed(
     """Embed texts in as few requests as Voyage allows. Yields each request's positions and vectors."""
     limit = MODELS[model].tokens_per_request if model in MODELS else 120_000
     counts = counts or count_tokens(texts, model)[0]
+    room = _Room(limit * 0.95)
     batch: list[int] = []
     batch_tokens = 0
     for position, tokens in enumerate(counts):
-        if batch and (len(batch) == MAX_TEXTS_PER_REQUEST or batch_tokens + tokens > limit * 0.95):
-            yield from _embed_batch(batch, texts, model, key, on_wait)
+        if batch and (len(batch) == MAX_TEXTS_PER_REQUEST or batch_tokens + tokens > room.tokens):
+            yield from _embed_batch(batch, texts, counts, model, key, on_wait, room)
             batch, batch_tokens = [], 0
         batch.append(position)
         batch_tokens += tokens
     if batch:
-        yield from _embed_batch(batch, texts, model, key, on_wait)
+        yield from _embed_batch(batch, texts, counts, model, key, on_wait, room)
 
 
 def _embed_batch(
-    batch: list[int], texts: list[str], model: str, key: str, on_wait: Callable[[str], None] | None
+    batch: list[int],
+    texts: list[str],
+    counts: list[int],
+    model: str,
+    key: str,
+    on_wait: Callable[[str], None] | None,
+    room: _Room,
 ) -> Iterator[tuple[list[int], list[list[float]]]]:
-    """Embed one batch. When Voyage keeps limiting it, split it in half and send smaller requests.
+    """Embed one batch. When Voyage won't take it, split it in half and send smaller requests.
 
-    An account without a payment method may allow fewer tokens a minute than one full batch holds.
-    Smaller requests are slower, but they finish. Each half is yielded as it arrives, so when a later
-    half fails, the vectors already paid for are not lost.
+    An account without a payment method may allow fewer tokens a minute than one full batch holds. When
+    Voyage says tokens are the limit, the batch is split at once, and later batches hold no more than the
+    most that got through. When Voyage limits requests instead, it waits and tries again first. Each half
+    is yielded as it arrives, so when a later half fails, the vectors already paid for are not lost.
     """
     body = {"input": [texts[i] for i in batch], "model": model, "output_dimension": DIMENSIONS, "truncation": True}
+    several = len(batch) > 1
     try:
-        reply = _post_with_retries(body, key, on_wait, attempts=4 if len(batch) > 1 else 8)
+        reply = _post_with_retries(body, key, on_wait, attempts=4 if several else 8, split=several)
     except VoyageError as error:
-        if error.status != 429 or len(batch) == 1:
+        if error.status != 429 or not several:
             raise
+        tokens_limit = _tokens_limit(error)
         if on_wait:
-            on_wait("Voyage keeps limiting requests this size, so this sends smaller ones.")
+            on_wait(
+                "Voyage limits this account's tokens a minute, so this sends smaller requests."
+                if tokens_limit
+                else "Voyage keeps limiting requests this size, so this sends smaller ones."
+            )
         half = len(batch) // 2
-        yield from _embed_batch(batch[:half], texts, model, key, on_wait)
-        yield from _embed_batch(batch[half:], texts, model, key, on_wait)
+        yield from _embed_batch(batch[:half], texts, counts, model, key, on_wait, room)
+        yield from _embed_batch(batch[half:], texts, counts, model, key, on_wait, room)
+        if tokens_limit:
+            room.tokens = min(room.tokens, room.passed)  # later batches start from a size that got through
         return
+    room.passed = max(room.passed, sum(counts[i] for i in batch))
     record_usage(key, model, int((reply.get("usage") or {}).get("total_tokens") or 0))
     data = sorted(reply.get("data") or [], key=lambda item: item.get("index", 0))
     if len(data) != len(batch):
