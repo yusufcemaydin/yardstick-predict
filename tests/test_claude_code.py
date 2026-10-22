@@ -166,6 +166,15 @@ def test_the_session_effort_level_picks_the_forecast(tmp_path):
     record.write_text("\n".join(json.dumps(line) for line in lines))
     assert cc.last_model_and_effort(str(record)) == ("claude-opus-5-5", "max")
     assert cc.last_model_and_effort(str(tmp_path / "missing.jsonl")) == ("", "")
+    later = [
+        {"type": "assistant", "message": {"model": "<synthetic>"}},  # an error notice from Claude Code
+        {"type": "assistant", "message": {"model": ""}},
+        {"type": "assistant", "isSidechain": True, "message": {"model": "claude-haiku-5-5"}},  # a helper's reply
+        {"type": "assistant", "message": "assistant"},
+        ["assistant"],
+    ]
+    record.write_text("\n".join(json.dumps(line) for line in [*lines, *later]))
+    assert cc.last_model_and_effort(str(record)) == ("claude-opus-5-5", "max")
     forecasts = [{"model": "m", "effort": "high", "seconds": 1}, {"model": "m", "effort": "max", "seconds": 2}]
     assert cc._pick(forecasts, "m", "max")["seconds"] == 2
     assert cc._pick(forecasts, "m-20260101", "")["seconds"] == 1  # a dated name, and the usual level
@@ -216,16 +225,30 @@ def test_pressing_esc_stops_the_clock(tmp_path):
         "timestamp": "2026-10-22T10:00:30Z",
         "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]},
     }
-    mention = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "[Request interrupted"}]}}
     lines = [{"type": "assistant", "message": {"model": "m"}}, stopped]
     record.write_text("\n".join(json.dumps(line) for line in lines))
     started = datetime.fromisoformat("2026-10-22T10:00:00+00:00").timestamp()
     assert cc.interrupted_at(str(record), started) == started + 30
     assert cc.interrupted_at(str(record), started + 60) is None  # an older stop doesn't count
-    record.write_text("\n".join(json.dumps(line) for line in [*lines, {"type": "assistant", "message": {}}]))
+    not_replies = [
+        {"type": "assistant", "message": {"model": "<synthetic>"}},  # an error notice from Claude Code
+        {"type": "assistant", "isSidechain": True, "message": {"model": "m"}},  # a helper's reply
+    ]
+    for later in not_replies:
+        record.write_text("\n".join(json.dumps(line) for line in [*lines, later]))
+        assert cc.interrupted_at(str(record), started) == started + 30
+    replied = {"type": "assistant", "message": {"model": "m"}}
+    record.write_text("\n".join(json.dumps(line) for line in [*lines, replied]))
     assert cc.interrupted_at(str(record), started) is None  # the agent went on after it
-    record.write_text(json.dumps(mention))
-    assert cc.interrupted_at(str(record), started) is None  # only mentioning it isn't a stop
+    helper = {**stopped, "isSidechain": True}
+    mention = {
+        "type": "user",
+        "timestamp": "2026-10-22T10:00:40Z",
+        "message": {"content": [{"type": "tool_result", "content": "[Request interrupted by user]"}]},
+    }
+    for line in (helper, mention):
+        record.write_text(json.dumps(line))
+        assert cc.interrupted_at(str(record), started) is None  # a helper's stop, or a tool's output saying it
 
 
 def test_install_and_remove_in_this_folder(tmp_path, monkeypatch, capsys):

@@ -121,7 +121,7 @@ def _tail(transcript: str | None, size: int = TAIL_BYTES) -> list[str]:
 
 
 def last_model_and_effort(transcript: str | None) -> tuple[str, str]:
-    """The model and effort level of the session's latest reply, from the end of its record."""
+    """The model and effort level of the session's latest real reply, from the end of its record."""
     for line in reversed(_tail(transcript)):
         if '"assistant"' not in line:
             continue
@@ -129,9 +129,22 @@ def last_model_and_effort(transcript: str | None) -> tuple[str, str]:
             event = json.loads(line)
         except ValueError:
             continue
-        if event.get("type") == "assistant":
-            return str((event.get("message") or {}).get("model") or ""), str(event.get("effort") or "")
+        if _main_reply(event):
+            return event["message"]["model"], str(event.get("effort") or "")
     return "", ""
+
+
+def _main_reply(event: object) -> bool:
+    """Whether a line is a real reply from the main agent.
+
+    A helper's reply (a sidechain) is another agent's. An error notice, which Claude Code writes as a reply
+    from "<synthetic>", isn't a reply from any model. Neither says what you're running.
+    """
+    if not isinstance(event, dict) or event.get("type") != "assistant" or event.get("isSidechain"):
+        return False
+    message = event.get("message")
+    model = message.get("model") if isinstance(message, dict) else None
+    return isinstance(model, str) and bool(model) and model != "<synthetic>"
 
 
 def _start_forecast(session: str, prompt_at: float) -> None:
@@ -313,8 +326,12 @@ def interrupted_at(transcript: str | None, since: float) -> float | None:
             event = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(event, dict) or event.get("isSidechain"):
+            continue  # a helper's lines say nothing about the main agent
         if event.get("type") == "assistant":
-            return None  # the agent replied after any stop
+            if _main_reply(event):
+                return None  # the agent replied after any stop
+            continue  # an error notice isn't a reply
         if event.get("type") == "user" and _text(event).lstrip().startswith("[Request interrupted"):
             try:
                 stamp = datetime.fromisoformat(str(event.get("timestamp") or "").replace("Z", "+00:00"))
@@ -325,14 +342,14 @@ def interrupted_at(transcript: str | None, since: float) -> float | None:
 
 
 def _text(event: dict) -> str:
-    content = (event.get("message") or {}).get("content")
+    """What a person or the agent wrote in a line. A tool's output doesn't count, whatever it says."""
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
     if isinstance(content, str):
         return content
-    for part in content or []:
-        if isinstance(part, dict) and isinstance(part.get("text"), str):
+    for part in content if isinstance(content, list) else []:
+        if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
             return part["text"]
-        if isinstance(part, dict) and isinstance(part.get("content"), str):
-            return part["content"]
     return ""
 
 
