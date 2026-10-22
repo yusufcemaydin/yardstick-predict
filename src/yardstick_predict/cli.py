@@ -434,18 +434,16 @@ def cmd_create(args) -> int:
     model_name = args.embedding or (None if can_ask else "voyage-4")
     if model_name is None:
         say()
-        say("Each embedded feature, like the prompt, is turned into numbers that capture what it means. The")
-        say("forecasts then use what the most similar past tasks really took.")
-        say("Counting tokens with each Voyage model's tokenizer...")
+        say("Working out what each Voyage model would cost...")
         plans = {m: price(items, m, None) for m in embeddings.MODELS}
         options = list(embeddings.MODELS)
         for number, option in enumerate(options, start=1):
             plan = plans[option]
             note = embeddings.MODELS[option].note
             say(f"  {number}  {option:<15} ${plan.cost.list_usd:<7.2f} {plan.cost.tokens:>12,} tokens  {note}")
-        say("The predictor keeps this embedding model for good. To change it, create a new predictor.")
+        say("The predictor keeps this model for good. To change it later, create a new predictor.")
         while model_name is None:
-            reply = input("Choose [1]: ").strip() or "1"
+            reply = input("Which Voyage model should embed your tasks? [1]: ").strip() or "1"
             if reply.isdigit() and 1 <= int(reply) <= len(options):
                 model_name = options[int(reply) - 1]
             else:
