@@ -4,8 +4,15 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+Records are read more accurately. A predictor made with an older version keeps the tasks it already read. To re-read all of yours, create a new predictor with `yardstick-predict create NAME`, then make it the default with `yardstick-predict default NAME`.
+
 ### Fixed
 
+- Reading records:
+  - The test before any forecast could learn from a task that hadn't finished yet, when the task had waited for you or its helpers worked on. Each task now keeps when it really finished.
+  - A Claude Code task that ended on an error, such as a server error or a usage limit, was learned from as if it had finished. It's now stopped, unless a reply came after the error.
+  - A Codex helper's work was charged to the wrong task when it went on after your next prompt. It now counts toward the task Codex names for it, even when it was started by another helper.
+  - A Codex helper's work counted twice when its record file was copied, and was partly lost when it was spread over several files.
 - A forecast asked for while a refresh saved a new model, such as the status line's, could find no model. It now waits a moment for the new one.
 - Two refreshes of one predictor could run at once, and the slower one could save an older model over a newer one. A refresh started while another refresh or setup is running now stops and says to try again later.
 - Training crashed with a short `--half-life` when an AI model was used only long ago. Old tasks now keep a tiny weight.

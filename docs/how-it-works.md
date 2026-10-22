@@ -19,11 +19,11 @@ Each row holds:
 The records need care, and these rules matter more than the model:
 
 1. **Each model reply counts once.** Claude Code writes one reply across several lines and repeats its token counts on each. Adding them all up would roughly double the tokens.
-2. **Helper agents count toward the task that started them.** Their tokens and cost are added to it, even when they finish after a refresh.
-3. **Copies count once.** A resumed session copies its earlier messages into a new record file, and real histories hold many such copies. Each task is matched by its own id, so a copy is never counted twice, and the most complete copy is kept. Without this, a copy could land in both the training data and the test data, and the test would look better than it really is.
+2. **Helper agents count toward the task that started them.** Their tokens and cost are added to it, even when they finish after a refresh or work on after your next prompt. A task counts as finished only once its helpers are done.
+3. **Copies count once.** A resumed session copies its earlier messages into a new record file, and real histories hold many such copies. Each task is matched by its own id, so a copy is never counted twice, and the most complete copy is kept. A Codex helper's work is matched the same way, and a Codex session spread over several files keeps the work in each. Without this, a copy could land in both the training data and the test data, and the test would look better than it really is.
 4. **Waiting for a person isn't agent time.** When a Claude Code agent asks a question or waits for approval, that wait is taken out of the task's time. Codex records don't mark these waits yet.
 5. **Tasks left waiting are kept but not learned from.** A task with a silence of more than 30 minutes while the agent worked was left waiting, not working.
-6. **Stopped tasks are kept but not learned from.** All you know about a stopped task is that it would have taken at least this long.
+6. **Stopped tasks are kept but not learned from.** A task is stopped when you press Esc, or when its last reply is an error from Claude Code, such as a server error or a usage limit. All you know about a stopped task is that it would have taken at least this long.
 7. **A task that may still be running waits.** The last task in a file written to in the last 15 minutes is read on the next refresh.
 
 A refresh reads only the record files that changed since the last one.
@@ -79,7 +79,7 @@ Experts can change the model with flags on `create`:
 
 Before it gives any forecast, the predictor tests itself on tasks it hasn't seen.
 
-It replays the newest 30% of tasks in three windows, oldest first. Each window is forecast by a model trained only on the tasks before it. Using three windows means one unusual week can't decide the verdict alone.
+It replays the newest 30% of tasks in three windows, oldest first. Each window is forecast by a model trained only on the tasks that had finished before it opened, waits for you and helpers included. Using three windows means one unusual week can't decide the verdict alone.
 
 Each AI model's forecasts are then scored against **the simple rule**: the same forecast for every task on that model, the spread of its past tasks. To be given, a model's forecasts must pass every check, for every head:
 
