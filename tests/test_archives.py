@@ -252,6 +252,24 @@ def test_codex_helper_threads_add_to_the_parent_task(tmp_path):
     assert tasks[0].calls == 2
 
 
+def test_the_context_keeps_the_conversation_in_order(tmp_path):
+    claude = ClaudeSession(tmp_path / "claude", "s1", START)
+    claude.prompt("First question")
+    claude.reply(2, text="First answer")
+    claude.prompt("Second question")
+    claude.reply(2)
+    claude.save(mtime=START)
+    task = read_claude(tmp_path / "claude")["Second question"]
+    assert task.context == "User: First question\n\nAssistant: First answer"
+
+    codex = CodexSession(tmp_path / "codex", "c1", START)
+    codex.turn("t1", "First question", calls=[(100, 0, 10)], seconds=2)
+    codex.turn("t2", "Second question", calls=[(100, 0, 10)], seconds=2)
+    codex.save(mtime=START)
+    tasks = {t.prompt: t for t in read_archive(codex_archive(tmp_path / "codex"), now=LATER)}
+    assert tasks["Second question"].context == "User: First question\n\nAssistant: Fixed."
+
+
 def test_broken_lines_are_skipped(tmp_path):
     session = ClaudeSession(tmp_path, "s1", START)
     session.prompt("Still readable")

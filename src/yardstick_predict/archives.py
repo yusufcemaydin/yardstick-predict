@@ -318,6 +318,8 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
         line = lines[i]
         origin = _claude_origin(line, text)
         context = history.context()
+        if origin is not None:
+            history.add("User", text)
         calls: dict[tuple, _Call] = {}
         model = effort = None
         first_input = None
@@ -375,8 +377,6 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                         skills.add(str(part["input"]["skill"]))
                 elif part.get("type") == "text":
                     history.add("Assistant", part.get("text") or "")
-        if origin is not None:
-            history.add("User", text)
         finished = k + 1 < len(starts) or settled
         if origin is None or not calls or start is None or last is None or not finished:
             continue
@@ -553,6 +553,7 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
                 text = _codex_text(payload)
                 if turn is not None and text.strip() and not _codex_injected(text):
                     turn.prompt.append(text)
+                    history.add("User", text)
             elif item == "message" and payload.get("role") == "assistant":
                 history.add("Assistant", _codex_text(payload))
             elif item in CODEX_TOOL_ITEMS and turn is not None:
@@ -582,8 +583,6 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
             turn.context = history.context()
         elif event in ("task_complete", "turn_aborted") and turn is not None:
             task = _codex_task(turn, payload, event, meta, path, archive_name)
-            for words in turn.prompt:
-                history.add("User", words)
             if task is not None:
                 tasks.append(task)
             turn = None
