@@ -10,7 +10,7 @@ import pytest
 from builders import ClaudeSession, CodexSession, history
 from conftest import KEY
 
-from yardstick_predict import benchmarks, cli, embeddings, model_types
+from yardstick_predict import benchmarks, cli, embeddings, forecast, model_types
 from yardstick_predict.cli import main
 from yardstick_predict.store import Predictor, default_name, predictor_names
 
@@ -211,6 +211,21 @@ def test_forecasting_with_an_untrained_predictor_says_so(capsys):
     Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
     assert main(["predict", "fix the login page"]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "not_trained"
+
+
+def test_a_typed_prompt_is_forecast_as_a_persons(capsys, monkeypatch):
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    asked = []
+
+    def answer(predictor, tasks, distribution):
+        asked.extend(tasks)
+        return {"forecasts": []}
+
+    monkeypatch.setattr(forecast, "answer", answer)
+    assert main(["predict", "fix the login page", "--model", "m", "--effort", "high"]) == 0
+    request = {"version": 1, "tasks": [{"id": "a", "prompt": "fix the login page", "models": ["m"]}]}
+    run(capsys, "predict", stdin=json.dumps(request), monkeypatch=monkeypatch)
+    assert [task.origin for task in asked] == ["person", "program"]  # a JSON request says who for itself
 
 
 def test_an_unknown_model_type_stops_setup_before_anything_is_spent(capsys, records, ready):

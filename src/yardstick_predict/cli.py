@@ -770,7 +770,8 @@ def cmd_predict(args) -> int:
             asked = []
             for number, (model, effort) in enumerate(pairs, start=1):
                 task = {"id": "task" if len(pairs) == 1 else f"task-{number}", "prompt": prompt, "models": [model]}
-                task.update(context=args.context or "", skills=args.skill)
+                # A prompt given on the command line was typed by a person. A JSON request says who for itself.
+                task.update(context=args.context or "", skills=args.skill, origin="person")
                 if effort:
                     task["effort"] = effort
                 asked.append(task)
