@@ -70,7 +70,8 @@ class Task:
     skills: str = ""
     """The skills the agent used, one name per line."""
     finished_at: float | None = None
-    """When the task really finished, time spent waiting for the person included. None when it isn't known."""
+    """When the task and its helpers really finished, time spent waiting for the person included. None when it
+    isn't known."""
 
     @property
     def tokens(self) -> int:
@@ -316,12 +317,13 @@ def _claude_failed(line: dict) -> bool:
     return bool(line.get("isApiErrorMessage") or line.get("error"))
 
 
-def _claude_helpers(session_dir: Path) -> dict[str, dict[tuple, _Call]]:
-    """Helper-agent calls grouped by the prompt that started them."""
+def _claude_helpers(session_dir: Path) -> tuple[dict[str, dict[tuple, _Call]], dict[str, float]]:
+    """Helper-agent calls grouped by the prompt that started them, and when each prompt's helpers last replied."""
     by_prompt: dict[str, dict[tuple, _Call]] = {}
+    last: dict[str, float] = {}
     helper_dir = session_dir / "subagents"
     if not helper_dir.is_dir():
-        return by_prompt
+        return by_prompt, last
     for path in sorted(helper_dir.glob("*.jsonl")):
         for line in _lines(path):
             if line.get("type") != "assistant" or not line.get("promptId"):
@@ -330,7 +332,10 @@ def _claude_helpers(session_dir: Path) -> dict[str, dict[tuple, _Call]]:
             if found:
                 key, call = found
                 by_prompt.setdefault(line["promptId"], {}).setdefault(key, call)
-    return by_prompt
+                moment = _timestamp(line.get("timestamp"))
+                if moment is not None:
+                    last[line["promptId"]] = max(last.get(line["promptId"], moment), moment)
+    return by_prompt, last
 
 
 def _read_claude_code(archive: dict, only: set[str] | None, now: float) -> list[Task]:
@@ -351,7 +356,7 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
     starts = [(i, text) for i, line in enumerate(lines) if (text := _claude_turn_start(line)) is not None]
     if not starts:
         return []
-    helpers = _claude_helpers(path.with_suffix(""))
+    helpers, helpers_last = _claude_helpers(path.with_suffix(""))
     settled = now - path.stat().st_mtime >= SETTLE_SECONDS
     history = _History()
     tasks = []
@@ -453,7 +458,8 @@ def _read_claude_file(path: Path, archive_name: str, now: float) -> list[Task]:
                 stopped=stopped or failed,
                 idle=_longest_gap(start, last, moments, waits) > IDLE_GAP_SECONDS,
                 skills="\n".join(sorted(skills)),
-                finished_at=last,
+                # A helper working in the background can reply after the main agent's last reply.
+                finished_at=max(last, helpers_last.get(line.get("promptId") or "", last)),
             )
         )
     return tasks
@@ -569,6 +575,8 @@ class _ThreadTurn:
     """The main thread's turn behind this one, as newer versions of Codex write it. Empty in older records."""
     started: float
     calls: list[_Call] = field(default_factory=list)
+    last: float | None = None
+    """When its last model call ended."""
 
 
 @dataclass
@@ -652,6 +660,8 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
             if not turns:
                 turns.append(_ThreadTurn("", "", began or moment or 0.0))
             turns[-1].calls.append(call)
+            if moment is not None:
+                turns[-1].last = moment if turns[-1].last is None else max(turns[-1].last, moment)
             if turn is not None:
                 turn.calls.append(call)
                 if turn.first_input is None:
@@ -781,3 +791,5 @@ def _attach_codex_helpers(tasks: dict[str, Task], threads: list[_CodexThread]) -
         task.output_tokens += output
         task.usd = None if task.usd is None or usd is None else task.usd + usd
         task.calls += len(turn.calls)
+        if turn.last is not None and task.finished_at is not None:
+            task.finished_at = max(task.finished_at, turn.last)  # its outcome is known once the helper is done

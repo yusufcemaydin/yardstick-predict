@@ -34,8 +34,8 @@ def test_a_task_that_waited_30_minutes_for_the_person_finishes_30_minutes_after_
 
     [task] = read_archive(claude_archive(tmp_path), now=LATER)
     assert task.seconds == pytest.approx(11)
-    assert task.finished_at == pytest.approx(START + 30 * 60 + 11)
-    assert M.finish_times([task])[0] == pytest.approx(task.started_at + task.seconds + 30 * 60)
+    assert task.finished_at == pytest.approx(START + 30 * 60 + 11, abs=0.01)
+    assert M.finish_times([task])[0] == pytest.approx(task.started_at + task.seconds + 30 * 60, abs=0.01)
 
 
 def test_a_codex_task_finishes_at_its_completion_or_else_at_its_last_moment(tmp_path):
@@ -50,6 +50,30 @@ def test_a_codex_task_finishes_at_its_completion_or_else_at_its_last_moment(tmp_
     assert tasks["Fix the failing test"].finished_at == START + 40
     assert tasks["Never finished"].finished_at == START + 120
     assert tasks["Never finished"].stopped
+
+
+def test_a_task_finishes_when_its_last_helper_does(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Research the options")
+    session.reply(5)
+    session.clock = START + 600  # a helper in the background replies long after the main agent's last reply
+    session.helper(line["promptId"])
+    session.save(mtime=START)
+
+    [task] = read_archive(claude_archive(tmp_path), now=LATER)
+    assert task.calls == 2 and task.finished_at == pytest.approx(START + 600, abs=0.01)
+
+
+def test_a_codex_task_finishes_when_the_last_helper_turn_it_counts_does(tmp_path):
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=10, root="t1")
+    parent.save(mtime=START)
+    helper = CodexSession(tmp_path, "helper", START + 5, parent="parent")
+    helper.turn("h1", "Long part", calls=[(200, 0, 20)], seconds=300, root="t1")
+    helper.save(mtime=START)
+
+    [task] = read_archive(codex_archive(tmp_path), now=LATER)
+    assert task.calls == 2 and task.finished_at == pytest.approx(START + 305, abs=0.01)
 
 
 def test_a_task_from_an_older_dataset_without_a_finish_time_still_loads(tmp_path):
