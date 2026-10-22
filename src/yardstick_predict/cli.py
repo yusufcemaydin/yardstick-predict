@@ -66,26 +66,21 @@ def ago(moment: float | None) -> str:
 # Talking about cost ------------------------------------------------------------------------------------
 
 
-def cost_lines(cost: embeddings.Cost, model: str) -> list[str]:
-    counted = "counted with Voyage's own tokenizer" if cost.exact else "estimated, because the tokenizer didn't load"
-    lines = [
-        f"That is {cost.tokens:,} tokens, {counted}.",
-        f"At Voyage's list price for {model}, it costs ${cost.list_usd:.2f}.",
-    ]
-    if cost.free_left is None:
-        lines.append(
-            "Voyage gives every account 200 million free tokens. If yours has some left, you pay less or nothing. "
-            "Your Voyage dashboard shows what's left."
-        )
+def cost_lines(cost: embeddings.Cost, model: str, tasks: int) -> list[str]:
+    """What embedding costs, in plain words. Free tokens count only on an account said to be new."""
+    about = "" if cost.exact else "about "
+    lines = [f"Embedding {tasks:,} tasks with {model} uses {about}{cost.tokens:,} tokens."]
+    if not cost.free_left:
+        lines.append(f"It costs ${cost.list_usd:.2f} at Voyage's list price.")
     elif cost.free_left >= cost.tokens:
         lines.append(
-            f"By yardstick's count, your account has {millions(cost.free_left)} free tokens left. You pay $0.00."
+            f"Your free tokens cover it, so it costs nothing. {millions(cost.free_left - cost.tokens)} "
+            "free tokens will be left."
         )
     else:
-        lines.append(
-            f"By yardstick's count, your account has {millions(cost.free_left)} free tokens left. "
-            f"You pay ${cost.your_usd:.2f}."
-        )
+        lines.append(f"Your free tokens cover {millions(cost.free_left)} of them. The rest costs ${cost.your_usd:.2f}.")
+    if not cost.exact:
+        lines.append("The token count is an estimate, because Voyage's tokenizer didn't download.")
     return lines
 
 
@@ -142,11 +137,13 @@ def get_key(model: str, can_ask: bool) -> str | None:
     if can_ask and not embeddings.account(key).get("asked"):
         say()
         say("Voyage gives every account 200 million free tokens. yardstick can't see your balance, so it keeps its")
-        say("own count. Has this Voyage account used any of its free tokens before?")
+        say("own count.")
+        say("Has this account used any of its free tokens before?")
         say("  n   no, it's a new account")
-        say("  y   yes, or I'm not sure")
-        reply = input("[n/y] ").strip().lower()
-        embeddings.set_free_tokens(key, "new" if reply in ("", "n", "no") else "unknown")
+        say("  y   yes, or I'm not sure - report costs assuming no credits")
+        # Pressing Enter assumes no credits, so a cost is never shown lower than it may be.
+        reply = input("[n/Y] ").strip().lower()
+        embeddings.set_free_tokens(key, "new" if reply in ("n", "no") else "unknown")
     return key
 
 
@@ -457,8 +454,7 @@ def cmd_create(args) -> int:
         return 1
     plan = price(items, model_name, key)
     say()
-    say(f"Embedding {plan.tasks:,} tasks with {model_name}.")
-    for line in cost_lines(plan.cost, model_name):
+    for line in cost_lines(plan.cost, model_name, plan.tasks):
         say(line)
     limit = args.max_tasks
     free = plan.cost.free_left
@@ -469,9 +465,9 @@ def cmd_create(args) -> int:
     if limit and limit != args.max_tasks:
         items = embedding_items(found.new_tasks, chosen, limit=limit)
         plan = price(items, model_name, key)
-        for line in cost_lines(plan.cost, model_name):
+        for line in cost_lines(plan.cost, model_name, plan.tasks):
             say(line)
-    if can_ask and not ask("Go ahead?", True):
+    if can_ask and not ask("Embed them and train the predictor now?", True):
         say("Stopped. Nothing was created.")
         return 0
     if not can_ask and not args.yes:
@@ -562,12 +558,10 @@ def cmd_refresh(args) -> int:
         say("Nothing new. The model is up to date.")
         return 0
     if plan.items:
-        say(f"Embedding the new tasks with {model_name}:")
-        for line in cost_lines(plan.cost, model_name):
-            say("  " + line)
+        for line in cost_lines(plan.cost, model_name, plan.tasks):
+            say(line)
     if can_ask:
-        question = "Refresh now? This adds the new tasks, embeds them and retrains." if ask_first else "Go ahead?"
-        if not ask(question, not ask_first):
+        if not ask("Refresh now? This adds the new tasks, embeds them and retrains.", not ask_first):
             say("Keeping the current model.")
             return 0
     elif not args.yes:

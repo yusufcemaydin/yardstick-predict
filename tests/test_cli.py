@@ -94,6 +94,25 @@ def test_adding_a_folder_is_optional_only_once_some_records_are_chosen(tmp_path,
     assert asked[3].startswith("(Optional) Add a folder")
 
 
+def test_the_cost_is_said_plainly_and_free_tokens_count_only_on_a_new_account():
+    def said(free_left: int | None, exact: bool = True) -> str:
+        return " ".join(cli.cost_lines(embeddings.Cost(2_000_000, exact, 0.06, free_left), "voyage-4", 2_500))
+
+    plain = "Embedding 2,500 tasks with voyage-4 uses 2,000,000 tokens. It costs $0.12 at Voyage's list price."
+    assert said(None) == plain and said(0) == plain
+    covered = said(200_000_000)
+    assert "Your free tokens cover it, so it costs nothing. 198.0 million free tokens will be left." in covered
+    assert "Your free tokens cover 1.5 million of them. The rest costs $0.03." in said(1_500_000)
+    assert "uses about 2,000,000 tokens" in said(None, exact=False) and "an estimate" in said(None, exact=False)
+
+
+def test_pressing_enter_on_the_free_tokens_question_assumes_no_credits(capsys, ready, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda question="": "")
+    assert cli.get_key("voyage-4", can_ask=True) == KEY
+    assert "y   yes, or I'm not sure - report costs assuming no credits" in capsys.readouterr().out
+    assert embeddings.account(KEY)["free_tokens"] == "unknown"
+
+
 def test_a_program_must_agree_to_the_cost(capsys, records, ready):
     code, out = run(capsys, "create", "--archive", f"claude-code={records}")
     assert code == 2
