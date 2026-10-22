@@ -13,9 +13,11 @@ It only asks questions when a person runs it in a terminal. When a program runs 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import getpass
 import importlib.util
 import json
+import math
 import os
 import sys
 import time
@@ -23,7 +25,16 @@ from pathlib import Path
 
 from . import __version__, embeddings, locks, ui
 from .archives import DEFAULT_ARCHIVES, FORMATS, archive_path
-from .store import NAME_PATTERN, Predictor, default_name, predictor_names, set_default
+from .store import (
+    BrokenPredictor,
+    Predictor,
+    default_name,
+    name_problem,
+    predictor_folder,
+    predictor_names,
+    private_home,
+    set_default,
+)
 
 SIMPLE_RULE = "The simple rule gives every task on a model the same forecast: the spread of that model's past tasks."
 REASONS = {
@@ -115,10 +126,32 @@ def explain(error: embeddings.VoyageError) -> str:
     if error.status == 403:
         return "Voyage refused requests from this network. It may block your internet address."
     if error.status == 429:
-        return "Voyage kept limiting requests. Try again later, or add a payment method to raise your limits."
+        advice = "Try again later, or add a payment method to raise your limits."
+        # Voyage's own reason, or the embedding code's, such as one text being more than a minute allows.
+        reason = error.detail.strip()
+        if not reason:
+            return f"Voyage kept limiting requests. {advice}"
+        return f"Voyage kept limiting requests: {reason}{'' if reason.endswith('.') else '.'}\n{advice}"
     if error.status == 0:
         return f"Couldn't reach Voyage. Check your internet connection. ({error.detail})"
     return str(error)
+
+
+def damaged_usage_note(key: str | None) -> None:
+    """Say once that the record of Voyage usage was damaged and moved aside, so costs count no free tokens.
+
+    yardstick keeps its own count of each key's free tokens. When that file was damaged, the count is lost,
+    so every cost shows at the list price from then on. It's said once for each time it happens.
+    """
+    from .store import home, save_setting, settings
+
+    aside = embeddings.account(key).get(embeddings.SET_ASIDE) if key else None
+    if not isinstance(aside, dict) or settings().get("usage_set_aside_told") == aside.get("at"):
+        return
+    kept = f" The damaged copy is {home() / aside['file']}." if aside.get("file") else ""
+    ui.note(f"Your record of Voyage usage was damaged, so it was moved aside.{kept}")
+    ui.note("Costs are now shown at Voyage's list price, without any free tokens.")
+    save_setting("usage_set_aside_told", aside.get("at"))
 
 
 # The Voyage key ----------------------------------------------------------------------------------------
@@ -139,13 +172,16 @@ def get_key(model: str, can_ask: bool) -> str | None:
         if not key:
             return None
     else:
-        ui.fail("No Voyage key found. Set VOYAGE_API_KEY, or run yardstick-predict in a terminal to paste one.")
+        ui.error(
+            "No Voyage key found. Set VOYAGE_API_KEY, or run yardstick-predict in a terminal, without --yes or "
+            "--express, to paste one."
+        )
         return None
     ui.working("Checking the key")
     try:
         embeddings.check_key(key, model)
     except embeddings.VoyageError as error:
-        ui.fail(f"The key didn't work.\n{explain(error)}")
+        ui.error(f"The key didn't work.\n{explain(error)}")
         return None
     ui.ok("The key works.")
     if pasted:
@@ -177,8 +213,8 @@ def ask_name(existing: list[str]) -> str:
         name = reply or suggestion
         if not name:
             ui.note("Type a name, such as work.")
-        elif not NAME_PATTERN.match(name):
-            ui.note("Use 1 to 40 lowercase letters, digits, dashes or underscores.")
+        elif name_problem(name):
+            ui.note(name_problem(name))
         elif name in existing:
             ui.note(f"There's already a predictor called {name}. Pick another name.")
         else:
@@ -263,8 +299,27 @@ def choose_features(can_ask: bool, given: str | None) -> list[str]:
         raise SystemExit(str(error)) from None
 
 
+NUMBER_FLAGS = {"dropout": "0.1", "test_share": "0.3", "validation_share": "0.15", "half_life": "30"}
+"""The advanced settings given as numbers, each with an example of a good value."""
+
+
+def check_numbers(args) -> None:
+    """Refuse a number flag that isn't an ordinary number, such as nan or inf, with a plain reason.
+
+    A half-life is a number of days, 0 or more. Each model type checks the ranges of its own settings.
+    """
+    for name, example in NUMBER_FLAGS.items():
+        value = getattr(args, name, None)
+        flag = "--" + name.replace("_", "-")
+        if value is not None and not math.isfinite(value):
+            raise SystemExit(f"{flag} must be a number, such as {example}, not {value}.")
+    if getattr(args, "half_life", None) is not None and args.half_life < 0:
+        raise SystemExit("--half-life is a number of days: 0 or more. 0 counts every task alike.")
+
+
 def advanced_settings(args) -> dict:
     """The model settings a program or an expert gave with flags. The rest keep their defaults."""
+    check_numbers(args)
     from . import model
 
     given = {
@@ -292,23 +347,61 @@ def advanced_settings(args) -> dict:
 # Reports -----------------------------------------------------------------------------------------------
 
 
+def tested_models(report: dict) -> list[str]:
+    """Every AI model the test knows about, the most tested first."""
+    models = report.get("models") or {}
+    return sorted(models, key=lambda name: -(models[name].get("tasks_tested") or 0))
+
+
 def served_models(report: dict) -> list[str]:
     """The AI models whose forecasts passed the test, the most tested first."""
-    tested = sorted(report.get("models", {}).items(), key=lambda kv: -kv[1]["tasks_tested"])
-    return [name for name, result in tested if result["served"]]
+    return [name for name in tested_models(report) if report["models"][name].get("served")]
 
 
-def print_report(model) -> None:
-    from .model import MIN_TEST_TASKS
+THRESHOLDS = {"min_test_tasks": 30, "tolerance": 0.02, "min_range_held": 0.75, "totals_range": [0.5, 2.0]}
+"""The test's thresholds in this version, for a report that doesn't carry its own when XGBoost can't load."""
 
-    report = model.meta["report"]
+
+def thresholds(report: dict) -> dict:
+    """The thresholds the test used, to say why a check failed: the report's own, else the model module's.
+
+    The model module needs XGBoost to load. Status works without it, so then this version's values are used.
+    """
+    found = report.get("thresholds")
+    found = found if isinstance(found, dict) else {}
+    if all(name in found for name in THRESHOLDS):
+        return found
+    try:
+        from . import model
+
+        current = {
+            "min_test_tasks": model.MIN_TEST_TASKS,
+            "tolerance": model.TOLERANCE,
+            "min_range_held": model.MIN_RANGE_HELD,
+            "totals_range": list(model.TOTALS_RANGE),
+        }
+    except Exception:  # XGBoost can't load on this computer
+        current = dict(THRESHOLDS)
+    return {**current, **found}
+
+
+def print_report(meta: dict) -> None:
+    """How the test went for each AI model, from the meta a trained model saves."""
+    report = meta.get("report") or {}
     if not report.get("tested_on"):
-        ui.note("There aren't enough tasks to test forecasts yet. It needs 100. Until then, it gives no forecasts.")
+        needed = report.get("min_tasks_to_test") or 100
+        ui.note(
+            f"There aren't enough tasks to test forecasts yet. It needs {needed:,}. Until then, it gives no forecasts."
+        )
         return
+    checks = thresholds(report)
+    least = checks["min_test_tasks"]
     ui.line(f"Tested on the newest {report['tested_on']:,} tasks, as if they hadn't happened yet.")
     ui.line()
     names = {"seconds": "time", "tokens": "tokens", "usd": "cost"}
-    results = sorted(report["models"].items(), key=lambda kv: -kv[1]["tasks_tested"])
+    results = [(name, report["models"][name]) for name in tested_models(report)]
+    if not results:
+        return
     pad = max(len(name) for name, _ in results)
     flags = {"ok": ui.green(ui.mark("ok")), "fail": ui.red(ui.mark("fail")), "none": ui.dim("-")}
     lead = pad + 3 + (2 if ui.styled() else 0)
@@ -330,41 +423,42 @@ def print_report(model) -> None:
                 ui.table(rows, indent=2 + lead)
         elif result["reason"] == "not_enough_data":
             if tested == 0:
-                why = f"needs {MIN_TEST_TASKS} recent tasks to test it on"
-            elif tested < MIN_TEST_TASKS:
-                why = f"{tested} test tasks, needs {MIN_TEST_TASKS}"
+                why = f"needs {least} recent tasks to test it on"
+            elif tested < least:
+                why = f"{tested} test tasks, needs {least}"
             else:
                 why = "too few known values to test its time, tokens or cost"
             ui.line(f"{label}   {flag('none')}" + ui.join(["not yet", why]))
         else:
             ui.line(f"{label}   {flag('fail')}" + ui.join(["no forecasts", f"tested on {tested:,} tasks"]))
             for failed in result.get("failed_checks", []):
-                ui.line(" " * lead + ui.dim(failed_check(failed, result, names)))
+                ui.line(" " * lead + ui.dim(failed_check(failed, result, names, checks)))
     ui.line()
     ui.note(SIMPLE_RULE)
 
 
-def failed_check(failed: str, result: dict, names: dict) -> str:
-    """One failed check, in plain words."""
-    from .model import MIN_RANGE_HELD, TOLERANCE, TOTALS_RANGE
-
+def failed_check(failed: str, result: dict, names: dict, checks: dict | None = None) -> str:
+    """One failed check, in plain words. `checks` holds the test's thresholds, as thresholds() gives them."""
+    checks = checks or thresholds({})
     target, check = failed.split(".")
     scores = result[target]
     label = names[target].capitalize()
     if check == "simple_rule":
         worse = -scores["better_than_simple_rule"]
         return (
-            f"{label} forecasts were {worse:.0%} worse than the simple rule. They may be at most {TOLERANCE:.0%} worse."
+            f"{label} forecasts were {worse:.0%} worse than the simple rule. "
+            f"They may be at most {checks['tolerance']:.0%} worse."
         )
     if check == "range_held":
         return (
             f"{label}: only {scores['in_90_range']:.0%} of real results fell inside the 90% range. "
-            f"It needs {MIN_RANGE_HELD:.0%}."
+            f"It needs {checks['min_range_held']:.0%}."
         )
     ratio = scores["expected_over_real_total"]
+    low, high = checks["totals_range"]
     return (
         f"{label}: the expected values added up to {ratio:.2f} times the real total. "
-        f"It must be between {TOTALS_RANGE[0]} and {TOTALS_RANGE[1]} times."
+        f"It must be between {low} and {high} times."
     )
 
 
@@ -387,6 +481,9 @@ def relaunch_with_openmp(argv: list[str]) -> None:
     XGBoost asks the Mac for OpenMP by name. The Mac also searches a fallback list of folders, which
     a program can only set when it starts. So the command restarts once with scikit-learn's folder on
     that list. It returns only when it can't restart.
+
+    Python's -P keeps the current folder off the list of places Python imports from, as it is for the
+    installed command. Otherwise a file there, such as a json.py, would run in place of Python's own.
     """
     if sys.platform != "darwin" or os.environ.get(RELAUNCHED) or not sys.executable:
         return
@@ -397,7 +494,7 @@ def relaunch_with_openmp(argv: list[str]) -> None:
     fallback = env.get("DYLD_FALLBACK_LIBRARY_PATH") or f"{Path.home()}/lib:/usr/local/lib:/usr/lib"
     env["DYLD_FALLBACK_LIBRARY_PATH"] = f"{folder}:{fallback}"
     env[RELAUNCHED] = "1"
-    os.execve(sys.executable, [sys.executable, "-m", "yardstick_predict", *argv], env)
+    os.execve(sys.executable, [sys.executable, "-P", "-m", "yardstick_predict", *argv], env)
 
 
 def xgboost_problem(argv: list[str]) -> str | None:
@@ -452,7 +549,11 @@ def cmd_home(args) -> int:
         return 0
     if not interactive():
         for name in names:
-            predictor = Predictor(name)
+            try:
+                predictor = Predictor(name)
+            except BrokenPredictor as error:
+                ui.out(f"{name}: {error}")
+                continue
             facts = [
                 f"{predictor.embedding_model} embeddings",
                 f"{predictor.count_tasks():,} tasks",
@@ -460,13 +561,36 @@ def cmd_home(args) -> int:
             ]
             ui.out(f"{name}: {', '.join(facts)}")
         return 0
+    code = 0
     for name in names:
-        cmd_refresh(argparse.Namespace(predictor=name, yes=False, ask_first=True))
+        # One predictor that's busy or broken doesn't keep the others from being checked.
+        try:
+            done = cmd_refresh(argparse.Namespace(predictor=name, yes=False, ask_first=True))
+        except BrokenPredictor as error:
+            ui.heading(name)
+            ui.error(str(error))
+            done = 1
+        except SystemExit as stop:
+            if not isinstance(stop.code, str):
+                raise
+            ui.heading(name)
+            ui.error(stop.code)
+            done = 1
+        code = max(code, done)
     ui.out()
     ui.out(
         ui.join([ui.dim("New predictor: yardstick-predict create"), ui.dim("Default: yardstick-predict default NAME")])
     )
-    return 0
+    return code
+
+
+def already_exists(name: str) -> str:
+    return f"A predictor called {name!r} already exists. Refresh it with: yardstick-predict refresh --predictor {name}"
+
+
+def unknown_embedding(model: str) -> str:
+    known = list(embeddings.MODELS)
+    return f"Unknown embedding model {model!r}. Use {', '.join(known[:-1])} or {known[-1]}."
 
 
 def cmd_create(args) -> int:
@@ -474,7 +598,8 @@ def cmd_create(args) -> int:
 
     if args.express:
         args.yes = True
-    can_ask = interactive() and not args.express
+    # With --yes or --express it asks nothing, even in a terminal. Every choice takes its default.
+    can_ask = interactive() and not args.yes
     existing = predictor_names()
     if can_ask:
         ui.out()
@@ -484,22 +609,28 @@ def cmd_create(args) -> int:
         if "default" in existing:
             raise SystemExit("Give the new predictor a name, like: yardstick-predict create work")
         name = "default"
-    if not NAME_PATTERN.match(name):
-        raise SystemExit("Use 1 to 40 lowercase letters, digits, dashes or underscores for the name.")
+    problem = name_problem(name)
+    if problem:
+        raise SystemExit(problem)
     if name in existing:
-        raise SystemExit(f"A predictor called {name!r} already exists. Refresh it with: yardstick-predict refresh")
-    make_default = not existing or (
+        raise SystemExit(already_exists(name))
+    first = not existing
+    make_default = first or (
         can_ask and ui.ask("Make it your default predictor? Commands use it when they name none.", False)
     )
     try:
-        model_types.load_plugins(args.plugin)
-    except ImportError as error:
-        raise SystemExit(f"Couldn't load the plugin: {error}") from None
+        # Each plugin is saved by where it was found, so it loads the same from any folder later.
+        plugins = [model_types.find_plugin(plugin) for plugin in args.plugin]
+        model_types.load_plugins(plugins)
+    except model_types.PluginError as error:
+        raise SystemExit(f"{error} Nothing was read or spent.") from None
     model_settings = advanced_settings(args)
     try:
         model_types.get(model_settings.get("type", "xgboost"))
     except (ValueError, ImportError, AttributeError) as error:
         raise SystemExit(f"{error} Nothing was read or spent.") from None
+    if args.embedding is not None and args.embedding not in embeddings.MODELS:
+        raise SystemExit(f"{unknown_embedding(args.embedding)} Nothing was read or spent.")
     from .model import MIN_TASKS
 
     # The built-in model needs 30 tasks it can learn from. A model type from a plugin sets its own needs.
@@ -536,6 +667,7 @@ def cmd_create(args) -> int:
     items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks)
 
     model_name = args.embedding or (None if can_ask else "voyage-4")
+    plans: dict = {}
     if model_name is None:
         ui.heading("Embedding model")
         ui.working("Working out what each Voyage model would cost")
@@ -560,13 +692,15 @@ def cmd_create(args) -> int:
             else:
                 ui.note(f"Type a number from 1 to {len(options)}.")
     if model_name not in embeddings.MODELS:
-        raise SystemExit(f"Unknown embedding model {model_name!r}. Use voyage-4, voyage-4-lite or voyage-4-large.")
+        raise SystemExit(unknown_embedding(model_name))
 
     key = get_key(model_name, can_ask)
     if not key:
         return 1
-    plan = price(items, model_name, key)
+    # Each Voyage model's tokens are counted once. The key only changes how many of them are free.
+    plan = with_key(plans[model_name], model_name, key) if model_name in plans else price(items, model_name, key)
     ui.heading("Cost")
+    damaged_usage_note(key)
     for text in cost_lines(plan.cost, model_name, plan.tasks):
         ui.line(text)
     limit = args.max_tasks
@@ -578,8 +712,7 @@ def cmd_create(args) -> int:
         elif fit < least:
             ui.note(f"Your free tokens cover only {fit:,} tasks, fewer than the {least} training needs.")
     if limit and limit != args.max_tasks:
-        items = embedding_items(found.new_tasks, chosen, limit=limit)
-        plan = price(items, model_name, key)
+        plan = newest_only(plan, found.new_tasks, limit, model_name, key)
         for text in cost_lines(plan.cost, model_name, plan.tasks):
             ui.line(text)
     if can_ask and not ui.ask("Embed them and train the predictor now?", True):
@@ -588,14 +721,26 @@ def cmd_create(args) -> int:
     if not can_ask and not args.yes:
         ui.line("Add --yes to go ahead.")
         return 2
-    args.max_tasks = limit
 
-    predictor = Predictor.create(name, archives, {"model": model_name, "dimensions": embeddings.DIMENSIONS})
-    with locks.held(predictor.dir / "refresh.lock"):  # a refresh started meanwhile is told to try again later
-        predictor.config.update(features=chosen, model=model_settings, plugins=list(args.plugin))
-        if args.max_tasks:
-            predictor.config["max_tasks"] = int(args.max_tasks)
-        predictor.save_config()
+    settings: dict = {"features": chosen, "model": model_settings, "plugins": plugins}
+    if limit:
+        settings["max_tasks"] = int(limit)
+    if make_default and not first:
+        settings["default_when_ready"] = True  # it becomes your default once it's trained
+    embedding = {"model": model_name, "dimensions": embeddings.DIMENSIONS}
+    folder = predictor_folder(name)
+    private_home()
+    folder.mkdir(parents=True, exist_ok=True)
+    # The lock is taken before the predictor exists, so no refresh can start on it until setup is done.
+    with locks.held(folder / "refresh.lock", wait=False) as mine:
+        if not mine:
+            raise SystemExit(f"A predictor called {name!r} is being set up by another command.")
+        try:
+            predictor = Predictor.create(name, archives, embedding, **settings)
+        except ValueError:
+            raise SystemExit(already_exists(name)) from None
+        if first:
+            set_default(name)  # the first predictor is the default, even when setup stops before it's trained
         save_scan(predictor, found)
         warning = refresh_benchmarks(predictor)
         if warning:
@@ -605,10 +750,39 @@ def cmd_create(args) -> int:
         model = train_and_report(predictor, train)
         if model is None:
             return 1
-        if make_default:
-            set_default(name)
+        default_when_ready(predictor)
         say_how_to_use(model, name)
         return 0
+
+
+def with_key(plan, model: str, key: str | None):
+    """The same plan, priced for a key, so its free tokens count. Its tokens aren't counted again."""
+    return dataclasses.replace(plan, cost=embeddings.cost(plan.cost.tokens, plan.cost.exact, model, key))
+
+
+def newest_only(plan, tasks: list, limit: int, model: str, key: str | None):
+    """The plan for only the newest `limit` tasks the model learns from, with the token counts it has already.
+
+    The plan's items are the tasks' texts. Its texts are the ones that go to Voyage, each once, with their
+    counts. A text that only older tasks need is left out.
+    """
+    from .pipeline import learnable
+
+    kept = {task.id for task in learnable(tasks, limit)}
+    items = [item for item in plan.items if item[0] in kept]
+    needed = {text for _, _, text in items}
+    count_of = dict(zip(plan.texts, plan.counts))
+    texts = [text for text in plan.texts if text in needed]
+    counts = [count_of[text] for text in texts]
+    cost = embeddings.cost(sum(counts), plan.cost.exact, model, key)
+    return dataclasses.replace(plan, items=items, texts=texts, counts=counts, cost=cost)
+
+
+def default_when_ready(predictor: Predictor) -> None:
+    """Make a predictor your default once it's trained, when you asked for that at setup."""
+    if predictor.config.pop("default_when_ready", False):
+        set_default(predictor.name)
+        predictor.save_config()
 
 
 def embed_with_progress(predictor: Predictor, plan, key: str) -> bool:
@@ -625,10 +799,12 @@ def embed_with_progress(predictor: Predictor, plan, key: str) -> bool:
     try:
         run_embeddings(predictor, plan, key, progress, on_wait=ui.note)
     except embeddings.VoyageError as error:
-        ui.fail(explain(error))
         if "free token" in error.detail.lower() or "payment" in error.detail.lower():
             embeddings.set_free_tokens(key, "used")
-        ui.note("What was embedded so far is saved. Run yardstick-predict refresh to finish.")
+        ui.error(
+            f"{explain(error)}\nWhat was embedded so far is saved. "
+            f"Run yardstick-predict refresh --predictor {predictor.name} to finish."
+        )
         return False
     ui.ok(f"Embedded {seen['total']:,} texts." if seen["total"] else "Embedded.")
     return True
@@ -643,10 +819,15 @@ def train_and_report(predictor: Predictor, train):
     try:
         model = train(predictor)
     except NotEnoughData as error:
-        ui.fail(str(error))
+        ui.error(str(error))
         return None
     ui.ok(f"Trained on {model.meta['tasks']:,} tasks.")
-    print_report(model)
+    for name in model.meta.get("features_without_values") or []:
+        ui.note(
+            f"Your feature {name} had no value for any past task, so the model can't learn from it. A feature "
+            "that reads only a request's extra has none for past tasks: work it out from the task itself too."
+        )
+    print_report(model.meta)
     return model
 
 
@@ -686,6 +867,7 @@ def cmd_refresh(args) -> int:
 
 
 def _refresh(args, predictor: Predictor) -> int:
+    from . import model_types
     from .pipeline import (
         chosen_features,
         load_plugins,
@@ -697,8 +879,12 @@ def _refresh(args, predictor: Predictor) -> int:
         train,
     )
 
-    load_plugins(predictor)
-    can_ask = interactive()
+    try:
+        load_plugins(predictor)
+    except model_types.PluginError as error:
+        raise SystemExit(str(error)) from None
+    # With --yes it asks nothing, even in a terminal.
+    can_ask = interactive() and not getattr(args, "yes", False)
     ask_first = getattr(args, "ask_first", False)
     ui.heading(predictor.name)
     ui.note(f"Last updated {ago(predictor.config.get('refreshed_at'))}.")
@@ -706,9 +892,21 @@ def _refresh(args, predictor: Predictor) -> int:
     found = scan(predictor)
     counts = [f"{source} {count:,}" for source, count in found.per_archive.items() if count]
     ui.ok(f"Found {len(found.new_tasks):,} new tasks" + (f": {ui.join(counts)}" if counts else "."))
-    if found.updated_tasks:
+    if getattr(found, "reader", None) is not None and predictor.config.get("reader") != found.reader:
+        # A newer version reads records more accurately. It read them all again, once.
+        ui.note(
+            "This version reads your records more accurately, so it read them all again. "
+            f"{len(found.updated_tasks):,} saved tasks changed."
+        )
+    elif found.updated_tasks:
         grew = len(found.updated_tasks)
-        ui.note(f"{grew:,} saved tasks grew, because they or their helper agents finished after the last refresh.")
+        ui.note(
+            f"{grew:,} saved tasks changed, because they or their helper agents finished or stopped after the last "
+            "refresh."
+        )
+    removed = getattr(found, "removed", [])
+    if removed:
+        ui.note(f"{len(removed):,} saved tasks aren't in their records anymore, so they're taken out.")
     has_model = model_ready(predictor)
     behind = bool(predictor.config.get("needs_training"))
     if behind and has_model:
@@ -725,11 +923,19 @@ def _refresh(args, predictor: Predictor) -> int:
     everything = [updated.get(task.id, task) for task in predictor.tasks()] + found.new_tasks
     pending = embedding_items(everything, chosen, have, predictor.config.get("max_tasks"))
     plan = price(pending, model_name, key)
-    nothing_new = not found.new_tasks and not found.updated_tasks and not plan.items and not behind
+    nothing_new = not found.new_tasks and not found.updated_tasks and not removed and not plan.items and not behind
     if nothing_new and has_model:
+        # A record file that changed with nothing new in it, such as one that was only touched, isn't read
+        # again next time. Nor is every file, after a new version of the reader read them all and found
+        # nothing new.
+        predictor.remember_files(found.files)
+        if getattr(found, "reader", None) is not None:
+            predictor.config["reader"] = found.reader
+            predictor.save_config()
         ui.ok("Nothing new. The model is up to date.")
         return 0
     if plan.items:
+        damaged_usage_note(key)
         for text in cost_lines(plan.cost, model_name, plan.tasks):
             ui.line(text)
     if can_ask:
@@ -747,90 +953,133 @@ def _refresh(args, predictor: Predictor) -> int:
     warning = refresh_benchmarks(predictor)
     if warning:
         ui.note(warning)
-    if plan.items:
-        plan = plan_embeddings(predictor, key)
-        if not embed_with_progress(predictor, plan, key):
+    # The plan priced above is what's left to embed now that the tasks are saved, so its counts are reused.
+    if plan.items and not embed_with_progress(predictor, plan, key):
+        return 1
+    # Planning again deletes the vectors of tasks whose text became empty, so training doesn't use them. It
+    # runs every time. Each text the plan above needed has its vector now, so this one pays nothing.
+    rest = plan_embeddings(predictor, key)
+    if rest.items:
+        key = key or get_key(model_name, can_ask)
+        if not key or not embed_with_progress(predictor, rest, key):
             return 1
     model = train_and_report(predictor, train)
     if model is None:
         return 1
+    default_when_ready(predictor)
     say_how_to_use(model, predictor.name, full=False)
     return 0
 
 
 def cmd_predict(args) -> int:
-    from .forecast import RequestError, answer, parse
+    from .forecast import RequestError
 
     prompt = args.task if args.task is not None else args.prompt
     table = prompt is not None and terminal_output() and not args.json and not args.distribution
+    predictor = None
     try:
-        if prompt is not None:
-            predictor = request_predictor(args.predictor)
-            pairs = effort_pairs(predictor, args.model or forecast_models(predictor), args.effort)
-            asked = []
-            for number, (model, effort) in enumerate(pairs, start=1):
-                task = {"id": "task" if len(pairs) == 1 else f"task-{number}", "prompt": prompt, "models": [model]}
-                # A prompt given on the command line was typed by a person. A JSON request says who for itself.
-                task.update(context=args.context or "", skills=args.skill, origin="person")
-                if effort:
-                    task["effort"] = effort
-                asked.append(task)
-            tasks, distribution, _ = parse({"version": 1, "distribution": args.distribution, "tasks": asked})
-        else:
-            if sys.stdin.isatty():
-                raise RequestError(
-                    "invalid_request", 'Give the task in quotes, like: yardstick-predict predict "Fix it"'
-                )
-            try:
-                request = json.load(sys.stdin)
-            except ValueError as error:
-                raise RequestError("invalid_request", f"The request isn't valid JSON: {error}") from None
-            tasks, distribution, chosen = parse(request)
-            predictor = request_predictor(args.predictor or chosen)
-        result = answer(predictor, tasks, distribution or args.distribution)
-        if prompt is not None:
-            # One prompt is one task, whatever models and effort levels it's forecast on.
-            for forecast in result["forecasts"]:
-                forecast["task"] = "task"
+        predictor, result = forecast_request(args, prompt)
         code = 0
     except RequestError as error:
         result, code = error.as_answer(), 1
-    if table or (prompt is None and sys.stdin.isatty() and terminal_output()):
+    except Exception as error:  # a program still gets an answer in the format, never a traceback
+        first_line = (str(error).strip().splitlines() or [""])[0]
+        message = f"Something went wrong that yardstick-predict didn't expect: {type(error).__name__}: {first_line}"
+        result, code = RequestError("internal_error", message.rstrip(": ")).as_answer(), 1
+    person = prompt is None and sys.stdin.isatty() and terminal_output() and not args.json
+    if table or person:
         if code:
             ui.error(result["error"]["message"])
         else:
-            show_forecasts(prompt, result)
+            show_forecasts(prompt, result, predictor)
         return code
     print(json.dumps(result, indent=2 if terminal_output() else None))
     return code
 
 
-def request_predictor(chosen: str | None) -> Predictor:
-    """The predictor a forecast request names, or your default one, with errors in the answer format."""
+def forecast_request(args, prompt: str | None) -> tuple[Predictor, dict]:
+    """The predictor and the answer for a prompt on the command line, or for a JSON request on standard input."""
+    from .forecast import RequestError, answer, load, parse
+
+    if prompt is None:
+        if sys.stdin.isatty():
+            raise RequestError("invalid_request", 'Give the task in quotes, like: yardstick-predict predict "Fix it"')
+        try:
+            request = json.load(sys.stdin)
+        except ValueError as error:
+            raise RequestError("invalid_request", f"The request isn't valid JSON: {error}") from None
+        except RecursionError:
+            raise RequestError("invalid_request", "The request is nested too deeply to read.") from None
+        tasks, distribution, chosen = parse(request)
+        predictor = request_predictor(args.predictor or chosen, from_request=True)
+        return predictor, answer(predictor, tasks, distribution or args.distribution)
+    predictor = request_predictor(args.predictor)
+    # The model is loaded once. Its meta picks the AI models and effort levels, and it forecasts them.
+    model = load(predictor)
+    models = list(dict.fromkeys(args.model)) or forecast_models(predictor, model.meta)
+    pairs = effort_pairs(predictor, models, args.effort, model.meta)
+    asked = []
+    for number, (name, effort) in enumerate(pairs, start=1):
+        task = {"id": "task" if len(pairs) == 1 else f"task-{number}", "prompt": prompt, "models": [name]}
+        # A prompt given on the command line was typed by a person. A JSON request says who for itself.
+        task.update(context=args.context or "", skills=args.skill, origin="person")
+        if effort:
+            task["effort"] = effort
+        asked.append(task)
+    tasks, distribution, _ = parse({"version": 1, "distribution": args.distribution, "tasks": asked})
+    result = answer(predictor, tasks, distribution, model=model)
+    # One prompt is one task, whatever models and effort levels it's forecast on.
+    for forecast in result["forecasts"]:
+        forecast["task"] = "task"
+    return predictor, result
+
+
+def request_predictor(chosen: str | None, from_request: bool = False) -> Predictor:
+    """The predictor a forecast request names, or your default one, with errors in the answer format.
+
+    `from_request` says the request came as JSON, so a message about choosing a predictor names its field.
+    """
     from .forecast import RequestError
 
     names = predictor_names()
-    if chosen and chosen not in names:
-        raise RequestError("unknown_predictor", f"There's no predictor called {chosen!r}.")
     if not names:
         raise RequestError("no_predictor", "There's no predictor yet. Run yardstick-predict to create one.")
+    if chosen and chosen not in names:
+        raise RequestError(
+            "unknown_predictor", f"There's no predictor called {chosen!r}. Your predictors: {', '.join(names)}."
+        )
+    name = chosen or default_name()
+    if name is None:
+        where = 'Name one in the request\'s "predictor"' if from_request else "Name one with --predictor"
+        raise RequestError(
+            "no_default_predictor",
+            f"There are several predictors and none is the default: {', '.join(names)}. {where}, "
+            "or choose a default with: yardstick-predict default NAME",
+        )
     try:
-        return pick_predictor(chosen)
-    except SystemExit as error:
-        raise RequestError("no_predictor", str(error)) from None
+        return Predictor(name)
+    except BrokenPredictor as error:
+        raise RequestError("broken_predictor", str(error)) from None
 
 
-def effort_pairs(predictor: Predictor, models: list[str], effort: str | None) -> list[tuple[str, str | None]]:
+def effort_pairs(
+    predictor: Predictor, models: list[str], effort: str | None, meta: dict | None = None
+) -> list[tuple[str, str | None]]:
     """Each AI model with each effort level to forecast: the one asked for, or every level it ran at often.
 
     A level counts as often when the model ran 30 tasks at it. A model with no such level is forecast at
-    the level it ran at most often.
+    the level it ran at most often. The counts are of the tasks the model was trained on, from its `meta`,
+    or from the dataset for a model saved before it counted them.
     """
     from .model import MIN_TEST_TASKS
+    from .pipeline import model_meta
 
     if effort:
         return [(model, effort) for model in models]
-    counts = predictor.effort_counts()
+    meta = model_meta(predictor) if meta is None else meta
+    counts = (meta or {}).get("effort_counts")
+    if not isinstance(counts, dict):
+        counts = predictor.effort_counts()
     pairs: list[tuple[str, str | None]] = []
     for model in models:
         common = [level for level, count in counts.get(model, []) if count >= MIN_TEST_TASKS]
@@ -838,21 +1087,26 @@ def effort_pairs(predictor: Predictor, models: list[str], effort: str | None) ->
     return pairs
 
 
-def forecast_models(predictor: Predictor) -> list[str]:
-    """The AI models a predictor forecasts, for a request that names none."""
+def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]:
+    """The AI models to forecast for a request that names none: the ones that passed the test, the most tested first.
+
+    When none has passed yet, every AI model the predictor knows, so each comes back with the reason it has
+    no forecast. `meta` is what the saved model says about itself, when it's read already.
+    """
     from .forecast import RequestError
-    from .pipeline import model_ready
+    from .pipeline import model_meta
 
-    model_file = predictor.model_dir / "model.json"
-    if not model_ready(predictor):
+    meta = model_meta(predictor) if meta is None else meta
+    if meta is None:
         raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
-    served = served_models(json.loads(model_file.read_text()).get("report", {}))
-    if not served:
-        raise RequestError("invalid_request", "No AI model has forecasts yet. Name one with --model.")
-    return served
+    report = meta.get("report") or {}
+    known = served_models(report) or tested_models(report) or list((meta.get("categories") or {}).get("model") or [])
+    if not known:
+        raise RequestError("invalid_request", "This predictor knows no AI model yet. Name one with --model.")
+    return known
 
 
-def show_forecasts(prompt: str, result: dict) -> None:
+def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None) -> None:
     """The forecasts as a small table, for a person in a terminal."""
     pad = max(len(forecast["model"]) for forecast in result["forecasts"])
     rows, missing, previous = [], {}, None
@@ -882,7 +1136,7 @@ def show_forecasts(prompt: str, result: dict) -> None:
     ui.table(rows, align="llrrr")
     for text in missing.values():
         ui.line(text)
-    predictor = Predictor(result["predictor"])
+    predictor = predictor or Predictor(result["predictor"])
     footer = [
         "Expected values from your own runs",
         f"predictor {predictor.name}, updated {ago(predictor.config.get('refreshed_at'))}",
@@ -893,42 +1147,53 @@ def show_forecasts(prompt: str, result: dict) -> None:
 
 
 def cmd_status(args) -> int:
-    from .pipeline import model_ready
+    """Each predictor and how its test went. It reads only what the saved model says about itself, so it
+    needs neither XGBoost nor the predictor's plugins."""
+    from .pipeline import model_meta
 
-    names = [args.predictor] if args.predictor else predictor_names()
+    names = predictor_names()
+    if args.predictor and args.predictor not in names:
+        message = f"There's no predictor called {args.predictor!r}."
+        if args.json:
+            print(json.dumps({"version": 1, "error": {"code": "unknown_predictor", "message": message}}, indent=2))
+            return 1
+        raise SystemExit(message)
     default = default_name()
-    found = []
-    for name in names:
-        if name not in predictor_names():
-            raise SystemExit(f"There's no predictor called {name!r}.")
-        predictor = Predictor(name)
-        entry = {
-            "name": name,
-            "default": name == default,
-            "embedding_model": predictor.embedding_model,
-            "features": predictor.config.get("features") or ["prompt"],
-            "model": predictor.config.get("model") or {},
-            "archives": predictor.config["archives"],
-            "tasks": predictor.count_tasks(),
-            "refreshed_at": predictor.config.get("refreshed_at"),
-            "report": None,
-        }
-        model_file = predictor.model_dir / "model.json"
-        if model_ready(predictor):
-            entry["report"] = json.loads(model_file.read_text()).get("report")
-        found.append(entry)
+    found, metas = [], {}
+    for name in [args.predictor] if args.predictor else names:
+        try:
+            predictor = Predictor(name)
+        except BrokenPredictor as error:
+            found.append({"name": name, "default": name == default, "error": str(error)})
+            continue
+        metas[name] = meta = model_meta(predictor)
+        found.append(
+            {
+                "name": name,
+                "default": name == default,
+                "embedding_model": predictor.embedding_model,
+                "features": predictor.config.get("features") or ["prompt"],
+                "model": predictor.config.get("model") or {},
+                "archives": predictor.config["archives"],
+                "tasks": predictor.count_tasks(),
+                "refreshed_at": predictor.config.get("refreshed_at"),
+                "report": (meta or {}).get("report"),
+            }
+        )
+    code = 1 if any("error" in entry for entry in found) else 0  # a predictor it shows can't be used
     if args.json:
         print(json.dumps({"version": 1, "predictors": found}, indent=2))
-        return 0
+        return code
     if not found:
         ui.out("There's no predictor yet. Run yardstick-predict to create one.")
         return 0
-    from .pipeline import load_model
-
     for entry in found:
         ui.out()
         title = [ui.bold(entry["name"])] + ([ui.dim("default predictor")] if entry["default"] else [])
         ui.out(ui.join(title))
+        if "error" in entry:
+            ui.line(entry["error"])
+            continue
         facts = [
             f"{entry['embedding_model']} embeddings",
             f"{entry['tasks']:,} tasks",
@@ -936,12 +1201,14 @@ def cmd_status(args) -> int:
         ]
         ui.line(ui.join(facts))
         ui.line(f"Features: {', '.join(entry['features'])}")
-        predictor = Predictor(entry["name"])
-        if model_ready(predictor):
-            model = load_model(predictor)
-            ui.line(f"Trained on {model.meta['tasks']:,} tasks.")
-            print_report(model)
-    return 0
+        meta = metas.get(entry["name"])
+        if meta:
+            try:
+                ui.line(f"Trained on {meta.get('tasks', 0):,} tasks.")
+                print_report(meta)
+            except (KeyError, TypeError, ValueError, AttributeError):  # a report this version can't read
+                ui.note("Its test report can't be shown. A newer version of yardstick-predict may have saved it.")
+    return code
 
 
 def cmd_claude_code(args) -> int:
@@ -950,9 +1217,12 @@ def cmd_claude_code(args) -> int:
 
     path = claude_code.settings_path(args.here)
     try:
-        settings = json.loads(path.read_text()) if path.is_file() else {}
+        settings = claude_code.read_settings(path)
     except ValueError:
         raise SystemExit(f"Claude Code's settings in {path} aren't valid JSON, so they were left alone.") from None
+    except OSError as error:
+        raise SystemExit(f"Claude Code's settings in {path} can't be read: {error.strerror or error}.") from None
+    settings = {} if settings is None else settings
     if not isinstance(settings, dict):
         raise SystemExit(f"Claude Code's settings in {path} aren't a JSON object, so they were left alone.")
     where = "Claude Code sessions in this folder" if args.here else "all your Claude Code sessions"
@@ -961,8 +1231,17 @@ def cmd_claude_code(args) -> int:
         if changed == settings:
             ui.out(f"yardstick isn't in the settings for {where}. Nothing to remove.")
             return 0
-        path.write_text(json.dumps(changed, indent=2) + "\n")
+        home = claude_code.installed_home(settings)  # the folder the hook kept its forecasts in
+        changed, restored = claude_code.put_back_status_line(settings, changed, path, home)
+        backup = claude_code.save_settings(path, changed)
         ui.ok(f"Removed the forecasts from {where}. New sessions won't show them.")
+        if restored is not None:
+            shown = claude_code.other_status_line({"statusLine": restored}) or json.dumps(restored)
+            ui.note(f"Your own status line is back: {shown}")
+        if backup:
+            ui.note(f"A copy of the file as it was is kept next to it, in {backup.name}.")
+        if not claude_code.in_use(claude_code.settings_path(not args.here)):
+            claude_code.clean(home)  # no settings it knows of use the forecasts the hook kept
         return 0
     if not predictor_names():
         raise SystemExit("There's no predictor yet. Run yardstick-predict to create one first.")
@@ -976,13 +1255,19 @@ def cmd_claude_code(args) -> int:
             f'The "hooks" in {path} aren\'t in the form Claude Code reads, so nothing was added. '
             "Fix or remove them, then run this again."
         )
+    # Claude Code may run the hook without your YARDSTICK_HOME, so the commands name the folder themselves.
+    home = os.environ.get("YARDSTICK_HOME")
+    home = os.path.abspath(os.path.expanduser(home)) if home else None
     ui.out(ui.bold("Forecasts in Claude Code"))
     ui.line(f"This adds a status line and two hooks to {where}.")
     ui.note(f"They go in {path}." + (" A copy of the file as it is now is kept next to it." if path.is_file() else ""))
     ui.note("Each prompt you send there goes to Voyage to be embedded: a few tokens each.")
+    if home:
+        ui.note(f"They keep their forecasts in {home}, the folder YARDSTICK_HOME names.")
     other = claude_code.other_status_line(settings)
     if other:
         ui.note(f"It replaces your current status line: {other}")
+        ui.note("Removing yardstick puts yours back.")
     if interactive() and not args.yes:
         if not ui.ask("Add them?", True):
             ui.note("Nothing changed.")
@@ -990,13 +1275,35 @@ def cmd_claude_code(args) -> int:
     elif not args.yes:
         ui.line("Add --yes to go ahead.")
         return 2
-    path.parent.mkdir(parents=True, exist_ok=True)
-    backup = path.with_name(path.name + ".before-yardstick")
-    if path.is_file() and not backup.exists():
-        backup.write_text(path.read_text())
-    path.write_text(json.dumps(claude_code.added(settings, sys.executable), indent=2) + "\n")
+    claude_code.remember_status_line(settings, path, home)
+    claude_code.save_settings(path, claude_code.added(settings, sys.executable, home))
     ui.ok("Added. Start a new Claude Code session there to see forecasts in its status line.")
     ui.note("Remove them with: yardstick-predict claude-code remove" + (" --here" if args.here else ""))
+    # The hook finds the Voyage key as every command does: in VOYAGE_API_KEY, then in the password store.
+    key = os.environ.get("VOYAGE_API_KEY", "").strip()
+    stored, answer = claude_code.stored_key(claude_code.KEY_SECONDS)
+    if answer == "no_answer":
+        ui.note("Your password store didn't answer in time. If it's locked, unlock it: forecasts look there.")
+    elif not key and not stored:
+        ui.note("No Voyage key was found, and forecasts need one. Run yardstick-predict in a terminal to paste one.")
+    elif not stored:
+        ui.line()
+        ui.line("Your Voyage key is only in the VOYAGE_API_KEY environment variable.")
+        ui.note("Claude Code may start without that variable, and then no forecast can run.")
+        if answer == "no_store":
+            ui.note("This computer has no password store to keep it in. Set VOYAGE_API_KEY where Claude Code starts.")
+        elif answer != "ok":
+            ui.note("Your password store couldn't be opened. Set VOYAGE_API_KEY where Claude Code starts.")
+        elif interactive() and not args.yes:
+            if not ui.ask("Save the key in your computer's password store, where the hook can find it?", True):
+                ui.note("Not saved. Set VOYAGE_API_KEY where Claude Code starts, or forecasts can't run.")
+            elif embeddings.save_key(key):
+                ui.ok("Saved in your computer's password store.")
+            else:
+                ui.fail("It couldn't be saved. Set VOYAGE_API_KEY where Claude Code starts.")
+        else:
+            ui.note("With --yes it isn't saved anywhere. To keep it in your computer's password store, run this")
+            ui.note("again in a terminal without --yes. Or set VOYAGE_API_KEY where Claude Code starts.")
     return 0
 
 
@@ -1020,8 +1327,39 @@ def cmd_default(args) -> int:
     return 0
 
 
+class BadArguments(Exception):
+    """A command line argparse can't read. `parser` is the command's parser, for its usage line."""
+
+    def __init__(self, parser: argparse.ArgumentParser, message: str) -> None:
+        super().__init__(message)
+        self.parser = parser
+        self.message = message
+
+
+class Parser(argparse.ArgumentParser):
+    """An argument parser that raises BadArguments instead of exiting, so predict can say what's wrong in JSON."""
+
+    def error(self, message: str):
+        raise BadArguments(self, message)
+
+
+def bad_arguments(problem: BadArguments, argv: list[str]) -> int:
+    """Say what's wrong with the command line: in the answer format to a program that runs predict."""
+    command = next((word for word in argv if not word.startswith("-")), None)
+    if command == "predict" and not terminal_output():
+        message = f"The command line isn't right: {problem.message}."
+        print(json.dumps({"version": 1, "error": {"code": "invalid_request", "message": message}}))
+        return 1
+    problem.parser.print_usage(sys.stderr)
+    print(f"{problem.parser.prog}: error: {problem.message}", file=sys.stderr)
+    return 2
+
+
 def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    from . import features
+
+    added = ", ".join(name for name in features.DEFAULT if name != features.REQUIRED) or "none"
+    parser = Parser(
         prog="yardstick-predict",
         description="Forecast how long a coding-agent task will take and what it will cost, before it runs.",
     )
@@ -1039,17 +1377,27 @@ def make_parser() -> argparse.ArgumentParser:
     )
     create.add_argument("--embedding", help="voyage-4 (the default), voyage-4-lite or voyage-4-large.")
     create.add_argument("--max-tasks", type=int, help="Embed and learn from only the newest this many tasks.")
-    create.add_argument("--yes", action="store_true", help="Go ahead without asking, even when it costs money.")
+    create.add_argument(
+        "--yes",
+        action="store_true",
+        help="Go ahead without asking anything, even when it costs money. Every choice takes its default.",
+    )
     create.add_argument(
         "--express",
         action="store_true",
-        help="Take every default and go ahead without questions: all your records, the prompt, voyage-4.",
+        help=f"Take every default and go ahead without questions: all your records, the prompt with {added}, voyage-4.",
     )
     create.add_argument(
-        "--features", help="The features to add to the prompt, such as context,skills,benchmarks. Default: none."
+        "--features",
+        help=f"The features to add to the prompt, such as context,skills,benchmarks. Default: {added}.",
     )
     create.add_argument(
-        "--plugin", action="append", default=[], metavar="MODULE", help="A module that adds features or model types."
+        "--plugin",
+        action="append",
+        default=[],
+        metavar="MODULE",
+        help="A module that adds features or model types: its name, or the path of its .py file. "
+        "A module in this folder is found by its name.",
     )
     advanced = create.add_argument_group("advanced settings", "For experts. Every one has a sensible default.")
     advanced.add_argument("--model-type", help="xgboost (the default), or one a plugin adds.")
@@ -1067,7 +1415,9 @@ def make_parser() -> argparse.ArgumentParser:
 
     refresh = commands.add_parser("refresh", help="Add new runs, embed them and retrain.")
     refresh.add_argument("--predictor", help="Which predictor. Default: your default predictor.")
-    refresh.add_argument("--yes", action="store_true", help="Go ahead without asking, even when it costs money.")
+    refresh.add_argument(
+        "--yes", action="store_true", help="Go ahead without asking anything, even when it costs money."
+    )
 
     predict = commands.add_parser("predict", help="Forecast a task. Give it in quotes, or send a JSON request.")
     predict.add_argument("task", nargs="?", help="The task's prompt, in quotes.")
@@ -1081,7 +1431,12 @@ def make_parser() -> argparse.ArgumentParser:
     )
     predict.add_argument("--context", help="The conversation so far, if there is one.")
     predict.add_argument("--effort", help="The thinking level, such as high or max.")
-    predict.add_argument("--skill", action="append", default=[], help="A skill the agent will use. Repeat for more.")
+    predict.add_argument(
+        "--skill",
+        action="append",
+        default=[],
+        help="A skill the prompt invokes, or that the conversation used before it. Repeat for more.",
+    )
     predict.add_argument("--distribution", action="store_true", help="Also give each forecast's full curve, in JSON.")
     predict.add_argument("--json", action="store_true", help="Print the JSON answer that programs get.")
 
@@ -1099,8 +1454,22 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
+TRAINS_OR_FORECASTS = ("create", "refresh", "predict")
+"""The commands that need XGBoost. The others work on a computer where it can't load, so you can still
+look at your predictors, choose a default and take the status line out of Claude Code."""
+
+
+def needs_xgboost(args) -> bool:
+    # The bare command sets up or refreshes predictors only when a person runs it. Otherwise it lists them.
+    return args.command in TRAINS_OR_FORECASTS or (args.command is None and interactive())
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = make_parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    try:
+        args = make_parser().parse_args(argv)
+    except BadArguments as problem:
+        return bad_arguments(problem, argv)
     handlers = {
         "create": cmd_create,
         "refresh": cmd_refresh,
@@ -1109,7 +1478,7 @@ def main(argv: list[str] | None = None) -> int:
         "default": cmd_default,
         "claude-code": cmd_claude_code,
     }
-    problem = xgboost_problem(sys.argv[1:] if argv is None else argv)
+    problem = xgboost_problem(argv) if needs_xgboost(args) else None
     if problem:
         forecasting = args.command == "predict"
         person = forecasting and terminal_output() and bool(args.task or args.prompt)
@@ -1120,10 +1489,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         return handlers.get(args.command, cmd_home)(args)
-    except KeyboardInterrupt:
-        ui.out()
-        ui.note("Stopped.")
+    except (KeyboardInterrupt, EOFError):  # Ctrl+C, or Ctrl+D at a question
+        ui.stopped()
         return 130
+    except BrokenPredictor as error:
+        ui.error(str(error))
+        return 1
     except SystemExit as stop:
         if isinstance(stop.code, str):
             ui.error(stop.code)

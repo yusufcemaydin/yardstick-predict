@@ -54,6 +54,82 @@ def test_good_requests_match_the_published_schema():
     assert tasks[0].origin == "person" and tasks[0].skills == ["tdd"] and not distribution and predictor is None
 
 
+TASK = {"id": "a", "prompt": "Fix the flaky test", "models": ["m"]}
+
+
+@pytest.mark.parametrize(
+    "changes, task_changes",
+    [
+        ({"version": True}, {}),  # JSON's true isn't the number 1
+        ({"version": 1.0}, {}),
+        ({"version": "1"}, {}),
+        ({"distribution": None}, {}),
+        ({"distribution": 1}, {}),
+        ({"predictor": None}, {}),
+        ({"predictor": ""}, {}),
+        ({"predictor": 3}, {}),
+        ({}, {"prompt": "   \n"}),
+        ({}, {"prompt": " Fix it "}),
+        ({}, {"models": ["m", "m"]}),
+        ({}, {"models": [""]}),
+        ({}, {"extra": []}),
+        ({}, {"extra": 0}),
+        ({}, {"extra": None}),
+        ({}, {"extra": {"repo_size": 3}}),
+        ({}, {"skills": ""}),
+        ({}, {"skills": {}}),
+        ({}, {"skills": None}),
+        ({}, {"skills": [3]}),
+        ({}, {"context": None, "effort": None, "agent": None, "project": None, "origin": None}),
+        ({}, {"context": 3}),
+        ({}, {"effort": False}),
+        ({}, {"origin": "robot"}),
+        ({}, {"origin": "person"}),
+        ({}, {"id": ""}),
+    ],
+)
+def test_the_request_checks_and_the_request_schema_agree(changes, task_changes):
+    sent = {"version": 1, "tasks": [{**TASK, **task_changes}], **changes}
+    try:
+        jsonschema.validate(sent, schema("forecast-request.v1.json"))
+        schema_takes_it = True
+    except jsonschema.ValidationError:
+        schema_takes_it = False
+    try:
+        parse(sent)
+        code_takes_it = True
+    except RequestError:
+        code_takes_it = False
+    assert code_takes_it == schema_takes_it
+
+
+def test_a_prompt_and_its_context_are_prepared_as_training_prepares_them(stub):
+    from yardstick_predict.archives import TEXT_CHARS
+
+    predictor, model = stub
+    long = "  " + "word " * TEXT_CHARS
+    context = "Earlier we talked. " * 2000 + "\n\n"
+    tasks, _, _ = parse(request(prompt=long, context=context))
+    assert tasks[0].prompt == long.strip()[:TEXT_CHARS]
+    assert tasks[0].context == context[-TEXT_CHARS:].strip()
+    answer(predictor, tasks)
+    assert model.rows[0].prompt_chars == TEXT_CHARS  # the prompt's length feature counts what training would keep
+
+
+def test_a_model_named_twice_is_forecast_once():
+    tasks, _, _ = parse(request(models=["claude-opus-5-5", "gpt-6.1-sol", "claude-opus-5-5"]))
+    assert tasks[0].models == ["claude-opus-5-5", "gpt-6.1-sol"]
+
+
+def test_every_error_code_is_in_the_answer_schema_and_the_format_doc():
+    from yardstick_predict.forecast import ERRORS
+
+    codes = schema("forecast-response.v1.json")["properties"]["error"]["properties"]["code"]["enum"]
+    assert sorted(codes) == sorted(ERRORS)
+    doc = (SCHEMAS.parent / "docs" / "format.md").read_text()
+    assert all(f"| `{code}` |" in doc for code in ERRORS)
+
+
 @pytest.fixture
 def trained(voyage, monkeypatch):
     monkeypatch.setenv("VOYAGE_API_KEY", KEY)
@@ -204,3 +280,55 @@ def test_an_untrained_predictor_says_so():
         answer(predictor, tasks)
     assert caught.value.code == "not_trained"
     jsonschema.validate(caught.value.as_answer(), schema("forecast-response.v1.json"))
+
+
+def test_an_effort_level_reaches_a_model_that_takes_one_and_a_model_of_your_own_needs_none(stub):
+    predictor, model = stub
+    asked = []
+
+    class Levels(Stub):
+        def served(self, model, effort=None):
+            asked.append(effort)
+            return (False, "not_enough_data") if effort == "max" else (True, None)
+
+    levels = Levels()
+    tasks, _, _ = parse({"version": 1, "tasks": [{**TASK, "effort": "max"}, {**TASK, "id": "b"}]})
+    forecasts = answer(predictor, tasks, model=levels)["forecasts"]
+    assert asked == ["max", None]  # a request with no level is forecast at the model's usual one
+    assert forecasts[0]["reason"] == "not_enough_data" and forecasts[0]["effort"] == "max"
+    assert "reason" not in forecasts[1]
+    assert len(answer(predictor, tasks)["forecasts"]) == 2  # Stub's served takes only the model's name
+
+
+def test_a_feature_no_plugin_adds_anymore_is_a_plugin_problem(stub):
+    predictor, _ = stub
+    predictor.config["features"] = ["prompt", "a_feature_from_a_plugin"]
+    with pytest.raises(RequestError) as caught:
+        answer(predictor, parse(request())[0])
+    assert caught.value.code == "plugin_failed" and "a_feature_from_a_plugin" in caught.value.message
+
+
+def test_a_free_model_costs_nothing_and_a_model_with_no_price_has_no_cost(stub, monkeypatch):
+    from yardstick_predict import prices
+
+    predictor, model = stub
+    listed = {
+        "free-model": {"input": 0, "output": 0, "cache_read": 0},
+        "free-until-long-prompts": {"input": 0, "output": 0, "long_context": {"above": 200_000, "input": 1}},
+    }
+    monkeypatch.setattr(prices, "price", lambda name: listed.get(name))
+    curve = {"direct": {"mu": 1.0, "sigma": 0.5}, "work": {"mu": 4.0, "sigma": 1.0}}
+    # The model drops a free model's usd head, since it can't learn $0 on a log scale.
+    model.result = {
+        "shape": "two_part_lognormal",
+        "direct_probability": 0.2,
+        "seconds": {"expected": 60.0, "distribution": curve},
+        "tokens": None,
+        "usd": None,
+    }
+    tasks, _, _ = parse(request(models=["free-model", "free-until-long-prompts", "unlisted-model"]))
+    result = answer(predictor, tasks, distribution=True)
+    jsonschema.validate(result, schema("forecast-response.v1.json"))
+    by_model = {f["model"]: f for f in result["forecasts"]}
+    assert by_model["free-model"]["usd"] == 0 and by_model["free-model"]["distribution"]["usd"] is None
+    assert by_model["free-until-long-prompts"]["usd"] is None and by_model["unlisted-model"]["usd"] is None

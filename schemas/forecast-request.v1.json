@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yusufcemaydin/yardstick-predict/schemas/forecast-request.v1.json",
   "title": "yardstick-predict forecast request, version 1",
+  "description": "A field that may be left out may also be null, which means the same as leaving it out.",
   "type": "object",
   "required": [
     "version",
@@ -12,11 +13,18 @@
       "const": 1
     },
     "predictor": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
       "description": "Which predictor to use. Default: your default predictor, set with `yardstick-predict default NAME`."
     },
     "distribution": {
-      "type": "boolean",
+      "type": [
+        "boolean",
+        "null"
+      ],
       "default": false,
       "description": "Also return each forecast's full curve."
     },
@@ -39,7 +47,8 @@
           },
           "prompt": {
             "type": "string",
-            "minLength": 1
+            "pattern": "\\S",
+            "description": "The prompt the agent will get. It needs some text, not only spaces. Like a prompt in training, it's used without the spaces at its ends and only its first 24,000 characters count."
           },
           "models": {
             "type": "array",
@@ -48,41 +57,64 @@
             "items": {
               "type": "string",
               "minLength": 1
-            }
+            },
+            "description": "The AI models to forecast the task on. A model named twice is forecast once."
           },
           "context": {
-            "type": "string",
-            "description": "The conversation so far, if there is one."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The conversation so far, if there is one. Only its last 24,000 characters count."
           },
           "effort": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "The thinking level. Default: the model's most common one."
           },
           "agent": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "claude-code or codex. Default: the model's most common one."
           },
           "origin": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "enum": [
               "program",
-              "person"
+              "person",
+              null
             ],
             "default": "program"
           },
           "skills": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string"
             },
-            "description": "Skills the agent will use, by name. A predictor with the skills feature embeds their descriptions."
+            "description": "Skills known before the task runs, by name: the ones the prompt invokes, and the ones the conversation used before it. A predictor with the skills feature embeds their descriptions."
           },
           "extra": {
-            "type": "object",
+            "type": [
+              "object",
+              "null"
+            ],
             "description": "Values for features you added yourself. Each one reaches your feature as info.extra."
           },
           "project": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "The project's folder name. Features you add can use it."
           }
         }

@@ -190,3 +190,13 @@ def error(text: str) -> None:
     print(f"{_style('31', '39', mark('fail')) if loud else 'Error:'} {first}", file=sys.stderr)
     for part in rest:
         print(f"  {part}", file=sys.stderr)
+
+
+def stopped() -> None:
+    """Say the command stopped, as when you press Ctrl+C, or Ctrl+D at a question. On the error stream.
+
+    So a program reading a JSON answer on standard output never finds these words in it.
+    """
+    _clear()
+    quiet = _style("2", "22", "Stopped.") if sys.stderr.isatty() else "Stopped."
+    print(f"\n  {quiet}", file=sys.stderr, flush=True)

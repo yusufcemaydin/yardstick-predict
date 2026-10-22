@@ -31,17 +31,19 @@ The [request schema](../schemas/forecast-request.v1.json) and the [answer schema
 | `version` | yes | Always `1`. |
 | `tasks` | yes | 1 to 1,000 tasks. |
 | `tasks[].id` | yes | Your name for the task. Each id must be unique in the request. |
-| `tasks[].prompt` | yes | The prompt the agent will get. |
-| `tasks[].models` | yes | 1 to 50 AI models to forecast the task on, by the model's API name. |
-| `tasks[].context` | no | The conversation so far, if the task continues one. Used when the predictor has the `context` feature. |
-| `tasks[].skills` | no | The skills the agent will use, by name. Used when the predictor has the `skills` feature. |
-| `tasks[].effort` | no | The thinking level, such as `high`, `xhigh` or `max`. Default: the level this model ran at most often. |
+| `tasks[].prompt` | yes | The prompt the agent will get. It needs some text, not only spaces. As in training, the spaces at its ends are left out and only its first 24,000 characters count. |
+| `tasks[].models` | yes | 1 to 50 AI models to forecast the task on, by the model's API name. A model named twice is forecast once. |
+| `tasks[].context` | no | The conversation so far, if the task continues one. Used when the predictor has the `context` feature. Only its last 24,000 characters count. |
+| `tasks[].skills` | no | The skills known before the task runs, by name: the ones the prompt invokes, and the ones the conversation used before it. Used when the predictor has the `skills` feature. |
+| `tasks[].effort` | no | The thinking level, such as `high`, `xhigh` or `max`. Default: the level this model ran at most often, with recent tasks counting more. |
 | `tasks[].agent` | no | `claude-code` or `codex`. Default: the agent this model ran in most often. |
 | `tasks[].origin` | no | `program` when a program starts the task, `person` when a person types it. Default: `program`. |
 | `tasks[].project` | no | The project's folder name, for features you add yourself. |
-| `tasks[].extra` | no | Any values your own features need. They reach them as `info.extra`. |
+| `tasks[].extra` | no | Any values your own features need. They reach them as `info.extra`. Past tasks have no extra, so a feature should also work its value out from the task itself. |
 | `distribution` | no | `true` to get each forecast's full curve. Default: `false`. |
 | `predictor` | no | Which predictor to use. Default: your default predictor, set with `yardstick-predict default NAME`. |
+
+A field that isn't needed may also be `null`. That means the same as leaving it out. Any other value of the wrong kind, such as `[]` for `extra` or `""` for `skills`, is an `invalid_request`.
 
 ## The answer
 
@@ -64,7 +66,7 @@ These numbers are an example. There is one forecast for each pair of task and mo
 | `effort` | The effort level the forecast is for: the one in the request, or the level this model ran at most often. |
 | `seconds` | Expected seconds from the prompt until the agent stops and hands control back. In Claude Code runs, time spent waiting for a person to answer or approve is left out. |
 | `tokens` | Expected tokens of every kind: new input, cache writes, cache reads and output, including helper agents. A whole number. |
-| `usd` | Expected cost in US dollars at the model's list price. `null` when the model's price isn't in the price list. |
+| `usd` | Expected cost in US dollars at the model's list price. `null` when the model's price isn't in the price list. `0` for a model whose list price is 0 for everything, with no curve for it in `distribution`. |
 | `reason` | Only when the forecast isn't given: why the numbers are `null`. |
 
 A predictor can be set to forecast only some of `seconds`, `tokens` and `usd`. The others are always `null`. A value the test couldn't check for an AI model is `null` too, such as `usd` on a model whose cost it couldn't test.
@@ -76,7 +78,7 @@ Expected values are averages, not middles. A few long runs pull the average abov
 | Reason | What it means |
 |---|---|
 | `unknown_model` | The predictor has never seen a task on this model. |
-| `not_enough_data` | Too few tasks on this model to test its forecasts. A model needs 30 earlier tasks and 30 test tasks. |
+| `not_enough_data` | Too few tasks on this model to test its forecasts. A model needs 30 earlier tasks and 30 test tasks. A request for an effort level the model never ran at gets it too. |
 | `not_accurate_enough` | The forecasts on this model didn't pass the test. `yardstick-predict status` shows which check failed. |
 
 ### Errors
@@ -89,13 +91,20 @@ When the whole request can't be answered, the answer has an `error` instead of `
 
 | Code | What it means |
 |---|---|
-| `invalid_request` | The request breaks a rule above. The message says which. |
+| `invalid_request` | The request breaks a rule above. The message says which. A program gets it too when it runs `predict` with a command line it can't read, such as a flag it doesn't know. |
 | `no_predictor` | No predictor exists yet. |
+| `no_default_predictor` | There are several predictors, none is the default, and the request names none. Name one in `predictor`, or choose a default with `yardstick-predict default NAME`. |
 | `unknown_predictor` | The request names a predictor that doesn't exist. |
+| `broken_predictor` | The predictor's settings file can't be read, or is empty or broken. The message says which file. |
+| `plugin_failed` | A plugin the predictor uses couldn't be loaded. The message says which, and why. |
 | `not_trained` | The predictor has no model yet. |
 | `no_embedding_key` | No Voyage key was found. |
 | `embedding_failed` | Voyage couldn't embed the request's text. The message gives Voyage's reason. |
 | `missing_library` | A library the model needs is missing. The message says how to add it. |
+| `model_too_new` | The predictor's model was saved by a newer version of yardstick-predict. Upgrade with `uv tool upgrade yardstick-predict`. |
+| `internal_error` | Something went wrong that the tool didn't expect. The message says what. Please report it. |
+
+Whatever goes wrong, a program that runs `predict` finds only the JSON answer on standard output, never a traceback or other text.
 
 ## The distribution
 
