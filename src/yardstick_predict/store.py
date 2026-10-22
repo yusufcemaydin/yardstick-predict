@@ -148,6 +148,10 @@ class Predictor:
         """How many model calls each stored task has."""
         return dict(self.db.execute("SELECT id, calls FROM tasks"))
 
+    def stopped_ids(self) -> set[str]:
+        """The stored tasks marked stopped."""
+        return {row[0] for row in self.db.execute("SELECT id FROM tasks WHERE stopped")}
+
     def count_tasks(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 

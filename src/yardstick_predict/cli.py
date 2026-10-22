@@ -647,7 +647,7 @@ def cmd_refresh(args) -> int:
     ui.ok(f"Found {len(found.new_tasks):,} new tasks" + (f": {ui.join(counts)}" if counts else "."))
     if found.updated_tasks:
         grew = len(found.updated_tasks)
-        ui.note(f"{grew:,} saved tasks grew, because their helper agents finished after the last refresh.")
+        ui.note(f"{grew:,} saved tasks grew, because they or their helper agents finished after the last refresh.")
     has_model = (predictor.model_dir / "model.json").is_file()
     behind = bool(predictor.config.get("needs_training"))
     if behind and has_model:
@@ -659,7 +659,9 @@ def cmd_refresh(args) -> int:
 
     chosen = chosen_features(predictor)
     have = {name: predictor.embedded(name) for name in chosen if features.is_text(name)}
-    everything = predictor.tasks() + found.new_tasks
+    # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished.
+    updated = {task.id: task for task in found.updated_tasks}
+    everything = [updated.get(task.id, task) for task in predictor.tasks()] + found.new_tasks
     pending = embedding_items(everything, chosen, have, predictor.config.get("max_tasks"))
     plan = price(pending, model_name, key)
     nothing_new = not found.new_tasks and not found.updated_tasks and not plan.items and not behind

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-from builders import ClaudeSession, history
+from builders import ClaudeSession, CodexSession, history
 from conftest import KEY
 
 from yardstick_predict import benchmarks, cli, embeddings, model_types
@@ -318,6 +318,31 @@ def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, r
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "Nothing new" in out
     assert trained == [420, 423]
+
+
+def test_a_task_that_finishes_after_it_was_saved_as_stopped_is_embedded(tmp_path, capsys, ready, monkeypatch):
+    class Stub:
+        meta = {"tasks": 0, "report": {}}
+
+        def save(self, folder):
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "model.json").write_text(json.dumps(self.meta))
+
+    monkeypatch.setitem(model_types._TYPES, "stub", (lambda tasks, rows, settings: Stub(), lambda folder: Stub()))
+    runs = tmp_path / "codex-runs"
+    session = CodexSession(runs, "c1", START)
+    session.turn("t1", "Run the long build", calls=[(1000, 0, 100)], seconds=60)
+    finished = session.lines.pop()  # the completion hasn't been written yet
+    session.save(mtime=START)
+    code, out = run(capsys, "create", "--yes", "--archive", f"codex={runs}", "--features", "", "--model-type", "stub")
+    assert code == 0, out
+    assert not Predictor("default").embedded("prompt")  # saved as stopped, so not learned from
+
+    session.lines.append(finished)
+    session.save(mtime=START + 3600)
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 0, out
+    assert Predictor("default").embedded("prompt") == {"codex:t1"}
 
 
 def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, ready, monkeypatch):

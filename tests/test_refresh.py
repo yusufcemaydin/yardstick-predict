@@ -126,6 +126,30 @@ def test_a_codex_helper_that_a_helper_spawns_later_is_added_to_the_main_task(tmp
     assert stored(predictor, "Split the work").input_tokens == 1250
 
 
+def test_a_codex_task_read_before_it_finished_is_repaired_when_it_finishes(tmp_path):
+    live = {"name": "codex", "format": "codex", "path": str(tmp_path / "live")}
+    session = CodexSession(tmp_path / "live", "c1", START)
+    session.turn("t1", "Run the long build", calls=[(1000, 0, 100)], seconds=60)
+    finished = session.lines.pop()  # the completion hasn't been written yet
+    session.save(mtime=START)
+    predictor = predictor_for(live)
+    assert stored(predictor, "Run the long build").stopped  # quiet so long that it looked abandoned
+
+    session.lines.append(finished)
+    session.save(mtime=START + 3600)
+    found = scan(predictor, now=LATER)
+    assert [t.stopped for t in found.updated_tasks] == [False]
+    save_scan(predictor, found)
+    assert not stored(predictor, "Run the long build").stopped
+
+    # A copy saved before it finished, such as in a backup, loses to the finished one.
+    early = CodexSession(tmp_path / "backup", "c1", START)
+    early.lines = session.lines[:-1]
+    early.save(mtime=START)
+    backup = {"name": "backup", "format": "codex", "path": str(tmp_path / "backup")}
+    assert [t.stopped for t in read_all([backup, live], now=LATER).new_tasks] == [False]
+
+
 def test_when_two_archives_hold_the_same_task_the_most_complete_copy_wins(tmp_path):
     archives = [
         {"name": "backup", "format": "claude-code", "path": str(tmp_path / "backup")},

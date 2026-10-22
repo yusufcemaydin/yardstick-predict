@@ -176,15 +176,21 @@ def read_archive(archive: dict, only: set[str] | None = None, now: float | None 
     raise ValueError(f"Unknown archive format {archive['format']!r}. Use one of: {', '.join(FORMATS)}.")
 
 
+def completeness(task: Task) -> tuple[int, bool]:
+    """How complete a copy of a task is: its model calls first, then whether it finished rather than stopped."""
+    return task.calls, not task.stopped
+
+
 def keep_most_complete(tasks: dict[str, Task], task: Task) -> None:
-    """Keep the copy of a task with the most model calls.
+    """Keep the copy of a task with the most model calls. With as many calls, a finished copy beats a stopped one.
 
     A helper that finishes later adds calls to its parent. A copy of a task in a resumed session
     can't see the original's helpers, so it has fewer calls and never replaces the original. The
     same goes for a copy in another archive, such as a backup made before the helper finished.
+    A task read before its completion arrived looks stopped, so its finished copy wins.
     """
     kept = tasks.get(task.id)
-    if kept is None or task.calls > kept.calls:
+    if kept is None or completeness(task) > completeness(kept):
         tasks[task.id] = task
 
 

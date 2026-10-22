@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import benchmarks, embeddings, features, model_types
-from .archives import SETTLE_SECONDS, Task, codex_families, keep_most_complete, read_archive, record_files
+from .archives import SETTLE_SECONDS, Task, codex_families, completeness, keep_most_complete, read_archive, record_files
 from .store import Predictor
 
 
@@ -21,7 +21,8 @@ class Scan:
     files: dict[str, tuple[int, float]] = field(default_factory=dict)
     per_archive: dict[str, int] = field(default_factory=dict)
     updated_tasks: list[Task] = field(default_factory=list)
-    """Tasks already stored that now have more model calls, such as a parent whose helper finished later."""
+    """Tasks already stored that are now more complete. Such a task has more model calls, as when a helper
+    finished later, or as many calls and it finished after it was read as stopped."""
 
 
 def scan(predictor: Predictor, now: float | None = None) -> Scan:
@@ -29,6 +30,7 @@ def scan(predictor: Predictor, now: float | None = None) -> Scan:
     now = time.time() if now is None else now
     known_files = predictor.known_files()
     known_calls = predictor.known_calls()
+    stopped = predictor.stopped_ids()
     result = Scan(new_tasks=[])
     # A task can be in more than one archive, such as in a backup. Only its most complete copy counts.
     copies: dict[str, Task] = {}
@@ -58,7 +60,7 @@ def scan(predictor: Predictor, now: float | None = None) -> Scan:
         if task.id not in known_calls:
             result.new_tasks.append(task)
             result.per_archive[task.archive] = result.per_archive.get(task.archive, 0) + 1
-        elif task.calls > known_calls[task.id]:
+        elif completeness(task) > (known_calls[task.id], task.id not in stopped):
             result.updated_tasks.append(task)
     return result
 
