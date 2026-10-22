@@ -115,7 +115,7 @@ def test_training_learns_and_gives_forecasts_only_where_they_passed():
     tasks = synthetic(900)
     model = M.train(tasks, rows_for(tasks))
     report = model.meta["report"]
-    assert report["tested_on"] > 0 and report["windows"] == 3
+    assert report["tested_on"] > 0 and report["windows"] == 6  # three for each of the two AI models
     opus = report["models"]["claude-opus-5-5"]
     assert opus["served"], opus
     assert opus["seconds"]["better_than_simple_rule"] > 0.05
@@ -258,11 +258,14 @@ def test_a_test_window_learns_only_from_tasks_that_finished_before_it_starts(mon
     monkeypatch.setattr(M, "fit", fit)
     monkeypatch.setattr(M, "_score_window", score)
     M.test(tasks, rows_for(tasks), {})
-    assert len(learned) == len(scored) == 3
-    for fitted, (simple_rule, window) in zip(learned, scored):
+    # Three windows for each AI model. Two that open with the same tasks known share one trial.
+    assert len(scored) == 6 and len(learned) <= len(scored)
+    for simple_rule, window in scored:
+        assert len({t.model for t in window}) == 1  # a window forecasts only its own AI model's tasks
         opens = min(t.started_at for t in window)
         finished = [t.id for t in tasks if t.started_at + t.seconds <= opens]
-        assert [t.id for t in fitted] == [t.id for t in simple_rule] == finished
+        assert [t.id for t in simple_rule] == finished  # what it learned from, of every AI model
+    assert all([t.id for t in fitted] in [[t.id for t in s] for s, _ in scored] for fitted in learned)
 
 
 def kinds(n: int = 900, seed: int = 3):
@@ -512,18 +515,31 @@ def test_the_simple_rule_and_the_starting_curves_are_never_narrower_than_a_forec
     assert math.exp(start["claude-opus-5-5"][1]) == pytest.approx(M.WIDTH_RANGE[0])
 
 
-def test_the_fewest_tasks_to_test_follow_the_settings():
-    assert M.min_tasks_to_test({}) == 100
-    assert M.min_tasks_to_test({"test_share": 0.5}) == 60
-    tasks = synthetic(60)
-    report = M.test(tasks, rows_for(tasks), {"test_share": 0.5})
-    assert report["min_tasks_to_test"] == 60 and report["windows"] > 0
-    report = M.test(tasks[:59], rows_for(tasks[:59]), {"test_share": 0.5})
+def test_an_ai_model_needs_60_tasks_of_its_own_to_be_tested_whatever_the_share():
+    assert M.min_tasks_to_test({}) == M.min_tasks_to_test({"test_share": 0.5}) == 60
+    tasks = synthetic(60, models=("claude-opus-5-5",))
+    report = M.test(tasks, rows_for(tasks), {})
+    # 30% of 60 is 18, but a model is tested on at least 30 of its tasks, with 30 before them.
+    assert report["min_tasks_to_test"] == 60 and report["tested_on"] == 30
+    assert report["models"]["claude-opus-5-5"]["tasks"] == 60
+    report = M.test(tasks[:59], rows_for(tasks[:59]), {})
     assert (report["min_tasks_to_test"], report["windows"], report["tested_on"]) == (60, 0, 0)
 
 
+def test_each_ai_model_is_tested_on_its_own_newest_tasks_however_many_came_after_on_others():
+    # GPT ran 100 tasks first. Then Claude ran 400, more than the newest 30% of all the tasks.
+    tasks = synthetic(100, models=("gpt-6.1-sol",)) + synthetic(400, models=("claude-opus-5-5",), seed=1)
+    for i, t in enumerate(tasks):
+        t.id, t.started_at = f"t{i}", START + i * 600
+    report = M.test(tasks, rows_for(tasks), {})
+    gpt, claude = report["models"]["gpt-6.1-sol"], report["models"]["claude-opus-5-5"]
+    assert gpt["tasks_tested"] == 30 and claude["tasks_tested"] == 120  # 30% of each model's own tasks
+    assert report["windows"] == 6 and report["tested_on"] == 150
+    assert gpt["reason"] != "not_enough_data"
+
+
 def test_tested_on_counts_only_the_windows_that_ran():
-    tasks = synthetic(100)  # windows open at tasks 70, 80 and 90
+    tasks = synthetic(100, models=("claude-opus-5-5",))  # windows open at tasks 70, 80 and 90
     for i, t in enumerate(tasks[:70]):
         t.seconds = 45_000 - 600 * i  # each finishes after task 70 started, before task 80 did
     report = M.test(tasks, rows_for(tasks), {})
@@ -543,8 +559,8 @@ def test_a_test_window_reuses_the_similar_task_numbers_it_would_work_out_itself(
     np.testing.assert_allclose(every[known], alone, rtol=1e-5, atol=1e-6)  # the same tasks, up to rounding
     calls, real = [], M._similar_features
     monkeypatch.setattr(M, "_similar_features", lambda *args: calls.append(args) or real(*args))
-    assert M.test(tasks, rows, {})["windows"] == 3
-    assert len(calls) == 1  # worked out once for all three windows
+    assert M.test(tasks, rows, {})["windows"] == 6  # three for each of the two AI models
+    assert len(calls) == 1  # worked out once for all six windows
 
 
 def test_the_weibull_crps_comes_out_the_same_worked_out_in_blocks():

@@ -1252,35 +1252,52 @@ def simple_rule(train_tasks: list[Task], target: str) -> dict:
     return rules
 
 
-def _window_size(tasks: int, settings: dict) -> int:
-    """How many tasks each test window holds. The last window also takes any left over."""
-    return max(int(tasks * settings["test_share"] / settings["test_windows"]), 1)
-
-
 def min_tasks_to_test(settings: dict | None = None) -> int:
-    """The fewest tasks with which the test can judge an AI model, with these settings.
+    """The fewest tasks an AI model needs before the test can judge it.
 
-    The test needs MIN_TEST_TASKS tasks to test on, and at least as many before them to learn from.
+    Each AI model is tested on at least MIN_TEST_TASKS of its own newest tasks, with at least as many of its
+    tasks before them to learn from, whatever share the settings test.
     """
-    settings = settings_for(settings)
-    tasks = 2 * MIN_TEST_TASKS
-    while True:
-        tested = _window_size(tasks, settings) * settings["test_windows"]
-        if tested >= MIN_TEST_TASKS and tasks - tested >= MIN_TEST_TASKS:
-            return tasks
-        tasks += 1
+    settings_for(settings)
+    return 2 * MIN_TEST_TASKS
+
+
+def _test_windows(tasks: list[Task], settings: dict) -> list[tuple[str, list[int]]]:
+    """Each AI model's test windows, as the positions of its tasks, the windows opening earliest first.
+
+    An AI model is tested on its own newest tasks: the test share of them, and at least MIN_TEST_TASKS, as
+    long as at least MIN_TEST_TASKS of its tasks stay before them. So a model used mostly long ago is still
+    tested on its newest tasks, however many tasks on other models came after. They're split into windows,
+    oldest first, and the last window also takes any left over.
+    """
+    by_model: dict[str, list[int]] = {}
+    for i, t in enumerate(tasks):
+        by_model.setdefault(t.model, []).append(i)
+    found = []
+    for model, positions in by_model.items():
+        size = min(max(int(len(positions) * settings["test_share"]), MIN_TEST_TASKS), len(positions) - MIN_TEST_TASKS)
+        if size < MIN_TEST_TASKS:
+            continue
+        newest, count = positions[-size:], settings["test_windows"]
+        each = max(size // count, 1)
+        for k in range(count):
+            part = newest[k * each : (k + 1) * each] if k < count - 1 else newest[k * each :]
+            if part:
+                found.append((model, part))
+    return sorted(found, key=lambda window: (window[1][0], window[0]))
 
 
 def test(tasks: list[Task], rows: list[Features], settings: dict, similar: dict[str, np.ndarray] | None = None) -> dict:
-    """Forecast the newest tasks window by window, each from the tasks before it, and judge each AI model.
+    """Forecast each AI model's newest tasks window by window, each from the tasks before it, and judge each model.
 
-    A window learns only from tasks that had finished when it starts. A task that started earlier but
-    was still running then hadn't shown its outcome yet. `similar` is what _similar_features gives for
-    all the tasks, when it was worked out before.
+    A window learns from the tasks on every AI model that had finished when it opens. A task that started
+    earlier but was still running then hadn't shown its outcome yet. Only the window's own model's tasks are
+    forecast in it. `similar` is what _similar_features gives for all the tasks, when it was worked out before.
     """
     settings = settings_for(settings)
     least = min_tasks_to_test(settings)
-    if len(tasks) < least:
+    windows = _test_windows(tasks, settings)
+    if not windows:
         return {
             "trained_on": len(tasks),
             "tested_on": 0,
@@ -1291,27 +1308,32 @@ def test(tasks: list[Task], rows: list[Features], settings: dict, similar: dict[
         }
     if similar is None:
         similar = _similar_features(tasks, rows)
-    windows = settings["test_windows"]
-    size = _window_size(len(tasks), settings)
-    first = len(tasks) - size * windows
     finished = finish_times(tasks)
-    scored, ran = [], []
-    for k in range(windows):
-        cut = first + k * size
-        end = cut + size if k < windows - 1 else len(tasks)
-        known = [i for i in range(cut) if finished[i] <= tasks[cut].started_at]
+    scored, learned_from, tested_on = [], [], 0
+    last: tuple[int, Model, list[Task]] | None = None
+    for _, part in windows:
+        opens = part[0]
+        known = [i for i in range(opens) if finished[i] <= tasks[opens].started_at]
         if len(known) < MIN_TASKS:
             continue
-        train_tasks, train_rows = [tasks[i] for i in known], [rows[i] for i in known]
-        # A task's similar tasks had all finished before it started, so before this window opened too.
-        trial = fit(train_tasks, train_rows, settings, {name: found[known] for name, found in similar.items()})
-        scored.append(_score_window(trial, train_tasks, tasks[cut:end], rows[cut:end]))
-        ran.append((cut, end))
+        # Windows of two AI models that open with the same tasks known share one trial. The tasks known only
+        # grow as windows open later, so the same number of them means the same tasks.
+        if last is None or last[0] != len(known):
+            train_tasks, train_rows = [tasks[i] for i in known], [rows[i] for i in known]
+            # A task's similar tasks had all finished before it started, so before this window opened too.
+            sliced = {name: found[known] for name, found in similar.items()}
+            last = (len(known), fit(train_tasks, train_rows, settings, sliced), train_tasks)
+        _, trial, train_tasks = last
+        scored.append(_score_window(trial, train_tasks, [tasks[i] for i in part], [rows[i] for i in part]))
+        learned_from.append(len(known))
+        tested_on += len(part)
     seen = sorted({t.model for t in tasks})
-    # A window with too few finished tasks before it never ran, so its tasks weren't tested. It can only be
-    # one of the oldest windows, so the tasks tested are still the newest.
-    trained_on, tested_on = (ran[0][0], sum(end - cut for cut, end in ran)) if ran else (first, 0)
+    # A window with too few finished tasks before it never ran, so its tasks weren't tested.
+    trained_on = min(learned_from) if learned_from else len(tasks)
     report = _verdicts(scored, trained_on=trained_on, tested_on=tested_on, settings=settings, seen=seen)
+    counts = Counter(t.model for t in tasks)
+    for model, result in report["models"].items():
+        result["tasks"] = counts[model]  # so a model with too few tasks can say how many it has
     report["min_tasks_to_test"] = least
     report["thresholds"] = {
         "min_test_tasks": MIN_TEST_TASKS,

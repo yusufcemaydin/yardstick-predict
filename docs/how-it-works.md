@@ -82,7 +82,7 @@ Experts can change the model with flags on `create`:
 
 Before it gives any forecast, the predictor tests itself on tasks it hasn't seen.
 
-It replays the newest 30% of tasks in three windows, oldest first. Each window is forecast by a model trained only on the tasks that had finished before it opened, waits for you and helpers included. Using three windows means one unusual week can't decide the verdict alone.
+It replays each AI model's own newest 30% of tasks, and at least 30 of them, in three windows, oldest first. Each window is forecast by a model trained only on the tasks, on every AI model, that had finished before it opened, waits for you and helpers included. Testing each AI model on its own newest tasks means a burst of tasks on one model can't push another model's tasks out of the test. Using three windows means one unusual week can't decide the verdict alone.
 
 Each AI model's forecasts are then scored against **the simple rule**: the same forecast for every task on that model, the spread of its past tasks. To be given, a model's forecasts must pass every check, for every head:
 
@@ -90,7 +90,7 @@ Each AI model's forecasts are then scored against **the simple rule**: the same 
 2. **Keep the ranges honest.** For curves, at least 75% of real results must fall inside the 90% range.
 3. **Add up.** The expected values must add up to between half and twice the real total.
 
-A model also needs 30 earlier tasks and 30 test tasks, so the test needs 100 tasks in all before it can judge any model, with the default settings. A window that has too few finished tasks before it doesn't run, and its tasks don't count as tested. A model that fails gets `null` forecasts and a reason. So does an effort level the model never ran at: nothing was learned about it. `yardstick-predict status` shows the scores and which check failed.
+A model also needs 30 earlier tasks and 30 test tasks, so it needs 60 tasks of its own before the test can judge it. A window that has too few finished tasks before it doesn't run, and its tasks don't count as tested. A model that fails gets `null` forecasts and a reason. So does an effort level the model never ran at: nothing was learned about it. `yardstick-predict status` shows the scores and which check failed.
 
 ## 5. On a Mac
 

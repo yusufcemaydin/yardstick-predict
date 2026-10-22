@@ -151,13 +151,13 @@ One request can hold up to 1,000 tasks, each on up to 50 models. The format is f
 
 ## How it tests itself
 
-A forecast you can't trust is worse than none, because a program acts on it. So before it gives any forecast, a predictor replays your newest 30% of tasks in three windows. Each window is forecast by a model trained only on the tasks before it. Then each AI model must pass three checks:
+A forecast you can't trust is worse than none, because a program acts on it. So before it gives any forecast, a predictor replays each AI model's newest 30% of tasks in three windows. Each window is forecast by a model trained only on the tasks that finished before it, on every AI model. So a model you used less lately is still tested on its own newest tasks. Then each AI model must pass three checks:
 
 1. **Beat the simple rule.** The simple rule gives every task on a model the same forecast: the spread of that model's past tasks. The forecasts must score at least as well on CRPS, the standard score for probability forecasts, within 2%.
 2. **Keep its ranges honest.** At least 75% of real results must fall inside the 90% range.
 3. **Add up.** The expected values must add up to between half and twice the real total.
 
-A model that fails a check gets `null` and a reason. So does an effort level the model never ran at. `yardstick-predict status` shows the scores and which check failed. The test needs 100 tasks before it can judge anything, and each AI model needs 30 to test on and 30 before them. Much of how long an agent takes is chance, so the predictor's job is to be honest about that spread, and to narrow it where your data allows.
+A model that fails a check gets `null` and a reason. So does an effort level the model never ran at. `yardstick-predict status` shows the scores and which check failed. Each AI model needs 60 tasks of its own: at least 30 to test on and 30 before them. Much of how long an agent takes is chance, so the predictor's job is to be honest about that spread, and to narrow it where your data allows.
 
 ## Advanced settings
 
@@ -171,8 +171,8 @@ These are for experts and have sensible defaults. The guided setup never asks ab
 | `--shape` | The curve's shape: `lognormal` or `weibull`. Only curves have one. | `lognormal` |
 | `--loss` | What training minimizes: `log_score` or `crps` for curves, `gamma` or `tweedie` for expected values. | `log_score` |
 | `--dropout` | The share of trees dropped each round, from 0 to 0.9. | `0` |
-| `--test-share` | The share of newest tasks held back as the test. | `0.3` |
-| `--test-windows` | How many windows the test is split into. | `3` |
+| `--test-share` | The share of each AI model's newest tasks held back as the test, and at least 30. | `0.3` |
+| `--test-windows` | How many windows each AI model's test is split into. | `3` |
 | `--validation-share` | The share of training tasks that decides when to stop adding trees. | `0.15` |
 | `--half-life` | Days until a task counts half as much as the newest. `0` counts every task alike. | `30` |
 

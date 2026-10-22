@@ -82,7 +82,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     code, out = run(capsys, "status", "--json")
     status = json.loads(out)["predictors"][0]
     assert status["tasks"] == 420 and status["features"] == ["prompt", "context"]
-    assert status["report"]["windows"] == 3
+    assert status["report"]["windows"] == 6  # three for each of the two AI models
 
 
 def test_adding_a_folder_is_optional_only_once_some_records_are_chosen(tmp_path, monkeypatch, capsys):
@@ -1063,3 +1063,12 @@ def test_a_predictor_read_by_an_older_reader_reads_its_records_again_once(capsys
     assert Predictor("default").config["reader"] == READER_VERSION
     assert main(["refresh", "--yes"]) == 0
     assert "read them all again" not in capsys.readouterr().out  # only once
+
+
+def test_the_report_says_how_many_tasks_of_its_own_each_ai_model_needs(capsys):
+    cli.print_report({"report": {"tested_on": 0, "min_tasks_to_test": 60, "models": {}}})
+    assert "Each AI model needs 60 of its own" in capsys.readouterr().out
+    few = {"served": False, "reason": "not_enough_data", "tasks_tested": 0, "tasks": 12, "failed_checks": []}
+    cli.print_report({"report": {"tested_on": 40, "min_tasks_to_test": 60, "models": {"claude-opus-5-5": few}}})
+    out = capsys.readouterr().out
+    assert "Tested on each AI model's newest tasks, 40 in all" in out and "12 tasks, needs 60" in out

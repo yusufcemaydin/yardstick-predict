@@ -76,6 +76,7 @@ Records are read more accurately again, and this time your predictors catch up b
 
 - The `skills` feature now uses only the skills known before a task runs: the ones its prompt invokes and the ones the conversation used before it. The skills a task went on to use can't be known when it's forecast, so learning from them made the test look better than real forecasts are. A predictor with this feature embeds its skills again once. The status line's forecasts send them too.
 - Installing the status line warns when your Voyage key is only in the environment, where Claude Code may not see it, and offers to keep it in your password store.
+- Each AI model is tested on its own newest tasks: 30% of them, and at least 30. Before, the test used the newest 30% of all tasks, so a burst of tasks on one model could push another model out of the test, and cost it its forecasts. An AI model now needs 60 tasks of its own to be tested.
 - An effort level that an AI model never ran at gets no forecast, with the reason `not_enough_data`. A request with no effort level gets the level the model ran at most often lately.
 - Each effort level gets its own starting curve, pulled toward its AI model's.
 - A free AI model's cost is `0`.

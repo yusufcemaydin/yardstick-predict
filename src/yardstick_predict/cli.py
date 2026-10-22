@@ -388,15 +388,16 @@ def thresholds(report: dict) -> dict:
 def print_report(meta: dict) -> None:
     """How the test went for each AI model, from the meta a trained model saves."""
     report = meta.get("report") or {}
+    needed = report.get("min_tasks_to_test") or 60
     if not report.get("tested_on"):
-        needed = report.get("min_tasks_to_test") or 100
         ui.note(
-            f"There aren't enough tasks to test forecasts yet. It needs {needed:,}. Until then, it gives no forecasts."
+            f"There aren't enough tasks to test forecasts yet. Each AI model needs {needed:,} of its own. "
+            "Until then, it gives no forecasts."
         )
         return
     checks = thresholds(report)
     least = checks["min_test_tasks"]
-    ui.line(f"Tested on the newest {report['tested_on']:,} tasks, as if they hadn't happened yet.")
+    ui.line(f"Tested on each AI model's newest tasks, {report['tested_on']:,} in all, as if they hadn't happened yet.")
     ui.line()
     names = {"seconds": "time", "tokens": "tokens", "usd": "cost"}
     results = [(name, report["models"][name]) for name in tested_models(report)]
@@ -422,7 +423,10 @@ def print_report(meta: dict) -> None:
                     rows.append((ui.dim("inside the 90% range"), *(f"{n} {s['in_90_range']:.0%}" for n, s in scores)))
                 ui.table(rows, indent=2 + lead)
         elif result["reason"] == "not_enough_data":
-            if tested == 0:
+            count = result.get("tasks")
+            if tested == 0 and isinstance(count, int) and count < needed:
+                why = f"{count:,} tasks, needs {needed}"
+            elif tested == 0:
                 why = f"needs {least} recent tasks to test it on"
             elif tested < least:
                 why = f"{tested} test tasks, needs {least}"
@@ -1408,8 +1412,10 @@ def make_parser() -> argparse.ArgumentParser:
     advanced.add_argument("--shape", choices=["lognormal", "weibull"], help="The curve's shape. Default: lognormal.")
     advanced.add_argument("--loss", choices=["log_score", "crps", "gamma", "tweedie"], help="What training minimizes.")
     advanced.add_argument("--dropout", type=float, help="Drop this share of trees each round (XGBoost's DART).")
-    advanced.add_argument("--test-share", type=float, help="The share of newest tasks held back as the test.")
-    advanced.add_argument("--test-windows", type=int, help="How many windows the test is split into.")
+    advanced.add_argument(
+        "--test-share", type=float, help="The share of each AI model's newest tasks held back as the test."
+    )
+    advanced.add_argument("--test-windows", type=int, help="How many windows each AI model's test is split into.")
     advanced.add_argument("--validation-share", type=float, help="The share of training tasks that picks rounds.")
     advanced.add_argument("--half-life", type=float, help="Days until a task counts half. 0 counts every task alike.")
 
