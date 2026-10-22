@@ -20,7 +20,6 @@ Please report anything that could:
 
 - run code on someone's computer without their consent, for example through a model file or a saved run record,
 - send a user's tasks, code or run history anywhere they didn't agree to,
-- weaken the privacy guarantee on runs shared with the hosted service,
 - leak API keys or other secrets.
 
 Wrong forecasts aren't security problems. Report those with the "Forecast was way off" issue form.

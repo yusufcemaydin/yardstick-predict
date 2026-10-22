@@ -204,6 +204,26 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | `yardstick-predict predict` | Forecasts tasks. JSON in, JSON out. |
 | `yardstick-predict status` | Shows each predictor, its features and how it did on its test. `--json` for programs. |
 
+## Update or remove it
+
+To get the newest version:
+
+```bash
+uv tool upgrade yardstick-predict
+```
+
+Upgrading doesn't touch your predictors.
+
+To remove everything, uninstall the program, delete its folder and delete the Voyage key it kept:
+
+```bash
+uv tool uninstall yardstick-predict
+rm -rf ~/.yardstick
+uvx keyring del yardstick-predict voyage-api-key
+```
+
+If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the `.yardstick` folder in your user folder. If you only ever used `VOYAGE_API_KEY`, the last line reports that it found no key. That's fine.
+
 ## Privacy and safety
 
 - **Your records stay on your computer.** The dataset and the model live in `~/.yardstick`, or wherever `YARDSTICK_HOME` points. The folder is readable only by you.
