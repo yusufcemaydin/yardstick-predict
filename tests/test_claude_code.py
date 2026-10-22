@@ -149,6 +149,20 @@ def test_the_session_effort_level_picks_the_forecast(tmp_path):
     assert cc._pick(forecasts, "m-20260101", "")["seconds"] == 1  # a dated name, and the usual level
 
 
+def test_a_model_matches_its_dated_name_both_ways_and_never_another_model():
+    dated = [{"model": "claude-opus-4-5-20251101", "effort": "high", "seconds": 60.0}]
+    assert cc._pick(dated, "claude-opus-4-5", "high") == dated[0]  # Claude Code may name the model without a date
+    alias = [{"model": "claude-opus-4-5", "seconds": 30.0}]
+    assert cc._pick(alias, "claude-opus-4-5-20251101", "") == alias[0]
+    assert cc._pick([{"model": "claude-opus-4", "seconds": 9.0}], "claude-opus-4-5", "") is None
+    assert cc._pick([{"model": "claude-opus-4-5-20250101", "seconds": 8.0}], "claude-opus-4-5-20251101", "") is None
+    state_path, forecast_path = cc._paths("s1")
+    state_path.write_text(json.dumps({"prompt_at": 100.0}))
+    forecast_path.write_text(json.dumps({"prompt_at": 100.0, "forecasts": dated}))
+    assert plain(cc.status_line("s1", "claude-opus-4-5[1m]", 172.0)) == "yardstick · 1:12 of ~60 s"
+    assert plain(cc.status_line("s1", "claude-opus-4", 172.0)) == "yardstick · no forecast for claude-opus-4 yet"
+
+
 def test_pressing_esc_stops_the_clock(tmp_path):
     record = tmp_path / "session.jsonl"
     stopped = {

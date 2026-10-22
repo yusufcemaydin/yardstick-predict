@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -320,9 +321,25 @@ def _text(event: dict) -> str:
 
 def _pick(forecasts: list[dict], model: str, effort: str) -> dict | None:
     mine = [f for f in forecasts if f.get("model") == model]
-    if not mine:  # Claude Code may name a model with a date after it
-        mine = [f for f in forecasts if model.startswith(str(f.get("model") or "~"))]
+    if not mine:  # Claude Code may name a model with a date after it, or without the date its records have
+        mine = [f for f in forecasts if _same_model(str(f.get("model") or ""), model)]
     return next((f for f in mine if f.get("effort") == effort), mine[0] if mine else None)
+
+
+def _same_model(one: str, other: str) -> bool:
+    """Whether two names are one model, as claude-opus-4-5[1m] and claude-opus-4-5-20251101 are.
+
+    A [..] suffix doesn't count, and neither does a date at the end when only one name has it. Two
+    different dates are two versions of a model, so they don't match.
+    """
+    (name, date), (other_name, other_date) = _name_and_date(one), _name_and_date(other)
+    return name == other_name and (not date or not other_date or date == other_date)
+
+
+def _name_and_date(model: str) -> tuple[str, str]:
+    name = model.split("[")[0].strip()
+    found = re.search(r"-(\d{8})$", name)
+    return (name[: found.start()], found.group(1)) if found else (name, "")
 
 
 def _clock(seconds: float) -> str:
