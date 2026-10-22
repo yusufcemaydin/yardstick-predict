@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -147,10 +148,24 @@ def skill_descriptions() -> dict[str, str]:
             if not match:
                 continue
             description = match.group(1).strip().strip("\"'")
+            if re.fullmatch(r"[|>][-+]?", description):
+                description = _block(head[match.end() :], description[0])
             named = re.search(r"^name:\s*(.+)$", head, re.MULTILINE)
             for key in {path.parent.name, named.group(1).strip().strip("\"'") if named else path.parent.name}:
                 found.setdefault(key, description)
     return found
+
+
+def _block(rest: str, style: str) -> str:
+    """The indented lines after a YAML | or >, as one text. | keeps the line breaks, > joins the lines with spaces."""
+    lines = []
+    for line in rest.split("\n")[1:]:
+        if line.strip() and not line[0].isspace():
+            break
+        lines.append(line)
+    if style == ">":
+        return " ".join(line.strip() for line in lines if line.strip())
+    return textwrap.dedent("\n".join(lines)).strip()
 
 
 def skills_text(skills: list[str]) -> str:

@@ -44,6 +44,32 @@ def test_skills_are_embedded_by_their_descriptions(tmp_path, monkeypatch):
     assert "unknown-skill" in text and "custom: does a thing" in text
 
 
+def test_a_skill_description_can_span_several_lines(tmp_path, monkeypatch):
+    blocks = {
+        "fold": "description: >\n  Plan the work\n  before you start.\n",
+        "fold-keep": "description: >+\n  Review the change\n  line by line.\n\n",
+        "lines": "description: |\n  Write the test first.\n  Then the code.\n",
+        "lines-strip": "description: |-\n  Keep it short.\n\n  Keep it clear.\n",
+    }
+    for name, block in blocks.items():
+        skill = tmp_path / ".claude" / "skills" / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(f"---\n{block}name: {name}\n---\nBody")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    features.skill_descriptions.cache_clear()
+    try:
+        text = features.skills_text(list(blocks))
+    finally:
+        features.skill_descriptions.cache_clear()
+    assert text == (
+        "fold: Plan the work before you start.\n"
+        "fold-keep: Review the change line by line.\n"
+        "lines: Write the test first.\nThen the code.\n"
+        "lines-strip: Keep it short.\n\nKeep it clear."
+    )
+
+
 def test_the_reader_records_which_skills_a_task_used(tmp_path):
     session = ClaudeSession(tmp_path, "s1", START)
     line = session.prompt("Design the page")
