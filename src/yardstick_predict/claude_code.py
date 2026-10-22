@@ -78,7 +78,7 @@ def hook() -> int:
         event = json.load(sys.stdin)
     except ValueError:
         return 0
-    session = str(event.get("session_id") or "")
+    session = str(event.get("session_id") or "") if isinstance(event, dict) else ""
     if not session:
         return 0
     state_path, _ = _paths(session)
@@ -86,7 +86,7 @@ def hook() -> int:
         prompt = str(event.get("prompt") or "")
         if not prompt.strip():
             return 0
-        transcript = event.get("transcript_path")
+        transcript = _record(event)
         model, effort = last_model_and_effort(transcript)
         prompt_at = time.time()
         _write(state_path, {"prompt_at": prompt_at, "model": model, "effort": effort, "transcript": transcript})
@@ -250,11 +250,24 @@ def status() -> int:
         event = json.load(sys.stdin)
     except ValueError:
         event = {}
-    model = str((event.get("model") or {}).get("id") or "")
-    effort = str((event.get("effort") or {}).get("level") or "")
+    event = event if isinstance(event, dict) else {}
+    model, effort = _named(event.get("model"), "id"), _named(event.get("effort"), "level")
     session = str(event.get("session_id") or "")
-    print(status_line(session, model, time.time(), effort, event.get("transcript_path")))
+    print(status_line(session, model, time.time(), effort, _record(event)))
     return 0
+
+
+def _named(value: object, key: str) -> str:
+    """The model's id or the effort level, sent as an object such as {"id": ...} or as plain text."""
+    if isinstance(value, dict):
+        value = value.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _record(event: dict) -> str | None:
+    """The path of the session's record, when Claude Code sent one."""
+    path = event.get("transcript_path")
+    return path if isinstance(path, str) and path else None
 
 
 def status_line(session: str, model: str, now: float, effort: str = "", transcript: str | None = None) -> str:
@@ -374,44 +387,67 @@ def commands(python: str) -> tuple[str, str]:
 
 
 def added(settings: dict, python: str) -> dict:
-    """The settings with the hook on each prompt and each stop, and the status line. Nothing else changes."""
+    """The settings with the hook on each prompt and each stop, and the status line. Nothing else changes.
+
+    Hooks in a shape Claude Code doesn't read, such as null or text, are left as they are, without ours.
+    """
     hook_command, status_command = commands(python)
     result = json.loads(json.dumps(settings))
+    if not isinstance(result, dict):
+        return result
     hooks = result.setdefault("hooks", {})
-    for event in ("UserPromptSubmit", *STOPS):
-        groups = [g for g in hooks.get(event, []) if not _ours(g)]
-        groups.append({"hooks": [{"type": "command", "command": hook_command}]})
-        hooks[event] = groups
+    if isinstance(hooks, dict):
+        for event in ("UserPromptSubmit", *STOPS):
+            groups = hooks.setdefault(event, [])
+            if isinstance(groups, list):
+                hooks[event] = [*_without_ours(groups), {"hooks": [{"type": "command", "command": hook_command}]}]
     # Without a timer the line redraws only when the agent writes a message. Once a second, the clock ticks.
     result["statusLine"] = {"type": "command", "command": status_command, "padding": 0, "refreshInterval": 1}
     return result
 
 
 def removed(settings: dict) -> dict:
-    """The settings without anything this module added."""
+    """The settings without anything this module added. Everything else stays as it is, whatever its shape."""
     result = json.loads(json.dumps(settings))
-    hooks = result.get("hooks") or {}
-    for event in list(hooks):
-        kept = [g for g in hooks[event] if not _ours(g)]
-        if kept:
-            hooks[event] = kept
-        else:
-            del hooks[event]
-    if "hooks" in result and not result["hooks"]:
-        del result["hooks"]
-    if MARK in str((result.get("statusLine") or {}).get("command", "")):
+    if not isinstance(result, dict):
+        return result
+    hooks = result.get("hooks")
+    if isinstance(hooks, dict):
+        for event, groups in list(hooks.items()):
+            if isinstance(groups, list) and (kept := _without_ours(groups)) != groups:
+                if kept:
+                    hooks[event] = kept
+                else:
+                    del hooks[event]  # it held only ours
+        if not hooks and settings["hooks"]:
+            del result["hooks"]  # it held only ours
+    line = result.get("statusLine")
+    if isinstance(line, dict) and MARK in str(line.get("command") or ""):
         del result["statusLine"]
     return result
 
 
-def _ours(group: dict) -> bool:
-    return any(MARK in str(entry.get("command", "")) for entry in group.get("hooks", []))
+def _without_ours(groups: list) -> list:
+    """Hook groups without this module's commands. A group that held only ours goes too."""
+    kept = []
+    for group in groups:
+        entries = group.get("hooks") if isinstance(group, dict) else None
+        if not isinstance(entries, list) or not any(_ours(entry) for entry in entries):
+            kept.append(group)
+        elif rest := [entry for entry in entries if not _ours(entry)]:
+            kept.append({**group, "hooks": rest})
+    return kept
+
+
+def _ours(entry: object) -> bool:
+    return isinstance(entry, dict) and MARK in str(entry.get("command") or "")
 
 
 def other_status_line(settings: dict) -> str | None:
     """The command of a status line someone else set up, which adding this one would replace."""
-    command = str((settings.get("statusLine") or {}).get("command", ""))
-    return command if command and MARK not in command else None
+    line = settings.get("statusLine") if isinstance(settings, dict) else None
+    command = line.get("command") if isinstance(line, dict) else line
+    return command if isinstance(command, str) and command and MARK not in command else None
 
 
 def main(argv: list[str]) -> int:

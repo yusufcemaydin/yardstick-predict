@@ -36,6 +36,27 @@ def test_adding_keeps_your_own_settings_and_removing_puts_them_back():
     assert cc.other_status_line(added) is None
 
 
+def test_odd_shapes_in_your_settings_are_kept_and_never_crash():
+    odd_hooks = {
+        "UserPromptSubmit": None,
+        "Stop": ["say done", {"hooks": None}, {"hooks": ["x", {"command": 5}]}],
+        "Notification": "notify",
+    }
+    added = cc.added({"hooks": odd_hooks}, "/py")
+    assert added["hooks"]["UserPromptSubmit"] is None and added["hooks"]["Notification"] == "notify"
+    assert added["hooks"]["Stop"][:3] == odd_hooks["Stop"] and len(added["hooks"]["Stop"]) == 4
+    assert cc.removed(added) == {"hooks": odd_hooks}
+    for theirs in ({"hooks": None, "statusLine": None}, {"hooks": "x", "statusLine": "my-line"}, {"hooks": []}):
+        assert cc.removed(theirs) == theirs
+        assert cc.removed(cc.added(theirs, "/py")) == {k: v for k, v in theirs.items() if k != "statusLine"}
+    for theirs in ({"hooks": {}}, {"hooks": {"Stop": []}}, [], "text", None):  # nothing of ours to take out
+        assert cc.removed(theirs) == theirs and cc.other_status_line(theirs) is None
+    mixed = {"hooks": {"Stop": [{"hooks": [{"command": "say hi"}, {"command": cc.commands("/py")[0]}]}]}}
+    assert cc.removed(mixed) == {"hooks": {"Stop": [{"hooks": [{"command": "say hi"}]}]}}  # only ours goes
+    assert cc.other_status_line({"statusLine": "my-line"}) == "my-line"
+    assert cc.other_status_line({"statusLine": ["my-line"]}) is None
+
+
 def test_the_status_line_follows_a_task_from_prompt_to_stop(monkeypatch):
     monkeypatch.setattr(cc, "_start_forecast", lambda session, prompt_at: None)
     send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "Add a login page"})
@@ -161,6 +182,30 @@ def test_a_model_matches_its_dated_name_both_ways_and_never_another_model():
     forecast_path.write_text(json.dumps({"prompt_at": 100.0, "forecasts": dated}))
     assert plain(cc.status_line("s1", "claude-opus-4-5[1m]", 172.0)) == "yardstick · 1:12 of ~60 s"
     assert plain(cc.status_line("s1", "claude-opus-4", 172.0)) == "yardstick · no forecast for claude-opus-4 yet"
+
+
+def test_the_status_line_takes_the_model_and_effort_as_objects_or_as_text(monkeypatch, capsys):
+    state_path, forecast_path = cc._paths("s1")
+    state_path.write_text(json.dumps({"prompt_at": 100.0}))
+    forecasts = [
+        {"model": "claude-opus-5-5", "effort": "max", "seconds": 240.0},
+        {"model": "claude-opus-5-5", "effort": "high", "seconds": 120.0},
+    ]
+    forecast_path.write_text(json.dumps({"prompt_at": 100.0, "forecasts": forecasts}))
+    monkeypatch.setattr(cc, "time", SimpleNamespace(time=lambda: 172.0))
+    events = [
+        {"session_id": "s1", "model": {"id": "claude-opus-5-5"}, "effort": {"level": "max"}},
+        {"session_id": "s1", "model": "claude-opus-5-5", "effort": "max"},
+        {"session_id": "s1", "model": ["odd"], "effort": 5, "transcript_path": {"odd": True}},
+        ["not", "an", "object"],
+    ]
+    lines = []
+    for event in events:
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event)))
+        assert cc.status() == 0
+        lines.append(plain(capsys.readouterr().out.strip()))
+    assert lines[:2] == ["yardstick · 1:12 of ~4 min"] * 2
+    assert lines[2:] == ["yardstick · no forecast for this model yet", "yardstick"]
 
 
 def test_pressing_esc_stops_the_clock(tmp_path):
