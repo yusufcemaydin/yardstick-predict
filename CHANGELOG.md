@@ -2,6 +2,22 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A forecast asked for while a refresh saved a new model, such as the status line's, could find no model. It now waits a moment for the new one.
+- Two refreshes of one predictor could run at once, and the slower one could save an older model over a newer one. A refresh started while another refresh or setup is running now stops and says to try again later.
+- Training crashed with a short `--half-life` when an AI model was used only long ago. Old tasks now keep a tiny weight.
+- An unknown `--model-type` was refused only after the tasks were read and embedded. It's now refused before anything is read or spent.
+- Guided setup offered to embed only the tasks your free tokens cover, even when that was fewer than the 30 training needs. It now offers that only when enough tasks fit.
+- `predict "TASK"` sent the prompt as a program's. It's now sent as a person's. A JSON request still says who wrote each task.
+- Voyage: after the account's tokens-a-minute limit split a batch, later requests could still be too big, so each was refused and split again. They now hold no more than what got through after the split.
+- In Claude Code's status line:
+  - A slow forecast could still, rarely, replace a newer prompt's forecast. Each prompt's forecast now has its own file.
+  - An error notice from Claude Code, or a helper's reply, could decide which model and effort level's forecast was shown. An unusual line in the record could crash it.
+  - Pressing Esc wasn't noticed after an error notice or a helper's reply. A tool's output that mentioned a stop, or a helper being stopped, could stop the clock.
+
 ## [0.2.0] - 2026-10-22
 
 Records are read more accurately. A predictor made with 0.1.0 keeps the tasks it already read. To re-read all of yours, create a new predictor with `yardstick-predict create NAME`, then make it the default with `yardstick-predict default NAME`. Setup shows what embedding costs before it spends anything.
@@ -63,5 +79,6 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yusufcemaydin/yardstick-predict/releases/tag/v0.1.0
