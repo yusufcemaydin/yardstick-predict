@@ -126,6 +126,35 @@ def test_a_codex_helper_that_a_helper_spawns_later_is_added_to_the_main_task(tmp
     assert stored(predictor, "Split the work").input_tokens == 1250
 
 
+def test_when_two_archives_hold_the_same_task_the_most_complete_copy_wins(tmp_path):
+    archives = [
+        {"name": "backup", "format": "claude-code", "path": str(tmp_path / "backup")},
+        {"name": "live", "format": "claude-code", "path": str(tmp_path / "live")},
+    ]
+
+    def write_both(session: str, prompt: str):
+        # The backup was copied before the helper finished. The live folder has the whole task.
+        for folder, helper_done in (("backup", False), ("live", True)):
+            builder = ClaudeSession(tmp_path / folder, session, START)
+            builder.prompt(prompt, uuid=f"{session}-prompt", prompt_id=f"{session}-p")
+            builder.reply(5)
+            if helper_done:
+                builder.helper(f"{session}-p", calls=2)
+            builder.save(mtime=START)
+
+    write_both("s1", "First shared task")
+    found = read_all(archives, now=LATER)
+    assert [(t.prompt, t.calls) for t in found.new_tasks] == [("First shared task", 3)]
+    assert found.per_archive == {"backup": 0, "live": 1}
+    predictor = Predictor.create("default", archives, {"model": "voyage-4", "dimensions": 256})
+    save_scan(predictor, found)
+
+    write_both("s2", "Second shared task")
+    found = scan(predictor, now=LATER)
+    assert [(t.prompt, t.calls) for t in found.new_tasks] == [("Second shared task", 3)]
+    assert found.per_archive == {"backup": 0, "live": 1}
+
+
 def test_max_tasks_trains_on_the_same_tasks_it_embeds(tmp_path, monkeypatch):
     session = ClaudeSession(tmp_path, "s1", START)
     for prompt in ("Oldest", "Middle", "Newest finished"):

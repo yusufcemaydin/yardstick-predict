@@ -176,11 +176,12 @@ def read_archive(archive: dict, only: set[str] | None = None, now: float | None 
     raise ValueError(f"Unknown archive format {archive['format']!r}. Use one of: {', '.join(FORMATS)}.")
 
 
-def _keep_most_complete(tasks: dict[str, Task], task: Task) -> None:
+def keep_most_complete(tasks: dict[str, Task], task: Task) -> None:
     """Keep the copy of a task with the most model calls.
 
     A helper that finishes later adds calls to its parent. A copy of a task in a resumed session
-    can't see the original's helpers, so it has fewer calls and never replaces the original.
+    can't see the original's helpers, so it has fewer calls and never replaces the original. The
+    same goes for a copy in another archive, such as a backup made before the helper finished.
     """
     kept = tasks.get(task.id)
     if kept is None or task.calls > kept.calls:
@@ -323,7 +324,7 @@ def _read_claude_code(archive: dict, only: set[str] | None, now: float) -> list[
     tasks: dict[str, Task] = {}
     for path in files:
         for task in _read_claude_file(path, archive["name"], now):
-            _keep_most_complete(tasks, task)
+            keep_most_complete(tasks, task)
     return list(tasks.values())
 
 
@@ -540,7 +541,7 @@ def _read_codex(archive: dict, only: set[str] | None, now: float) -> list[Task]:
         if thread:
             threads.append(thread)
         for task in found:
-            _keep_most_complete(tasks, task)
+            keep_most_complete(tasks, task)
     _attach_codex_helpers(tasks, threads)
     return list(tasks.values())
 

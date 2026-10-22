@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import benchmarks, embeddings, features, model_types
-from .archives import SETTLE_SECONDS, Task, codex_families, read_archive, record_files
+from .archives import SETTLE_SECONDS, Task, codex_families, keep_most_complete, read_archive, record_files
 from .store import Predictor
 
 
@@ -30,7 +30,8 @@ def scan(predictor: Predictor, now: float | None = None) -> Scan:
     known_files = predictor.known_files()
     known_calls = predictor.known_calls()
     result = Scan(new_tasks=[])
-    seen: set[str] = set()
+    # A task can be in more than one archive, such as in a backup. Only its most complete copy counts.
+    copies: dict[str, Task] = {}
     for archive in predictor.config["archives"]:
         current = record_files(archive)
         changed = {path for path, state in current.items() if known_files.get(path) != state}
@@ -48,15 +49,17 @@ def scan(predictor: Predictor, now: float | None = None) -> Scan:
             family = codex_families(current)
             touched = {family[path] for path in changed}
             changed.update(path for path in current if family[path] in touched)
-        found = read_archive(archive, only=changed, now=now) if changed else []
-        fresh = [t for t in found if t.id not in known_calls and t.id not in seen]
-        grown = [t for t in found if t.id in known_calls and t.calls > known_calls[t.id]]
-        seen.update(t.id for t in fresh)
-        result.new_tasks += fresh
-        result.updated_tasks += grown
-        result.per_archive[archive["name"]] = len(fresh)
+        for task in read_archive(archive, only=changed, now=now) if changed else []:
+            keep_most_complete(copies, task)
+        result.per_archive[archive["name"]] = 0
         # A file written to very recently may end with a task that's still running. Read it again next time.
         result.files.update({p: current[p] for p in changed if now - current[p][1] >= SETTLE_SECONDS})
+    for task in copies.values():
+        if task.id not in known_calls:
+            result.new_tasks.append(task)
+            result.per_archive[task.archive] = result.per_archive.get(task.archive, 0) + 1
+        elif task.calls > known_calls[task.id]:
+            result.updated_tasks.append(task)
     return result
 
 
@@ -74,14 +77,17 @@ def read_all(archives: list[dict], now: float | None = None) -> Scan:
     """Read every task in the archives, for a new predictor."""
     now = time.time() if now is None else now
     result = Scan(new_tasks=[])
-    seen: set[str] = set()
+    # A task can be in more than one archive, such as in a backup. Only its most complete copy counts.
+    copies: dict[str, Task] = {}
     for archive in archives:
         current = record_files(archive)
-        found = [t for t in read_archive(archive, now=now) if t.id not in seen]
-        seen.update(t.id for t in found)
-        result.new_tasks += found
-        result.per_archive[archive["name"]] = len(found)
+        for task in read_archive(archive, now=now):
+            keep_most_complete(copies, task)
+        result.per_archive[archive["name"]] = 0
         result.files.update({p: s for p, s in current.items() if now - s[1] >= SETTLE_SECONDS})
+    result.new_tasks = list(copies.values())
+    for task in result.new_tasks:
+        result.per_archive[task.archive] = result.per_archive.get(task.archive, 0) + 1
     return result
 
 
