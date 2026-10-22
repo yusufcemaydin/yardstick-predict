@@ -125,7 +125,9 @@ def learnable(tasks: list[Task], limit: int | None = None) -> list[Task]:
 
     With `limit`, only the newest that many. Embedding and training both pick tasks here, so they agree.
     """
-    kept = sorted((t for t in tasks if not t.stopped and not t.idle), key=lambda t: (t.started_at, t.id), reverse=True)
+    from .model import usable
+
+    kept = usable(tasks)[::-1]  # the model's own rule, so nothing embedded is left out of training
     return kept[: int(limit)] if limit else kept
 
 

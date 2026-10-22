@@ -192,6 +192,27 @@ def test_features_and_advanced_settings_are_chosen_with_flags(capsys, records, r
     assert forecast["distribution"]["shape"] == "two_part_weibull"
 
 
+def test_setup_stops_before_spending_when_too_few_tasks_can_be_learned_from(tmp_path, capsys, ready):
+    few = tmp_path / "few"
+    history(few, tasks=20, start=START)
+    assert main(["create", "--yes", "--archive", f"claude-code={few}"]) == 1
+    assert "Only 20 of those tasks can be learned from" in capsys.readouterr().err
+    assert ready.requests == [] and predictor_names() == []  # no key check, no embedding, no predictor
+    assert main(["create", "--yes", "--max-tasks", "10", "--archive", f"claude-code={few}"]) == 1
+    assert "--max-tasks 30 or more" in capsys.readouterr().err
+
+
+def test_archives_with_the_same_name_get_their_own_names():
+    named = cli.unique_names([{"name": "sessions"}, {"name": "sessions"}, {"name": "codex"}, {"name": "sessions"}])
+    assert [a["name"] for a in named] == ["sessions", "sessions-2", "codex", "sessions-3"]
+
+
+def test_forecasting_with_an_untrained_predictor_says_so(capsys):
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    assert main(["predict", "fix the login page"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "not_trained"
+
+
 def test_bad_choices_get_a_plain_reason(capsys, records, ready):
     assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "horoscope"]) == 1
     assert "Unknown feature" in capsys.readouterr().err

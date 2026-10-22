@@ -197,6 +197,18 @@ def parse_archive(spec: str) -> dict:
     raise SystemExit(f"Can't read --archive {spec!r}. Use claude-code, codex, or FORMAT=PATH like codex=~/runs.")
 
 
+def unique_names(archives: list[dict]) -> list[dict]:
+    """Give each archive its own name, such as sessions and sessions-2, so counts and tasks don't mix."""
+    taken: set[str] = set()
+    for archive in archives:
+        name, number = archive["name"], 2
+        while name in taken:
+            name, number = f"{archive['name']}-{number}", number + 1
+        archive["name"] = name
+        taken.add(name)
+    return archives
+
+
 def choose_archives(can_ask: bool, given: list[str]) -> list[dict]:
     if given:
         return [parse_archive(spec) for spec in given]
@@ -315,7 +327,13 @@ def print_report(model) -> None:
                     rows.append((ui.dim("inside the 90% range"), *(f"{n} {s['in_90_range']:.0%}" for n, s in scores)))
                 ui.table(rows, indent=2 + lead)
         elif result["reason"] == "not_enough_data":
-            ui.line(f"{label}   {flag('none')}" + ui.join(["not yet", f"{tested} test tasks, needs {MIN_TEST_TASKS}"]))
+            if tested == 0:
+                why = f"needs {MIN_TEST_TASKS} recent tasks to test it on"
+            elif tested < MIN_TEST_TASKS:
+                why = f"{tested} test tasks, needs {MIN_TEST_TASKS}"
+            else:
+                why = "too few known values to test its time, tokens or cost"
+            ui.line(f"{label}   {flag('none')}" + ui.join(["not yet", why]))
         else:
             ui.line(f"{label}   {flag('fail')}" + ui.join(["no forecasts", f"tested on {tested:,} tasks"]))
             for failed in result.get("failed_checks", []):
@@ -476,9 +494,13 @@ def cmd_create(args) -> int:
     except ImportError as error:
         raise SystemExit(f"Couldn't load the plugin: {error}") from None
     model_settings = advanced_settings(args)
+    from .model import MIN_TASKS
+
+    if args.max_tasks is not None and args.max_tasks < MIN_TASKS:
+        raise SystemExit(f"Use --max-tasks {MIN_TASKS} or more. Training needs at least {MIN_TASKS} tasks.")
 
     ui.heading("Your past runs")
-    archives = choose_archives(can_ask, args.archive)
+    archives = unique_names(choose_archives(can_ask, args.archive))
     if not archives:
         raise SystemExit("No records to learn from. Add a folder with --archive FORMAT=PATH.")
     ui.working("Reading your records. A big history takes a minute")
@@ -493,6 +515,15 @@ def cmd_create(args) -> int:
         ui.ok(f"Read {total:,} tasks: " + ui.join([f"{source} {count:,}" for source, count in counts]))
     if not found.new_tasks:
         raise SystemExit("Found no finished tasks in those records.")
+    from .model import MIN_TASKS
+    from .pipeline import learnable
+
+    ready = len(learnable(found.new_tasks, args.max_tasks))
+    if ready < MIN_TASKS:
+        raise SystemExit(
+            f"Only {ready} of those tasks can be learned from. Training needs at least {MIN_TASKS}. "
+            "Nothing was spent. Add more records, or try again after more runs."
+        )
     chosen = choose_features(can_ask, args.features)
     items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks)
 
@@ -733,7 +764,7 @@ def cmd_predict(args) -> int:
         code = 0
     except RequestError as error:
         result, code = error.as_answer(), 1
-    if table:
+    if table or (prompt is None and sys.stdin.isatty() and terminal_output()):
         if code:
             ui.error(result["error"]["message"])
         else:
@@ -781,8 +812,9 @@ def forecast_models(predictor: Predictor) -> list[str]:
     from .forecast import RequestError
 
     model_file = predictor.model_dir / "model.json"
-    report = json.loads(model_file.read_text()).get("report", {}) if model_file.is_file() else {}
-    served = served_models(report)
+    if not model_file.is_file():
+        raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
+    served = served_models(json.loads(model_file.read_text()).get("report", {}))
     if not served:
         raise RequestError("invalid_request", "No AI model has forecasts yet. Name one with --model.")
     return served
@@ -1033,7 +1065,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     problem = xgboost_problem(sys.argv[1:] if argv is None else argv)
     if problem:
-        if args.command == "predict" and not (terminal_output() and (args.task or args.prompt) and not args.json):
+        forecasting = args.command == "predict"
+        person = forecasting and terminal_output() and bool(args.task or args.prompt)
+        if forecasting and not (person and not args.json and not args.distribution):
             print(json.dumps({"version": 1, "error": {"code": "missing_library", "message": problem}}))
         else:
             ui.error(problem)
