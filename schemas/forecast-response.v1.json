@@ -108,12 +108,18 @@
           "enum": [
             "invalid_request",
             "no_predictor",
+            "no_default_predictor",
             "unknown_predictor",
+            "broken_predictor",
+            "plugin_failed",
             "not_trained",
             "no_embedding_key",
             "embedding_failed",
-            "missing_library"
-          ]
+            "missing_library",
+            "model_too_new",
+            "internal_error"
+          ],
+          "description": "Why the request couldn't be answered. docs/format.md says what each code means."
         },
         "message": {
           "type": "string"

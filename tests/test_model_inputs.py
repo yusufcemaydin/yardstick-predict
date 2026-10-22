@@ -108,8 +108,8 @@ def with_context(tasks, seed: int = 2):
 def test_each_version_reads_the_conversation_or_leaves_it_out():
     tasks = synthetic(200)
     rows = with_context(tasks)
-    full = M.fit(tasks, rows, {"conversation": True})
-    plain = M.fit(tasks, rows, {"conversation": False})
+    full = M.fit(tasks, rows, {}, conversation=True)
+    plain = M.fit(tasks, rows, {}, conversation=False)
     assert {"previous_seconds", "prompt_context_closeness", "project_seconds"} <= set(full.meta["numbers"])
     assert M.JOINT in full.meta["text_fields"] and full.meta["guess"]["fields"] == ["prompt", "context"]
     assert "previous_seconds" not in plain.meta["numbers"] and "project_seconds" in plain.meta["numbers"]
@@ -120,8 +120,8 @@ def test_the_choice_of_versions_saves_and_forecasts_each_ai_model_with_its_own(t
     tasks = synthetic(300)
     rows = with_context(tasks)
     versions = {
-        M.VERSIONS[True]: M.fit(tasks, rows, {"conversation": True}),
-        M.VERSIONS[False]: M.fit(tasks, rows, {"conversation": False}),
+        M.VERSIONS[True]: M.fit(tasks, rows, {}, conversation=True),
+        M.VERSIONS[False]: M.fit(tasks, rows, {}, conversation=False),
     }
     for version in versions.values():
         version.meta.update(report={"models": {}}, served={}, trained_at=0, tasks=300)
@@ -146,14 +146,54 @@ def report(served: bool, score: float) -> dict:
 
 def test_each_ai_model_gets_the_version_that_did_better_on_the_test():
     reports = {
-        True: {
+        (True, False): {
             "models": {"a": report(True, 0.8), "b": report(True, 1.0), "c": report(False, 0.5), "d": report(True, 1.0)}
         },
-        False: {
+        (False, False): {
             "models": {"a": report(True, 1.0), "b": report(True, 0.8), "c": report(True, 0.9), "d": report(True, 1.0)}
         },
     }
-    assert M._choose(reports) == {"a": True, "b": False, "c": False, "d": False}
+    plain, full = (False, False), (True, False)
+    assert M._choose(reports) == {"a": full, "b": plain, "c": plain, "d": plain}
+
+
+def test_an_ai_model_uses_llm_analysis_only_when_it_did_better_with_it():
+    reports = {
+        (True, True): {"models": {"a": report(True, 0.7), "b": report(True, 1.0), "c": report(True, 0.6)}},
+        (True, False): {"models": {"a": report(True, 0.8), "b": report(True, 1.0), "c": report(True, 0.9)}},
+        (False, True): {"models": {"a": report(True, 0.9), "b": report(True, 1.0), "c": report(False, 0.5)}},
+        (False, False): {"models": {"a": report(True, 1.0), "b": report(True, 1.0), "c": report(True, 1.0)}},
+    }
+    assert M._choose(reports) == {"a": (True, True), "b": (False, False), "c": (True, True)}
+
+
+def test_a_task_llm_analysis_couldnt_read_is_forecast_by_the_version_without_it(tmp_path):
+    tasks = synthetic(400)
+    rng = np.random.default_rng(3)
+    # What LLM analysis said tells Claude's tasks apart, and says nothing about the other model's.
+    rows = [
+        replace(r, numbers={"llm_minutes": float(np.log(t.seconds) if t.model == "claude-opus-5-5" else rng.normal())})
+        for t, r in zip(tasks, rows_for(tasks))
+    ]
+    model = M.train(tasks, rows)
+    assert isinstance(model, M.Choice) and model.meta["report"]["models"]["claude-opus-5-5"]["llm"]
+    fallback = model.meta["without_llm"]["claude-opus-5-5"]
+    assert fallback["version"] in model.versions and not fallback["version"].endswith("-llm")
+    assert model.served_without_llm("claude-opus-5-5") == (fallback["served"], fallback["reason"])
+    for name in set(model.meta["uses"]) - set(model.meta["without_llm"]):
+        assert model.served_without_llm(name) == model.served(name)
+    read = rows[-2]  # a task on Claude
+    unread = replace(read, numbers={})
+    uses = model.meta["uses"]["claude-opus-5-5"]
+    assert model.forecast([read, unread]) == [
+        model.versions[uses].forecast([read])[0],
+        model.versions[fallback["version"]].forecast([unread])[0],
+    ]
+    model.save(tmp_path / "model")
+    again = M.load(tmp_path / "model")
+    assert again.meta["without_llm"] == model.meta["without_llm"]
+    after, before = again.forecast([unread])[0], model.forecast([unread])[0]
+    assert after["seconds"]["expected"] == pytest.approx(before["seconds"]["expected"])
 
 
 def test_a_model_made_by_an_older_version_has_to_be_trained_again(tmp_path):

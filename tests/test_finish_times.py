@@ -64,6 +64,21 @@ def test_a_task_finishes_when_its_last_helper_does(tmp_path):
     assert task.calls == 2 and task.finished_at == pytest.approx(START + 600, abs=0.01)
 
 
+def test_a_task_finishes_when_the_agent_is_done_with_the_report_on_its_background_job(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Build it in the background, then check the output")
+    tool_id, job = session.background(line["promptId"])
+    session.reply(2)
+    session.notification(tool_id, job, seconds=1800)  # the build took half an hour
+    session.reply(6)
+    session.save(mtime=START)
+
+    [task] = read_archive(claude_archive(tmp_path), now=LATER)
+    assert task.seconds == pytest.approx(4.1 + 6)  # the agent's work before the report and after it
+    assert task.finished_at == pytest.approx(START + 1810.1, abs=0.01)
+    assert M.finish_times([task])[0] == pytest.approx(START + 1810.1, abs=0.01)
+
+
 def test_a_codex_task_finishes_when_the_last_helper_turn_it_counts_does(tmp_path):
     parent = CodexSession(tmp_path, "parent", START)
     parent.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=10, root="t1")
@@ -148,9 +163,9 @@ def test_a_test_window_doesnt_learn_from_a_task_still_waiting_for_the_person_whe
     learned, windows = [], []
     real_fit, real_score = M.fit, M._score_window
 
-    def fit(train_tasks, train_rows, settings):
+    def fit(train_tasks, train_rows, settings, *rest):
         learned.append(train_tasks)
-        return real_fit(train_tasks, train_rows, settings)
+        return real_fit(train_tasks, train_rows, settings, *rest)
 
     def score(trial, train_tasks, test_tasks, test_rows):
         windows.append(test_tasks)

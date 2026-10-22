@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,15 @@ def usage(new_input=100, write=0, read=20_000, output=200, write_1h=0, speed="st
     }
 
 
+def write_lines(path: Path, lines: list[dict], mtime: float | None = None) -> Path:
+    with open(path, "w") as handle:
+        for line in lines:
+            handle.write(json.dumps(line) + "\n")
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+    return path
+
+
 class ClaudeSession:
     """Builds one Claude Code session file, turn by turn."""
 
@@ -35,12 +45,25 @@ class ClaudeSession:
         self.clock = start
         self.lines: list[dict] = []
         self.count = 0
+        self.helpers: dict[Path, list[dict]] = {}
+        """Each helper's record and its lines."""
+        self.helper_clocks: dict[Path, float] = {}
+        """When each helper last wrote a line."""
 
     def _id(self, kind: str) -> str:
         self.count += 1
         return f"{kind}-{self.session}-{self.count}"
 
-    def prompt(self, text: str, origin: str | None = "human", prompt_id: str | None = None, uuid: str | None = None):
+    def prompt(
+        self,
+        text: str,
+        origin: str | None = "human",
+        prompt_id: str | None = None,
+        uuid: str | None = None,
+        meta: bool = False,
+        entrypoint: str | None = None,
+    ):
+        """A prompt. Claude Code writes a scheduled task's or another session's message as a `meta` line."""
         line = {
             "type": "user",
             "uuid": uuid or self._id("u"),
@@ -54,6 +77,10 @@ class ClaudeSession:
         }
         if origin is not None:
             line["turnOrigin"] = origin
+        if meta:
+            line["isMeta"] = True
+        if entrypoint is not None:
+            line["entrypoint"] = entrypoint
         self.lines.append(line)
         return line
 
@@ -66,6 +93,7 @@ class ClaudeSession:
         text="Done.",
         calls_usage=None,
         repeat=1,
+        tool_input=None,
     ):
         """One model call. `repeat` writes the same reply over several lines, as Claude Code does."""
         self.clock += seconds
@@ -73,7 +101,7 @@ class ClaudeSession:
         tool_id = self._id("tool") if tool else None
         for n in range(repeat):
             content = (
-                [{"type": "tool_use", "id": tool_id, "name": tool, "input": {}}]
+                [{"type": "tool_use", "id": tool_id, "name": tool, "input": tool_input or {}}]
                 if tool and n == 0
                 else [{"type": "text", "text": text}]
             )
@@ -97,23 +125,62 @@ class ClaudeSession:
             )
         return tool_id
 
-    def tool_result(self, tool_id: str, seconds: float, prompt_id: str, source: str = "config"):
+    def tool_result(
+        self, tool_id: str, seconds: float, prompt_id: str, source: str = "config", result: dict | None = None
+    ):
+        """A tool's result. `result` is what Claude Code says about the run, such as how long it took."""
         self.clock += seconds
-        self.lines.append(
-            {
-                "type": "user",
-                "uuid": self._id("r"),
-                "promptId": prompt_id,
-                "sessionId": self.session,
-                "timestamp": iso(self.clock),
-                "isSidechain": False,
-                "message": {
-                    "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": "ok"}],
-                },
-                "permissionDecision": {"decision": "accept", "source": source},
-            }
-        )
+        line = {
+            "type": "user",
+            "uuid": self._id("r"),
+            "promptId": prompt_id,
+            "sessionId": self.session,
+            "timestamp": iso(self.clock),
+            "isSidechain": False,
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": "ok"}],
+            },
+            "permissionDecision": {"decision": "accept", "source": source},
+        }
+        if result is not None:
+            line["toolUseResult"] = result
+        self.lines.append(line)
+
+    def background(self, prompt_id: str, seconds: float = 2, tool: str = "Bash", calls_usage=None) -> tuple[str, str]:
+        """A tool call that starts a background job: a command, a helper or a workflow. Its result comes at once.
+
+        Returns the call's id and the job's id.
+        """
+        job = self._id("job")
+        tool_id = self.reply(seconds, tool=tool, calls_usage=calls_usage, tool_input={"run_in_background": True})
+        if tool == "Bash":
+            result = {"backgroundTaskId": job}
+        elif tool == "Agent":
+            result = {"agentId": job, "isAsync": True, "status": "async_launched"}
+        elif tool == "Monitor":
+            result = {"taskId": job, "persistent": True, "timeoutMs": 600000}
+        else:
+            result = {"taskId": job, "status": "async_launched"}
+        self.tool_result(tool_id, 0.1, prompt_id, result=result)
+        return tool_id, job
+
+    def notification(
+        self, tool_id: str, job: str, status: str | None = "completed", queued: bool = False, seconds: float = 0
+    ):
+        """Claude Code's report on a background job, as a turn of its own. With `queued`, the report reaches an
+        agent that's still working, as a note in its turn. A monitor's event has no status."""
+        self.clock += seconds
+        parts = [f"<task-id>{job}</task-id>", f"<tool-use-id>{tool_id}</tool-use-id>"]
+        parts += [f"<status>{status}</status>", "<summary>Done.</summary>"] if status else ["<event>A line.</event>"]
+        text = "<task-notification>" + "".join(parts) + "</task-notification>"
+        if queued:
+            prompt = {"type": "queued_command", "commandMode": "task-notification", "prompt": text}
+            line = {"type": "attachment", "uuid": self._id("q"), "attachment": prompt}
+            line.update(sessionId=self.session, timestamp=iso(self.clock), isSidechain=False)
+            self.lines.append(line)
+            return line
+        return self.prompt(text, origin="task_notification")
 
     def synthetic(self, seconds: float, error: str | None = "rate_limit", sidechain: bool = False):
         """A reply Claude Code writes itself, with no model call: a failed call such as a server error or a
@@ -172,44 +239,97 @@ class ClaudeSession:
             raise ValueError(kind)
         self.lines.append(line)
 
-    def helper(self, prompt_id: str, model="claude-haiku-5-5", calls=1, call_usage=None):
-        folder = self.folder / self.session / "subagents"
-        folder.mkdir(parents=True, exist_ok=True)
-        with open(folder / f"agent-{self._id('h')}.jsonl", "w") as handle:
-            for _ in range(calls):
-                handle.write(
-                    json.dumps(
-                        {
-                            "type": "assistant",
-                            "promptId": prompt_id,
-                            "isSidechain": True,
-                            "requestId": self._id("hreq"),
-                            "timestamp": iso(self.clock),
-                            "message": {
-                                "id": self._id("hmsg"),
-                                "model": model,
-                                "role": "assistant",
-                                "content": [],
-                                "usage": call_usage or usage(new_input=10, read=5_000, output=50),
-                            },
-                        }
-                    )
-                    + "\n"
-                )
+    def helper(
+        self,
+        prompt_id: str,
+        model="claude-haiku-5-5",
+        calls=1,
+        call_usage=None,
+        folder: str = "",
+        agent: str | None = None,
+        seconds: float = 0,
+        results_prompt_id: str | None = None,
+    ) -> Path:
+        """A helper agent's record, in the shape Claude Code writes it. It's written at once, as the helper works.
 
-    def save(self, mtime: float | None = None):
-        with open(self.path, "w") as handle:
-            for line in self.lines:
-                handle.write(json.dumps(line) + "\n")
-        if mtime is not None:
-            import os
+        Its first instruction carries the id of the prompt that started it. Its replies carry no prompt id.
+        `folder` puts it deeper under subagents, as a workflow's helpers are. Each reply comes `seconds` after
+        the one before. With `results_prompt_id`, a tool result comes between the replies, carrying that prompt
+        id, as when the main session moved on to another prompt.
+        """
+        agent = agent or self._id("agent")
+        where = self.folder / self.session / "subagents" / folder
+        where.mkdir(parents=True, exist_ok=True)
+        path = where / f"agent-{agent}.jsonl"
+        self.helper_clocks[path] = self.clock
+        self.helpers[path] = [self._helper_line("user", agent, self.clock, prompt_id, "Look into one part of it.")]
+        self.helper_more(path, None, model, calls, call_usage, seconds, results_prompt_id)
+        return path
 
-            os.utime(self.path, (mtime, mtime))
+    def helper_more(
+        self,
+        path: Path,
+        prompt_id: str | None,
+        model="claude-haiku-5-5",
+        calls=1,
+        call_usage=None,
+        seconds: float = 0,
+        results_prompt_id: str | None = None,
+    ):
+        """More work for a helper. With `prompt_id`, it's a new instruction, such as a message the main agent
+        sent it from another prompt."""
+        lines = self.helpers[path]
+        agent = lines[0]["agentId"]
+        clock = max(self.helper_clocks[path], self.clock)
+        if prompt_id is not None:
+            lines.append(self._helper_line("user", agent, clock, prompt_id, "Now look into another part."))
+        for n in range(calls):
+            clock += seconds
+            if n and results_prompt_id is not None:
+                result = [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]
+                lines.append(self._helper_line("user", agent, clock, results_prompt_id, result))
+            line = self._helper_line("assistant", agent, clock)
+            line["requestId"] = self._id("hreq")
+            line["message"] = {
+                "id": self._id("hmsg"),
+                "model": model,
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Found it."}],
+                "usage": call_usage or usage(new_input=10, read=5_000, output=50),
+            }
+            lines.append(line)
+        self.helper_clocks[path] = clock
+        write_lines(path, lines)
+
+    def _helper_line(self, kind: str, agent: str, moment: float, prompt_id: str | None = None, content=None) -> dict:
+        line = {
+            "type": kind,
+            "uuid": self._id("h"),
+            "agentId": agent,
+            "isSidechain": True,
+            "sessionId": self.session,
+            "timestamp": iso(moment),
+        }
+        if prompt_id is not None:
+            line["promptId"] = prompt_id
+        if content is not None:
+            line["message"] = {"role": "user", "content": content}
+        return line
+
+    def save(self, mtime: float | None = None, helpers_mtime: float | None = None):
+        """Write the session's record and its helpers' records. The helpers get `helpers_mtime`, else `mtime`."""
+        write_lines(self.path, self.lines, mtime)
+        for path, lines in self.helpers.items():
+            write_lines(path, lines, helpers_mtime if helpers_mtime is not None else mtime)
         return self.path
 
 
 class CodexSession:
-    """Builds one Codex session file. `name` names the file, for a thread spread over several files."""
+    """Builds one Codex session file. `name` names the file, for a thread spread over several files.
+
+    A helper thread names the thread that spawned it with `parent`. A helper that reviews an approval names
+    only the session it works in, with `guardian_of`.
+    """
 
     def __init__(
         self,
@@ -219,6 +339,8 @@ class CodexSession:
         originator="codex_exec",
         parent: str | None = None,
         name: str | None = None,
+        guardian_of: str | None = None,
+        depth: int = 1,
     ):
         day = datetime.fromtimestamp(start, tz=timezone.utc)
         folder = root / f"{day:%Y}" / f"{day:%m}" / f"{day:%d}"
@@ -233,13 +355,19 @@ class CodexSession:
             "reasoning_output_tokens": 0,
             "total_tokens": 0,
         }
-        source = {"subagent": {"thread_spawn": {"parent_thread_id": parent, "depth": 1}}} if parent else "exec"
+        if parent:
+            source = {"subagent": {"thread_spawn": {"parent_thread_id": parent, "depth": depth}}}
+        elif guardian_of:
+            source = {"subagent": {"other": "guardian"}}
+        else:
+            source = "exec"
         self.lines = [
             {
                 "timestamp": iso(start),
                 "type": "session_meta",
                 "payload": {
                     "id": session,
+                    "session_id": parent or guardian_of or session,
                     "cwd": "/work/demo",
                     "cli_version": "0.160.0",
                     "originator": originator,
@@ -262,8 +390,10 @@ class CodexSession:
         tools=True,
         aborted=False,
         root: str | None = None,
+        finished=True,
     ):
-        """One turn. `root` is the main thread's turn behind it, which newer versions of Codex write down."""
+        """One turn. `root` is the main thread's turn behind it, which newer versions of Codex write down.
+        Without `finished`, the turn is still running: its last words and its completion aren't written yet."""
         started = {"type": "task_started", "turn_id": turn_id, "started_at": int(self.clock)}
         if root is not None:
             started["root_turn_id"] = root
@@ -284,34 +414,18 @@ class CodexSession:
             if tools:
                 self.add("response_item", {"type": "function_call", "name": "shell", "arguments": "{}", "call_id": "c"})
             self.clock += seconds / max(len(calls), 1)
-            last = {
-                "input_tokens": new_input + cached,
-                "cached_input_tokens": cached,
-                "cache_write_input_tokens": 0,
-                "output_tokens": output,
-                "reasoning_output_tokens": 0,
-                "total_tokens": new_input + cached + output,
-            }
-            for key in self.total:
-                self.total[key] += last[key]
-            self.add(
-                "event_msg",
-                {"type": "token_count", "info": {"total_token_usage": dict(self.total), "last_token_usage": last}},
-            )
-            # Codex sometimes repeats a token count with nothing new. It must not count twice.
-            self.add(
-                "event_msg",
-                {"type": "token_count", "info": {"total_token_usage": dict(self.total), "last_token_usage": last}},
-            )
+            self.call(new_input, cached, output)
+        if not finished:
+            return
         self.add(
             "response_item",
             {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Fixed."}]},
         )
-        finished = int(self.clock)
+        finished_at = int(self.clock)
         if aborted:
             self.add(
                 "event_msg",
-                {"type": "turn_aborted", "turn_id": turn_id, "reason": "interrupted", "completed_at": finished},
+                {"type": "turn_aborted", "turn_id": turn_id, "reason": "interrupted", "completed_at": finished_at},
             )
         else:
             self.add(
@@ -320,19 +434,34 @@ class CodexSession:
                     "type": "task_complete",
                     "turn_id": turn_id,
                     "duration_ms": int(seconds * 1000),
-                    "completed_at": finished,
+                    "completed_at": finished_at,
                 },
             )
 
-    def save(self, mtime: float | None = None):
-        with open(self.path, "w") as handle:
-            for line in self.lines:
-                handle.write(json.dumps(line) + "\n")
-        if mtime is not None:
-            import os
+    def call(self, new_input: int, cached: int, output: int):
+        """One model call's token count."""
+        last = {
+            "input_tokens": new_input + cached,
+            "cached_input_tokens": cached,
+            "cache_write_input_tokens": 0,
+            "output_tokens": output,
+            "reasoning_output_tokens": 0,
+            "total_tokens": new_input + cached + output,
+        }
+        for key in self.total:
+            self.total[key] += last[key]
+        count = {"type": "token_count", "info": {"total_token_usage": dict(self.total), "last_token_usage": last}}
+        self.add("event_msg", count)
+        # Codex sometimes repeats a token count with nothing new. It must not count twice.
+        self.add("event_msg", count)
 
-            os.utime(self.path, (mtime, mtime))
-        return self.path
+    def finish(self, turn_id: str, seconds: float):
+        """The completion of a turn that was still running."""
+        self.clock += seconds
+        self.add("event_msg", {"type": "task_complete", "turn_id": turn_id, "completed_at": int(self.clock)})
+
+    def save(self, mtime: float | None = None):
+        return write_lines(self.path, self.lines, mtime)
 
 
 WORDS = "fix add test refactor page login api cache docs build deploy schema query parser cli model".split()

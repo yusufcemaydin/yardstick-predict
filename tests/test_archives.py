@@ -8,7 +8,7 @@ import pytest
 from builders import ClaudeSession, CodexSession, usage
 
 from yardstick_predict import prices
-from yardstick_predict.archives import read_archive
+from yardstick_predict.archives import line_skills, prompt_skills, read_archive, read_records, record_files
 
 START = 1_780_000_000.0  # early June 2026
 LATER = START + 30 * 86400
@@ -68,20 +68,20 @@ def test_cost_is_priced_per_call_and_per_model(tmp_path):
 
 def test_automatic_turns_are_not_tasks_but_end_the_one_before(tmp_path):
     session = ClaudeSession(tmp_path, "s1", START)
-    session.prompt("Run the tests")
-    session.reply(10, tool="Bash")
-    session.prompt("<task-notification>Background job finished</task-notification>", origin="task_notification")
-    session.reply(500, text="The tests passed.")
-    session.prompt("<bash-input>ls</bash-input>", origin=None)
+    session.prompt("Push the branch")
+    session.reply(10)
+    session.prompt("<ci-monitor-event>The checks failed.</ci-monitor-event>", origin=None)
+    session.reply(500, text="A check failed.")
+    session.prompt("<bash-input>ls</bash-input>", origin=None)  # an older record's ! command, with no reply
     session.prompt("Thanks, now ship it", origin="sdk")
     session.reply(3)
     session.save(mtime=START)
 
     tasks = read_claude(tmp_path)
-    assert set(tasks) == {"Run the tests", "Thanks, now ship it"}
-    assert tasks["Run the tests"].seconds == pytest.approx(10)
+    assert set(tasks) == {"Push the branch", "Thanks, now ship it"}
+    assert (tasks["Push the branch"].seconds, tasks["Push the branch"].calls) == (pytest.approx(10), 1)
     assert tasks["Thanks, now ship it"].origin == "program"
-    assert "The tests passed." in tasks["Thanks, now ship it"].context
+    assert "A check failed." in tasks["Thanks, now ship it"].context
 
 
 def test_waiting_for_the_person_is_not_agent_time(tmp_path):
@@ -250,18 +250,57 @@ def test_a_synthetic_reply_is_never_a_model_call_and_never_sets_the_model(tmp_pa
 
 def test_a_task_copied_into_a_resumed_session_counts_once(tmp_path):
     original = ClaudeSession(tmp_path, "s1", START)
-    line = original.prompt("Original task", uuid="same-uuid")
+    original.prompt("Original task")
     original.reply(5)
     original.save(mtime=START)
-    resumed = ClaudeSession(tmp_path, "s2", START)
-    resumed.prompt("Original task", uuid="same-uuid", prompt_id=line["promptId"])
-    resumed.reply(5)
+    # A resumed session copies the lines before it into its own record. The copies keep their session's id.
+    resumed = ClaudeSession(tmp_path, "s2", START + 100)
+    resumed.lines = [dict(line) for line in original.lines]
     resumed.prompt("New task in the resumed session")
     resumed.reply(2)
-    resumed.save(mtime=START + 100)
+    resumed.save(mtime=START + 200)
 
     tasks = read_archive(claude_archive(tmp_path), now=LATER)
-    assert sorted(t.prompt for t in tasks) == ["New task in the resumed session", "Original task"]
+    assert sorted((t.prompt, t.calls, t.source) for t in tasks) == [
+        ("New task in the resumed session", 1, str(resumed.path)),
+        ("Original task", 1, str(original.path)),
+    ]
+
+
+def test_a_copy_that_lost_a_prompt_doesnt_swallow_the_next_task_or_count_it_twice(tmp_path):
+    original = ClaudeSession(tmp_path, "s1", START)
+    original.prompt("Task X", uuid="ux")
+    original.reply(5)
+    original.prompt("Task Y", uuid="uy")
+    original.reply(50, tool="Bash")
+    original.reply(50)
+    original.save(mtime=START)
+    # A copy of the session that's missing Y's prompt would put Y's replies in X.
+    copy = ClaudeSession(tmp_path, "s1-copy", START)
+    copy.lines = [dict(line) for line in original.lines if line["uuid"] != "uy"]
+    copy.save(mtime=START + 10)
+
+    tasks = read_claude(tmp_path)
+    assert {prompt: (t.calls, t.seconds) for prompt, t in tasks.items()} == {"Task X": (1, 5), "Task Y": (2, 100)}
+
+
+def test_a_record_that_writes_its_history_again_counts_each_task_once(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("First")
+    session.reply(5)
+    session.prompt("Second")
+    session.reply(5)
+    session.lines += [dict(line) for line in session.lines]  # Claude Code wrote the conversation out again
+    session.prompt("Third")
+    session.reply(2)
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    assert {prompt: (t.calls, t.seconds) for prompt, t in tasks.items()} == {
+        "First": (1, 5),
+        "Second": (1, 5),
+        "Third": (1, 2),
+    }
 
 
 def test_the_last_task_of_a_file_still_being_written_waits(tmp_path):
@@ -599,3 +638,430 @@ def test_two_waits_for_the_person_at_once_are_taken_off_once(tmp_path):
     session.save(mtime=START)
     # 5 seconds before the questions and 9 after. Counting both waits in full left 0.5 seconds, the least.
     assert read_claude(tmp_path)["Ask me two things, then do it"].seconds == pytest.approx(14)
+
+
+# Helpers ------------------------------------------------------------------------------------------------
+
+
+def test_a_helper_counts_toward_the_prompt_that_started_it_not_the_prompt_its_tool_results_carry(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    first = session.prompt("Research the options")
+    session.reply(5, calls_usage=usage(new_input=100, read=0, output=10))
+    second = session.prompt("Meanwhile, fix the typo")
+    session.reply(3, calls_usage=usage(new_input=100, read=0, output=10))
+    # The helper works on after the next prompt. Its tool results carry that prompt's id, its instruction doesn't.
+    session.helper(
+        first["promptId"],
+        calls=3,
+        call_usage=usage(new_input=10, read=0, output=1),
+        results_prompt_id=second["promptId"],
+    )
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    assert (tasks["Research the options"].calls, tasks["Research the options"].input_tokens) == (4, 130)
+    assert (tasks["Meanwhile, fix the typo"].calls, tasks["Meanwhile, fix the typo"].input_tokens) == (1, 100)
+
+
+def test_a_helper_sent_more_work_from_a_later_prompt_counts_that_work_toward_the_later_task(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    first = session.prompt("Research the options")
+    session.reply(5, calls_usage=usage(new_input=100, read=0, output=10))
+    helper = session.helper(first["promptId"], calls=1, call_usage=usage(new_input=10, read=0, output=1))
+    second = session.prompt("Ask the same helper to compare prices")
+    session.reply(3, calls_usage=usage(new_input=100, read=0, output=10))
+    session.helper_more(helper, second["promptId"], calls=2, call_usage=usage(new_input=20, read=0, output=1))
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    assert (tasks["Research the options"].calls, tasks["Research the options"].input_tokens) == (2, 110)
+    assert tasks["Ask the same helper to compare prices"].input_tokens == 100 + 2 * 20
+
+
+def test_a_workflow_helper_deep_under_subagents_counts_and_is_never_read_as_a_session(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Run the review workflow")
+    session.reply(5)
+    session.helper(line["promptId"], calls=2, folder="workflows/wf_1")
+    session.save(mtime=START)
+    journal = session.folder / "s1" / "subagents" / "workflows" / "wf_1" / "journal.jsonl"
+    journal.write_text(json.dumps({"type": "result", "agentId": "a1", "key": "k", "result": "ok"}) + "\n")
+    os.utime(journal, (START, START))
+
+    tasks = read_archive(claude_archive(tmp_path), now=LATER)
+    assert [(t.prompt, t.calls) for t in tasks] == [("Run the review workflow", 3)]
+
+
+def test_the_reader_reads_only_the_record_files_it_is_given(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Research the options")
+    session.reply(5)
+    session.helper(line["promptId"], calls=2)
+    session.save(mtime=START)
+    archive = claude_archive(tmp_path)
+    files = record_files(archive)
+    [task] = read_records(archive, {str(session.path): files[str(session.path)]}, now=LATER).tasks
+    assert task.calls == 1  # the helper's record wasn't listed, so it isn't read
+    assert read_records(archive, files, now=LATER).tasks[0].calls == 3
+
+
+# Who started a turn ------------------------------------------------------------------------------------
+
+
+def test_a_scheduled_task_or_another_sessions_message_starts_a_program_task_of_its_own(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Quick question")
+    session.reply(4, calls_usage=usage(new_input=100, read=0, output=10))
+    session.clock += 3 * 3600
+    session.prompt("Check the deploy", origin="scheduled", meta=True)  # Claude Code writes these as meta lines
+    session.reply(5, tool="Bash", calls_usage=usage(new_input=5000, read=0, output=900))
+    session.reply(5, calls_usage=usage(new_input=5000, read=0, output=900))
+    session.prompt("A message from another session", origin="peer", meta=True)
+    session.reply(2)
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    question = tasks["Quick question"]
+    assert (question.calls, question.input_tokens, question.seconds, question.direct, question.idle) == (
+        1,
+        100,
+        pytest.approx(4),
+        True,
+        False,
+    )
+    assert (tasks["Check the deploy"].origin, tasks["Check the deploy"].calls) == ("program", 2)
+    assert tasks["A message from another session"].origin == "program"
+
+
+def test_a_notice_from_claude_code_itself_is_automatic_and_ends_the_task_before_it(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Send a note to the other session")
+    session.reply(4)
+    session.prompt("[Cross-session message] Your message was delivered.", origin="system", meta=True)
+    session.reply(30, text="It was delivered.")
+    session.save(mtime=START)
+
+    [task] = read_archive(claude_archive(tmp_path), now=LATER)
+    assert (task.prompt, task.calls, task.seconds) == ("Send a note to the other session", 1, pytest.approx(4))
+
+
+def test_a_persons_shell_command_that_the_agent_works_on_is_a_task(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    command = "<bash-input>npm test</bash-input><bash-stdout>3 failed</bash-stdout><bash-stderr></bash-stderr>"
+    session.prompt(command, origin="human")
+    session.reply(5, tool="Bash")
+    session.lines[-1]["message"]["content"][0]["id"] = "fix"
+    session.tool_result("fix", 1, "p")
+    session.reply(20)
+    session.save(mtime=START)
+
+    [task] = read_archive(claude_archive(tmp_path), now=LATER)
+    assert (task.prompt, task.origin, task.calls) == (command, "person", 2)
+
+
+def test_a_headless_run_and_a_scheduled_task_are_programs_in_older_records(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Summarize the diff", origin=None, entrypoint="sdk-cli")
+    session.reply(3)
+    session.prompt("<scheduled-task name='nightly'>Run the checks</scheduled-task>", origin=None)
+    session.reply(3)
+    session.prompt("Thanks", origin=None, entrypoint="claude-desktop")
+    session.reply(3)
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    assert {prompt[:9]: t.origin for prompt, t in tasks.items()} == {
+        "Summarize": "program",
+        "<schedule": "program",
+        "Thanks": "person",
+    }
+
+
+# Background jobs ---------------------------------------------------------------------------------------
+
+
+def background_task(tmp_path, tool="Bash"):
+    """A task that starts a background job, says so and stops, and later gets the job's report."""
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Run the full test suite, then fix what fails")
+    tool_id, job = session.background(line["promptId"], seconds=5, tool=tool, calls_usage=usage(100, 0, 1000, 10))
+    session.reply(2, text="The tests are running.", calls_usage=usage(100, 0, 1000, 10))
+    return session, line, tool_id, job
+
+
+def test_a_background_jobs_report_counts_toward_the_task_that_started_it(tmp_path):
+    session, line, tool_id, job = background_task(tmp_path)
+    session.clock += 600  # the tests run for ten minutes in the background
+    session.notification(tool_id, job)
+    session.reply(20, calls_usage=usage(300, 0, 2000, 30))
+    session.prompt("Thanks")
+    session.reply(3)
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    task = tasks["Run the full test suite, then fix what fails"]
+    assert (task.calls, task.input_tokens, task.cache_read_tokens) == (3, 500, 4000)
+    # The agent worked 7.1 seconds before the report and 20 after it. The ten minutes between aren't its work.
+    assert task.seconds == pytest.approx(27.1)
+    assert task.finished_at == pytest.approx(START + 627.1, abs=0.01)
+    assert not task.stopped and not task.idle and not task.direct
+    assert (tasks["Thanks"].calls, tasks["Thanks"].input_tokens) == (1, 100)
+
+
+def test_a_report_on_a_job_reaches_a_turn_still_working_without_moving_its_calls(tmp_path):
+    session, line, tool_id, job = background_task(tmp_path)
+    session.prompt("Meanwhile, rename the module")
+    session.reply(30, tool="Bash")
+    session.lines[-1]["message"]["content"][0]["id"] = "rename"
+    session.notification(tool_id, job, queued=True, seconds=5)  # the tests finished while the agent was working
+    session.tool_result("rename", 1, "p")
+    session.reply(10)
+    session.save(mtime=START)
+
+    tasks = read_claude(tmp_path)
+    first = tasks["Run the full test suite, then fix what fails"]
+    assert (first.calls, first.stopped, first.finished_at) == (2, False, pytest.approx(START + 42.1, abs=0.01))
+    assert tasks["Meanwhile, rename the module"].calls == 2
+
+
+def test_a_monitors_events_and_a_ci_event_stay_uncounted(tmp_path):
+    session, line, tool_id, job = background_task(tmp_path, tool="Monitor")
+    session.notification(tool_id, job, status=None, seconds=60)  # a line the monitor saw
+    session.reply(10)
+    session.prompt("<ci-monitor-event>The checks passed.</ci-monitor-event>", origin=None)
+    session.reply(10)
+    session.save(mtime=START)
+
+    [task] = read_archive(claude_archive(tmp_path), now=LATER)
+    assert (task.calls, task.seconds) == (2, pytest.approx(7.1))
+
+
+def test_a_task_waits_while_its_background_helper_works_and_is_stopped_if_it_never_reports(tmp_path):
+    session, line, tool_id, job = background_task(tmp_path, tool="Agent")
+    session.prompt("Meanwhile, fix the typo")
+    session.reply(3)
+    session.helper(line["promptId"], calls=2, agent=job)
+    session.save(mtime=START, helpers_mtime=START + 3500)
+    archive = claude_archive(tmp_path)
+    task_id = f"claude-code:{line['uuid']}"
+
+    # The helper wrote a minute ago and hasn't reported back. It may still be working, so the task waits.
+    reading = read_records(archive, record_files(archive), now=START + 3560)
+    assert [t.prompt for t in reading.tasks] == ["Meanwhile, fix the typo"]
+    assert task_id in reading.held and str(session.path) in reading.open_files
+    # Once it has been quiet a long time without reporting, the task's outcome isn't known: it's stopped.
+    assert read_claude(tmp_path)["Run the full test suite, then fix what fails"].stopped
+
+    session.notification(tool_id, job, seconds=10)
+    session.reply(5)
+    session.save(mtime=START, helpers_mtime=START + 3500)
+    task = read_claude(tmp_path)["Run the full test suite, then fix what fails"]
+    assert (task.calls, task.stopped) == (5, False)
+
+
+def test_a_background_command_that_never_reports_doesnt_stop_its_task(tmp_path):
+    session, line, tool_id, job = background_task(tmp_path)  # such as a server, which runs until it's stopped
+    session.save(mtime=START)
+    archive = claude_archive(tmp_path)
+    assert read_records(archive, record_files(archive), now=START + 60).held == {f"claude-code:{line['uuid']}"}
+    [task] = read_archive(archive, now=LATER)
+    assert (task.calls, task.stopped) == (2, False)
+
+
+def test_a_quiet_record_whose_last_tool_call_never_got_a_result_is_stopped(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Run the migration")
+    session.reply(5, tool="Bash")
+    session.save(mtime=START)
+    archive = claude_archive(tmp_path)
+    assert read_records(archive, record_files(archive), now=START + 60).held  # may still be running
+    [task] = read_archive(archive, now=LATER)
+    assert task.stopped
+
+
+def test_an_allowed_tool_whose_result_says_how_long_it_ran_counts_the_run_as_agent_time(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Look it up")
+    tool = session.reply(5, tool="WebSearch")
+    # The person allowed the search after 60 seconds. Then it ran for 8 seconds.
+    session.tool_result(tool, 68, line["promptId"], source="user_temporary", result={"durationSeconds": 8.0})
+    session.reply(2)
+    session.save(mtime=START)
+    assert read_claude(tmp_path)["Look it up"].seconds == pytest.approx(5 + 8 + 2)
+
+
+def test_the_task_keeps_the_record_file_it_was_read_from(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Add a login page")
+    session.reply(5)
+    session.save(mtime=START)
+    codex = CodexSession(tmp_path / "codex", "c1", START)
+    codex.turn("t1", "Fix the failing test", calls=[(100, 0, 10)], seconds=5)
+    codex.save(mtime=START)
+    assert [t.source for t in read_archive(claude_archive(tmp_path), now=LATER)] == [str(session.path)]
+    assert [t.source for t in read_archive(codex_archive(tmp_path / "codex"), now=LATER)] == [str(codex.path)]
+
+
+# Odd records -------------------------------------------------------------------------------------------
+
+
+def test_a_text_part_without_text_and_a_record_removed_while_reading_dont_crash(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Still readable")
+    session.reply(2)
+    session.lines.append({"type": "user", "uuid": "odd", "message": {"content": [{"type": "text", "text": None}]}})
+    session.lines.append({"type": "user", "uuid": "odd2", "message": "not a message"})
+    session.save(mtime=START)
+    codex = CodexSession(tmp_path / "codex", "c1", START)
+    codex.turn("t1", "Fix the failing test", calls=[(100, 0, 10)], seconds=5)
+    codex.lines.insert(
+        2,
+        {
+            "type": "response_item",
+            "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": None}]},
+        },
+    )
+    codex.save(mtime=START)
+    archive = claude_archive(tmp_path)
+    files = {**record_files(archive), str(tmp_path / "-work-demo" / "gone.jsonl"): (10, START)}
+    assert [t.prompt for t in read_records(archive, files, now=LATER).tasks] == ["Still readable"]
+    codex_files = {
+        **record_files(codex_archive(tmp_path / "codex")),
+        str(tmp_path / "codex" / "gone.jsonl"): (10, START),
+    }
+    assert [t.prompt for t in read_records(codex_archive(tmp_path / "codex"), codex_files, now=LATER).tasks] == [
+        "Fix the failing test"
+    ]
+
+
+# Skills ------------------------------------------------------------------------------------------------
+
+
+def test_prompt_skills_finds_typed_and_recorded_commands_but_not_claude_codes_own():
+    assert prompt_skills("/deploy the staging site") == {"deploy"}
+    assert prompt_skills("<command-message>deploy</command-message>\n<command-name>/deploy</command-name>") == {
+        "deploy"
+    }
+    assert prompt_skills("/superpowers:brainstorming") == {"superpowers:brainstorming"}
+    assert prompt_skills("<command-name>/model</command-name>") == set()
+    assert prompt_skills("/compact") == set()
+    assert prompt_skills("/Users/me/notes.md says what to do") == set()
+    assert prompt_skills("Fix the bug, see /deploy") == set()
+
+
+def test_line_skills_finds_the_skill_a_reply_is_credited_to_and_the_skills_it_loads():
+    line = {
+        "type": "assistant",
+        "attributionSkill": "frontend-design",
+        "message": {"content": [{"type": "tool_use", "name": "Skill", "input": {"skill": "artifact-design"}}]},
+    }
+    assert line_skills(line) == {"frontend-design", "artifact-design"}
+    assert line_skills({"type": "user", "attributionSkill": "x"}) == set()
+
+
+def test_a_task_knows_the_skills_its_prompt_invokes_and_those_used_before_it(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Design the page")
+    tool = session.reply(3, tool="Skill", tool_input={"skill": "artifact-design"})
+    session.tool_result(tool, 1, "p")
+    session.reply(2)
+    session.prompt("<command-message>deploy</command-message>\n<command-name>/deploy</command-name>")
+    session.reply(4)
+    session.prompt("Thanks")
+    session.reply(1)
+    session.save(mtime=START)
+
+    tasks = {t.prompt[:6]: t for t in read_archive(claude_archive(tmp_path), now=LATER)}
+    assert (tasks["Design"].prior_skills, tasks["Design"].skills) == ("", "artifact-design")
+    assert tasks["<comma"].prior_skills == "artifact-design\ndeploy"
+    assert tasks["Thanks"].prior_skills == "artifact-design\ndeploy"
+
+
+# Codex -------------------------------------------------------------------------------------------------
+
+
+def test_a_codex_turn_left_open_when_the_next_one_starts_is_kept_as_stopped(tmp_path):
+    session = CodexSession(tmp_path, "c1", START)
+    session.turn("t1", "Crashed turn", calls=[(1000, 0, 100), (1000, 0, 100)], seconds=40, finished=False)
+    session.clock += 3600
+    session.turn("t2", "Next turn", calls=[(10, 0, 1)], seconds=2)
+    session.save(mtime=START)
+
+    tasks = {t.prompt: t for t in read_archive(codex_archive(tmp_path), now=LATER)}
+    crashed = tasks["Crashed turn"]
+    assert (crashed.calls, crashed.stopped, crashed.finished_at) == (2, True, START + 40)
+    assert not tasks["Next turn"].stopped
+
+
+def test_a_codex_helper_that_reviews_an_approval_counts_toward_the_turn_it_reviewed(tmp_path):
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Deploy it", calls=[(1000, 0, 100)], seconds=10, root="t1")
+    parent.save(mtime=START)
+    guardian = CodexSession(tmp_path, "guardian", START + 5, guardian_of="parent")
+    guardian.turn("g1", "Review this approval", calls=[(300, 0, 30)], seconds=2, root="t1")
+    guardian.save(mtime=START)
+
+    [task] = read_archive(codex_archive(tmp_path), now=LATER)
+    assert (task.calls, task.input_tokens) == (2, 1300)
+
+
+def test_a_nested_codex_helpers_copy_of_its_parents_turn_doesnt_take_that_turn_from_its_parent(tmp_path):
+    main = CodexSession(tmp_path, "main", START)
+    main.turn("t1", "Split the work", calls=[(1000, 0, 100)], seconds=100)
+    main.save(mtime=START + 300)
+    first = CodexSession(tmp_path, "first", START + 10, parent="main")
+    first.turn("h1", "Part one", calls=[(200, 0, 20)], seconds=50)
+    first.save(mtime=START + 200)
+    # A helper forked from the first helper starts with a copy of its turn, and finished before it.
+    nested = CodexSession(tmp_path, "nested", START + 20, parent="first", depth=2)
+    nested.turn("h1", "Part one", calls=[(200, 0, 20)], seconds=0, finished=False)
+    nested.turn("h2", "Part two", calls=[(50, 0, 5)], seconds=2)
+    nested.save(mtime=START + 100)
+
+    [task] = read_archive(codex_archive(tmp_path), now=LATER)
+    assert (task.calls, task.input_tokens) == (3, 1250)
+
+
+def test_a_codex_helper_without_named_turns_finds_its_parents_turn_when_another_main_thread_holds_a_copy(tmp_path):
+    # A branched session has its own id and a copy of the parent's first turn. Its record was written first.
+    branch = CodexSession(tmp_path, "branch", START)
+    branch.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=10)
+    branch.clock = START + 100
+    branch.turn("t2", "Go another way", calls=[(500, 0, 50)], seconds=10)
+    branch.save(mtime=START + 1)
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=10)
+    parent.save(mtime=START + 2)
+    helper = CodexSession(tmp_path, "helper", START + 5, parent="parent")
+    helper.turn("h1", "Helper part", calls=[(200, 0, 20)], seconds=5)
+    helper.save(mtime=START + 3)
+
+    tasks = {t.prompt: t for t in read_archive(codex_archive(tmp_path), now=LATER)}
+    assert (tasks["Start a helper"].calls, tasks["Start a helper"].input_tokens) == (2, 1200)
+    assert tasks["Go another way"].calls == 1
+
+
+def test_a_codex_task_waits_while_its_helper_works_and_is_stopped_if_the_helper_goes_quiet(tmp_path):
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("p1", "Launch background build", calls=[(1000, 0, 100)], seconds=10, root="p1")
+    parent.save(mtime=START + 10)
+    helper = CodexSession(tmp_path, "helper", START + 5, parent="parent")
+    helper.turn("h1", "Background build", calls=[(200, 0, 20)], seconds=50, root="p1", finished=False)
+    helper.save(mtime=START + 55)
+    archive = codex_archive(tmp_path)
+
+    # The root finished, but its helper is still running. Its outcome isn't known yet, so it isn't read.
+    reading = read_records(archive, record_files(archive), now=START + 60)
+    assert (reading.tasks, reading.held) == ([], {"codex:p1"})
+    assert reading.open_files == {str(parent.path), str(helper.path)}
+    # A helper whose record went quiet without finishing leaves the outcome unknown: the task is stopped.
+    [quiet] = read_records(archive, record_files(archive), now=START + 55 + 901).tasks
+    assert (quiet.calls, quiet.stopped) == (2, True)
+
+    helper.clock = START + 95
+    helper.call(400, 0, 40)  # the helper made another call, then finished
+    helper.finish("h1", 5)
+    helper.save(mtime=START + 100)
+    [task] = read_records(archive, record_files(archive), now=START + 120).tasks
+    assert (task.input_tokens, task.calls, task.stopped) == (1600, 3, False)
+    assert task.finished_at == START + 100

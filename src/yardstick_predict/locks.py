@@ -14,10 +14,12 @@ from pathlib import Path
 
 
 @contextmanager
-def held(path: Path, wait: bool = True) -> Iterator[bool]:
+def held(path: Path, wait: bool = True, shared: bool = False) -> Iterator[bool]:
     """Hold the lock at `path` while the block runs, and yield True.
 
     With `wait`, it waits its turn. Without, it yields False at once when another process holds the lock.
+    A `shared` lock is for reading: many readers can hold it at once, but not while a writer holds the lock
+    alone. Windows has no shared locks, so there readers take turns.
     """
     lock = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -42,7 +44,7 @@ def held(path: Path, wait: bool = True) -> Iterator[bool]:
             import fcntl
 
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+                fcntl.flock(lock, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | (0 if wait else fcntl.LOCK_NB))
             except BlockingIOError:
                 yield False
                 return

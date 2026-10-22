@@ -23,7 +23,7 @@ class Picked:
 
     def config(self) -> dict:
         """The predictor settings these choices make."""
-        found: dict = {"features": self.features, "options": self.options, "skills_known_at_start": True}
+        found: dict = {"features": self.features, "options": self.options}
         if self.llm:
             found["llm"] = self.llm
         return found

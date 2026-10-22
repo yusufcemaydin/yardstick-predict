@@ -132,13 +132,6 @@ class Past:
                 found["previous_usd"] = math.log(last.usd)
         return found
 
-    def earlier_skills(self, session: str, at: float) -> list[str]:
-        """The skills used earlier in the conversation, by tasks that had finished by `at`."""
-        if not session or session not in self.sessions:
-            return []
-        done = [t for t in self.sessions[session].before(at) if finished_at(t) <= at]
-        return sorted({skill for t in done for skill in t.skills.split("\n") if skill})
-
 
 def size_numbers(conversation_tokens: int, origin: str) -> dict[str, float]:
     """How big the conversation was when the task started, in tokens.

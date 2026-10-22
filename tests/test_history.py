@@ -3,8 +3,12 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
+from builders import ClaudeSession
+
+from yardstick_predict import pipeline
 from yardstick_predict.archives import Task
 from yardstick_predict.history import Past, size_numbers
+from yardstick_predict.store import Predictor
 
 START = 1_780_000_000.0
 
@@ -78,14 +82,6 @@ def test_a_stopped_task_still_counts_as_the_conversation_so_far():
     assert "project_seconds" not in Past([stopped]).project_numbers("app", START + 100)
 
 
-def test_skills_used_earlier_in_the_conversation_are_known_later():
-    earlier = task(1, START, skills="review\ntdd")
-    later = task(2, START + 600)
-    past = Past([earlier, later])
-    assert past.earlier_skills("s1", START + 600) == ["review", "tdd"]
-    assert past.earlier_skills("s1", START + 30) == []  # it hadn't finished yet
-
-
 def test_a_programs_conversation_size_has_its_own_number():
     assert size_numbers(20_000, "person") == {"conversation_tokens": math.log1p(20_000)}
     assert size_numbers(20_000, "program") == {"conversation_tokens_program": math.log1p(20_000)}
@@ -101,3 +97,23 @@ def test_a_new_conversation_gets_the_size_new_conversations_usually_start_at():
     found = past.numbers("app", "s3", START + 2_000, "person", 0, "claude-code", "x" * 400)
     assert math.isclose(found["conversation_tokens"], math.log1p(22_100))
     assert past.numbers("app", "s1", START + 2_000, "person", 50_000)["conversation_tokens"] == math.log1p(50_000)
+
+
+def test_a_forecast_reads_only_its_own_project_folders_new_tasks(tmp_path):
+    records = tmp_path / "projects"
+    archive = {"name": "claude-code", "format": "claude-code", "path": str(records)}
+    predictor = Predictor.create("default", [archive], {"model": "voyage-4", "dimensions": 256})
+    here = ClaudeSession(records, "s1", START, project="shop")
+    here.prompt("Add a login page")
+    here.reply(30)
+    here.prompt("Add tests")  # still running, so it's read again next time
+    here.reply(30)
+    record = here.save()
+    elsewhere = ClaudeSession(records, "s2", START, project="blog")
+    elsewhere.prompt("Fix the header")
+    elsewhere.reply(30)
+    elsewhere.save()
+    found = pipeline.recent_tasks(predictor, str(record))
+    assert [(t.project, t.prompt) for t in found] == [("shop", "Add a login page")]
+    predictor.remember_files({str(record): (record.stat().st_size, record.stat().st_mtime)})
+    assert pipeline.recent_tasks(predictor, str(record)) == []  # nothing changed since the last refresh

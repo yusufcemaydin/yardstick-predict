@@ -64,8 +64,10 @@ def test_the_prompt_shape_and_effort_level_are_always_numbers():
     assert "effort_level" not in features.numbers([], features.TaskInfo(prompt="x", model="m"), None)
 
 
-def test_a_skill_is_named_by_its_slash_command_but_a_path_is_not(monkeypatch):
-    monkeypatch.setattr(features, "skill_descriptions", lambda: {"review": "Review code", "deploy": "Ship it"})
-    assert features.named_skills("Please /review this, then /deploy.") == ["deploy", "review"]
-    assert features.named_skills("Move /review/notes.md to /src") == []
-    assert features.named_skills("<command-name>/review</command-name>") == ["review"]
+def test_the_skills_options_keep_the_skills_the_prompt_invokes_or_the_ones_used_before_it():
+    known = ["review", "tdd"]  # what the prompt invokes, and what the conversation used before it
+    assert features.known_skills(known, "/review this, please") == ["review", "tdd"]
+    assert features.known_skills(known, "/review this, please", ["named"]) == ["review"]
+    assert features.known_skills(known, "/review this, please", ["earlier"]) == ["tdd"]
+    assert features.known_skills([], "<command-name>/review</command-name>", ["named"]) == ["review"]
+    assert features.known_skills([], "Move /src/app.py to /lib") == []  # a path isn't a skill

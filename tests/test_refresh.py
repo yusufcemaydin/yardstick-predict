@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 import sqlite3
 from dataclasses import fields
 
+import numpy as np
+import pytest
 from builders import ClaudeSession, CodexSession, usage
 
 from yardstick_predict import model_types
-from yardstick_predict.archives import Task
-from yardstick_predict.pipeline import embedding_items, read_all, save_scan, scan, train
+from yardstick_predict.archives import READER_VERSION, Task, read_archive, record_files
+from yardstick_predict.pipeline import embedding_items, learnable, read_all, save_scan, scan, train
 from yardstick_predict.store import Predictor
 
 START = 1_780_000_000.0
@@ -258,3 +261,127 @@ def test_an_older_dataset_with_its_columns_in_another_order_keeps_each_value_in_
     assert [t.calls for t in found.updated_tasks] == [3]
     save_scan(predictor, found)
     assert predictor.tasks() == found.updated_tasks
+
+
+@pytest.mark.parametrize("ending", ["error", "interrupt"])
+def test_a_task_that_turns_out_stopped_after_a_refresh_is_corrected(tmp_path, ending):
+    archive = {"name": "claude-code", "format": "claude-code", "path": str(tmp_path)}
+    session = ClaudeSession(tmp_path, "long-build", START)
+    line = session.prompt("Run the long build")
+    tool = session.reply(5, tool="Bash")
+    session.tool_result(tool, 1000, line["promptId"])  # the build took a while, and the next reply hasn't come
+    session.save(mtime=START + 1005)
+    predictor = Predictor.create("default", [archive], {"model": "voyage-4", "dimensions": 256})
+    save_scan(predictor, read_all([archive], now=START + 1906))  # quiet for 15 minutes, so it looks finished
+    assert len(learnable(predictor.tasks())) == 1
+
+    if ending == "error":
+        session.synthetic(3, error="rate_limit")  # the next call failed, with no paid call
+    else:
+        session.interrupt()  # the person pressed Esc before the reply came
+    session.save(mtime=START + 1010)
+    found = scan(predictor, now=START + 2000)
+    assert [t.stopped for t in found.updated_tasks] == [True]
+    save_scan(predictor, found)
+    assert stored(predictor, "Run the long build").stopped
+    assert not learnable(predictor.tasks())
+
+
+def test_a_changed_workflow_helper_record_makes_its_session_read_again(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Run the review workflow")
+    session.reply(5)
+    session.save(mtime=START)
+    predictor = predictor_for({"name": "claude-code", "format": "claude-code", "path": str(tmp_path)})
+    assert stored(predictor, "Run the review workflow").calls == 1
+
+    session.helper(line["promptId"], calls=2, folder="workflows/wf_1")
+    session.save(mtime=START, helpers_mtime=START + 60)
+    found = scan(predictor, now=LATER)
+    assert [t.calls for t in found.updated_tasks] == [3]
+
+
+def test_a_task_whose_helper_is_still_working_waits_and_its_records_are_read_again(tmp_path):
+    archive = {"name": "claude-code", "format": "claude-code", "path": str(tmp_path)}
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Research the options in the background")
+    tool_id, job = session.background(line["promptId"], tool="Agent")
+    session.reply(2, text="A helper is on it.")
+    helper = session.helper(line["promptId"], calls=1, agent=job)
+    session.save(mtime=START, helpers_mtime=START + 3500)
+    predictor = Predictor.create("default", [archive], {"model": "voyage-4", "dimensions": 256})
+    found = read_all([archive], now=START + 3560)
+    # The helper is still working, so the task isn't saved, and the session's record isn't remembered as read.
+    assert not found.new_tasks and str(session.path) not in found.files
+    save_scan(predictor, found)
+
+    session.helper_more(helper, None, calls=2)
+    session.notification(tool_id, job, seconds=600)
+    session.reply(5)
+    session.save(mtime=START + 3700, helpers_mtime=START + 3600)
+    found = scan(predictor, now=LATER)
+    assert [(t.prompt, t.calls, t.stopped) for t in found.new_tasks] == [
+        ("Research the options in the background", 6, False)
+    ]
+
+
+def test_a_codex_task_whose_helper_is_still_working_is_saved_once_the_helper_finishes(tmp_path):
+    archive = {"name": "codex", "format": "codex", "path": str(tmp_path)}
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("p1", "Launch background build", calls=[(1000, 0, 100)], seconds=10, root="p1")
+    parent.save(mtime=START + 10)
+    helper = CodexSession(tmp_path, "helper", START + 5, parent="parent")
+    helper.turn("h1", "Background build", calls=[(200, 0, 20)], seconds=50, root="p1", finished=False)
+    helper.save(mtime=START + 900)
+    predictor = Predictor.create("default", [archive], {"model": "voyage-4", "dimensions": 256})
+    found = read_all([archive], now=START + 960)
+    assert not found.new_tasks and str(parent.path) not in found.files
+    save_scan(predictor, found)
+
+    helper.clock = START + 950
+    helper.call(400, 0, 40)
+    helper.finish("h1", 5)
+    helper.save(mtime=START + 1000)
+    found = scan(predictor, now=LATER)
+    assert [(t.input_tokens, t.calls, t.stopped) for t in found.new_tasks] == [(1600, 3, False)]
+
+
+def test_a_dataset_read_by_an_older_reader_is_read_again_and_tidied(tmp_path):
+    archive = {"name": "claude-code", "format": "claude-code", "path": str(tmp_path)}
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Research the options")
+    session.reply(5)
+    session.helper(line["promptId"], calls=2)
+    session.prompt("Check the deploy", origin="scheduled", meta=True)
+    session.reply(5)
+    session.save(mtime=START)
+    fresh = {t.prompt: t for t in read_archive(archive, now=LATER)}
+    predictor = Predictor.create("default", [archive], {"model": "voyage-4", "dimensions": 256})
+    # What an older version stored: no record file, its helper missed and the scheduled task's call in it, a
+    # turn the new reader doesn't count as a task, and a task whose session Claude Code has since deleted.
+    older = dataclasses.replace(fresh["Research the options"], calls=2, source="", prior_skills="")
+    ghost = dataclasses.replace(older, id="claude-code:ghost", prompt="Not a task")
+    gone = dataclasses.replace(older, id="claude-code:gone", session="deleted", prompt="From a deleted session")
+    predictor.add_tasks([older, ghost, gone])
+    predictor.put_embeddings("prompt", {"claude-code:ghost": np.ones(256)})
+    predictor.remember_files(record_files(archive))  # the older version had read every file
+    assert "reader" not in predictor.config
+
+    found = scan(predictor, now=LATER)
+    assert found.reader == READER_VERSION
+    assert [t.prompt for t in found.new_tasks] == ["Check the deploy"]
+    assert [(t.prompt, t.calls, t.source) for t in found.updated_tasks] == [
+        ("Research the options", 3, str(session.path))
+    ]
+    assert found.removed == ["claude-code:ghost"]
+    save_scan(predictor, found)
+    assert predictor.config["reader"] == READER_VERSION and predictor.config["needs_training"]
+    assert sorted(t.prompt for t in predictor.tasks()) == [
+        "Check the deploy",
+        "From a deleted session",
+        "Research the options",
+    ]
+    assert "claude-code:ghost" not in predictor.embedded("prompt")
+    # The next refresh reads only the files that changed, and none did.
+    again = scan(predictor, now=LATER)
+    assert (again.new_tasks, again.updated_tasks, again.removed, again.reader) == ([], [], [], None)

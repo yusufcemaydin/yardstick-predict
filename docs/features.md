@@ -22,7 +22,6 @@ These build on the first version. Each one goes in only if it passes the same te
 - **A small local server.** Answer forecast requests over HTTP on your own computer, for orchestrators that ask thousands of times.
 - **Voyage 4 nano on your computer.** Embed text locally with Voyage's open model, so nothing leaves the computer at all. It shares Voyage 4's embedding space.
 - **Other embedding providers.** Let a predictor embed with providers other than Voyage.
-- **A forecast with every prompt.** Show the forecast in Claude Code as each prompt is sent.
 
 ## Sharing
 
