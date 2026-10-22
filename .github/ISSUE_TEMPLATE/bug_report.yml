@@ -1,0 +1,65 @@
+name: Bug report
+description: Something broke or gave an error.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. Don't paste API keys, passwords or private code.
+        To report a security hole, use the private link on the new-issue page instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the full error message if there was one.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we make it happen again?
+      description: List the steps, one per line.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: yardstick-predict version
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Coding tool
+      options:
+        - Claude Code
+        - Codex
+        - Cursor
+        - Other
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: The model the task ran on.
+      placeholder: claude-opus-5-5

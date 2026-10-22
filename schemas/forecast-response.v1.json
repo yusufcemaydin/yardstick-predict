@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yusufcemaydin/yardstick-predict/schemas/forecast-response.v1.json",
+  "title": "yardstick-predict forecast response, version 1",
+  "type": "object",
+  "required": [
+    "version"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "forecasts"
+      ]
+    },
+    {
+      "required": [
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "predictor": {
+      "type": "string"
+    },
+    "embedding_model": {
+      "type": "string"
+    },
+    "forecasts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "task",
+          "model",
+          "seconds",
+          "tokens",
+          "usd",
+          "reason"
+        ],
+        "properties": {
+          "task": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Expected seconds until the agent stops."
+          },
+          "tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Expected tokens, all kinds together."
+          },
+          "usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Expected cost at the model's list price."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              null,
+              "unknown_model",
+              "not_enough_data",
+              "not_accurate_enough"
+            ],
+            "description": "Why the numbers are null. Null when they aren't."
+          },
+          "distribution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/distribution"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "invalid_request",
+            "no_predictor",
+            "unknown_predictor",
+            "not_trained",
+            "no_embedding_key",
+            "embedding_failed",
+            "missing_library"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "curve": {
+      "type": "object",
+      "required": [
+        "mu",
+        "sigma"
+      ],
+      "description": "One part of the curve. The natural log of the value follows the shape's curve with center mu and width sigma.",
+      "properties": {
+        "mu": {
+          "type": "number"
+        },
+        "sigma": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "two_parts": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "direct",
+            "work"
+          ],
+          "properties": {
+            "direct": {
+              "$ref": "#/$defs/curve"
+            },
+            "work": {
+              "$ref": "#/$defs/curve"
+            }
+          }
+        }
+      ]
+    },
+    "distribution": {
+      "type": "object",
+      "required": [
+        "shape",
+        "direct_probability",
+        "seconds",
+        "tokens",
+        "usd"
+      ],
+      "properties": {
+        "shape": {
+          "type": "string",
+          "description": "two_part_lognormal or two_part_weibull. Custom model types may name their own."
+        },
+        "direct_probability": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "The chance the agent answers without tools."
+        },
+        "seconds": {
+          "$ref": "#/$defs/two_parts"
+        },
+        "tokens": {
+          "$ref": "#/$defs/two_parts"
+        },
+        "usd": {
+          "$ref": "#/$defs/two_parts"
+        }
+      }
+    }
+  }
+}

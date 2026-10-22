@@ -1,0 +1,56 @@
+{
+  "updated": "2026-10-21",
+  "unit": "US dollars per million tokens",
+  "sources": [
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://developers.openai.com/api/docs/pricing"
+  ],
+  "notes": [
+    "cache_write_5m and cache_write_1h are Anthropic's two cache lifetimes. OpenAI lists no cache write price, so those models use the input price.",
+    "long_context prices apply to a model call whose input is larger than 'above' tokens. For Anthropic, input counts cache reads and writes.",
+    "fast_multiplier applies to every kind of token in fast mode. Anthropic lists fast prices only for input and output, so cache prices use the same multiplier.",
+    "Batch, flex, regional and US-only prices are not modeled."
+  ],
+  "models": {
+    "claude-fable-5-1": {"input": 10, "output": 50, "cache_write_5m": 12.5, "cache_write_1h": 20, "cache_read": 0.25},
+    "claude-mythos-5-1": {"input": 10, "output": 50, "cache_write_5m": 12.5, "cache_write_1h": 20, "cache_read": 0.25},
+    "claude-fable-5": {"input": 10, "output": 50, "cache_write_5m": 12.5, "cache_write_1h": 20, "cache_read": 1.0},
+    "claude-mythos-5": {"input": 10, "output": 50, "cache_write_5m": 12.5, "cache_write_1h": 20, "cache_read": 1.0},
+    "claude-opus-5-5": {"input": 4, "output": 20, "cache_write_5m": 5, "cache_write_1h": 8, "cache_read": 0.2, "fast_multiplier": 2},
+    "claude-opus-5": {"input": 5, "output": 25, "cache_write_5m": 6.25, "cache_write_1h": 10, "cache_read": 0.5, "fast_multiplier": 2},
+    "claude-opus-4-8": {"input": 5, "output": 25, "cache_write_5m": 6.25, "cache_write_1h": 10, "cache_read": 0.5, "fast_multiplier": 2},
+    "claude-opus-4-7": {"input": 5, "output": 25, "cache_write_5m": 6.25, "cache_write_1h": 10, "cache_read": 0.5},
+    "claude-opus-4-6": {"input": 5, "output": 25, "cache_write_5m": 6.25, "cache_write_1h": 10, "cache_read": 0.5},
+    "claude-opus-4-5": {"input": 5, "output": 25, "cache_write_5m": 6.25, "cache_write_1h": 10, "cache_read": 0.5},
+    "claude-opus-4-1": {"input": 15, "output": 75, "cache_write_5m": 18.75, "cache_write_1h": 30, "cache_read": 1.5},
+    "claude-opus-4": {"input": 15, "output": 75, "cache_write_5m": 18.75, "cache_write_1h": 30, "cache_read": 1.5},
+    "claude-sonnet-5-5": {"input": 2, "output": 10, "cache_write_5m": 2.5, "cache_write_1h": 4, "cache_read": 0.1},
+    "claude-sonnet-5": {"input": 2, "output": 10, "cache_write_5m": 2.5, "cache_write_1h": 4, "cache_read": 0.2},
+    "claude-sonnet-4-6": {"input": 3, "output": 15, "cache_write_5m": 3.75, "cache_write_1h": 6, "cache_read": 0.3},
+    "claude-sonnet-4-5": {"input": 3, "output": 15, "cache_write_5m": 3.75, "cache_write_1h": 6, "cache_read": 0.3},
+    "claude-sonnet-4": {"input": 3, "output": 15, "cache_write_5m": 3.75, "cache_write_1h": 6, "cache_read": 0.3},
+    "claude-haiku-5-5": {
+      "input": 0.1, "output": 0.5, "cache_write_5m": 0.125, "cache_write_1h": 0.2, "cache_read": 0.01,
+      "long_context": {"above": 100000, "input": 0.5, "output": 2.5, "cache_write_5m": 0.625, "cache_write_1h": 1.0, "cache_read": 0.05}
+    },
+    "claude-haiku-4-5": {"input": 1, "output": 5, "cache_write_5m": 1.25, "cache_write_1h": 2, "cache_read": 0.1},
+    "claude-3-5-haiku": {"input": 0.8, "output": 4, "cache_write_5m": 1, "cache_write_1h": 1.6, "cache_read": 0.08},
+    "gpt-6-astra": {"input": 10, "cache_read": 1, "output": 50, "long_context": {"above": 272000, "input": 20, "cache_read": 2, "output": 75}},
+    "gpt-6.1-sol": {"input": 2, "cache_read": 0.1, "output": 10, "long_context": {"above": 272000, "input": 4, "cache_read": 0.2, "output": 15}},
+    "gpt-6-sol": {"input": 2, "cache_read": 0.2, "output": 10, "long_context": {"above": 272000, "input": 4, "cache_read": 0.4, "output": 15}},
+    "gpt-6-luna": {"input": 0.1, "cache_read": 0.01, "output": 0.5, "long_context": {"above": 272000, "input": 0.2, "cache_read": 0.02, "output": 0.75}},
+    "gpt-5.6-sol": {"input": 4, "cache_read": 0.4, "output": 20, "long_context": {"above": 272000, "input": 8, "cache_read": 0.8, "output": 30}},
+    "gpt-5.6-terra": {"input": 2, "cache_read": 0.2, "output": 12, "long_context": {"above": 272000, "input": 4, "cache_read": 0.4, "output": 18}},
+    "gpt-5.6-luna": {"input": 0.2, "cache_read": 0.02, "output": 1.2, "long_context": {"above": 272000, "input": 0.4, "cache_read": 0.04, "output": 1.8}},
+    "gpt-5.5": {"input": 5, "cache_read": 0.5, "output": 30, "long_context": {"above": 272000, "input": 10, "cache_read": 1, "output": 45}},
+    "gpt-5.4": {"input": 2.5, "cache_read": 0.25, "output": 15, "long_context": {"above": 272000, "input": 5, "cache_read": 0.5, "output": 22.5}},
+    "gpt-5.4-mini": {"input": 0.75, "cache_read": 0.075, "output": 4.5},
+    "gpt-5.4-nano": {"input": 0.2, "cache_read": 0.02, "output": 1.25},
+    "gpt-5.3-codex": {"input": 1.75, "cache_read": 0.175, "output": 14},
+    "gpt-5.2": {"input": 1.75, "cache_read": 0.175, "output": 14},
+    "gpt-5.1": {"input": 1.25, "cache_read": 0.125, "output": 10},
+    "gpt-5": {"input": 1.25, "cache_read": 0.125, "output": 10},
+    "gpt-5-mini": {"input": 0.25, "cache_read": 0.025, "output": 2},
+    "gpt-5-nano": {"input": 0.05, "cache_read": 0.005, "output": 0.4}
+  }
+}

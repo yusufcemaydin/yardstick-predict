@@ -1,0 +1,57 @@
+name: Forecast was way off
+description: The predicted time or tokens were far from what really happened.
+title: "[Forecast]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These reports help make forecasts better.
+        Describe the task in general terms. Don't paste private code, file contents or secrets.
+  - type: textarea
+    id: task
+    attributes:
+      label: What was the task?
+      description: A short description is enough, for example "add a login page to a small web app".
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Coding tool
+      options:
+        - Claude Code
+        - Codex
+        - Cursor
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: claude-opus-5-5
+    validations:
+      required: true
+  - type: textarea
+    id: predicted
+    attributes:
+      label: What was predicted?
+      description: Time, tokens and cost, as yardstick-predict showed them.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What really happened?
+      description: The actual time, tokens and cost.
+    validations:
+      required: true
+  - type: input
+    id: past-runs
+    attributes:
+      label: How many of your past runs had it learned from?
+      description: Leave this blank if you don't know.
+  - type: input
+    id: version
+    attributes:
+      label: yardstick-predict version

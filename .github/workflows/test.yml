@@ -1,0 +1,73 @@
+name: Tests
+
+# Pull requests run the tests on Linux only. Mac minutes cost ten times as much and Windows minutes
+# twice as much, so the Mac and Windows checks run only when started by hand, for example before a
+# release: Actions > Tests > Run workflow.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      all_systems:
+        description: "Also test on Mac and Windows"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Tests on Linux, Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: uv sync --locked
+      - name: Style
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+      - name: Tests
+        run: uv run pytest -q
+
+  other-systems:
+    name: Tests and install on ${{ matrix.os }}
+    if: github.event_name == 'workflow_dispatch' && inputs.all_systems
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+        with:
+          python-version: "3.13"
+      - name: Tests
+        shell: bash
+        run: |
+          uv sync --locked
+          # On a Mac, use scikit-learn's OpenMP, as the command does. GitHub's Macs have no Homebrew OpenMP.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export DYLD_FALLBACK_LIBRARY_PATH="$(uv run python -c 'import sklearn, os; print(os.path.join(os.path.dirname(sklearn.__file__), ".dylibs"))')"
+          fi
+          uv run pytest -q
+      - name: Install the way a user would, with nothing else installed
+        run: |
+          uv tool install .
+          yardstick-predict --version
+          yardstick-predict status
