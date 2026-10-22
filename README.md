@@ -27,9 +27,9 @@ The numbers above are an example. Yours come from your own history.
 - **Learns from records you already have.** Claude Code and Codex keep a record of every run. There's nothing to label.
 - **Tests itself before it forecasts.** It replays your newest tasks and gives forecasts only for AI models that pass.
 - **One fixed, versioned JSON format,** with published schemas, so any program in any language can call it.
-- **Runs on your computer.** Only the text you choose to embed is sent, and only to Voyage.
-- **Shows the exact embedding cost before spending anything,** and counts Voyage's free tokens.
-- **You choose the features:** the prompt, plus the conversation's context, the skills used, public model benchmarks, or your own.
+- **Runs on your computer.** Only the text you choose is sent: to Voyage to embed it and, if you turn on LLM analysis, to the AI model you pick.
+- **Shows the exact cost before spending anything,** and counts Voyage's free tokens.
+- **You choose the features:** the task, its similar past tasks and its history are always used. You can add the conversation, skills, public model facts, an AI model's read of each task, or your own.
 - **Advanced settings** for experts: output heads, curve shape, loss, dropout, data split, and other model types.
 
 ## Install
@@ -71,27 +71,45 @@ Run `yardstick-predict` every week or so. It tells you how many new tasks it fou
 
 ## Features the model learns from
 
-The prompt, the AI model and its effort level are always used. You can add more, and each one is tested on your data like everything else.
+Setup lists each feature with its options under it. Type a number to turn a feature on or off, or a number and a letter for one option. The first three are always on: they cost nothing and send nothing anywhere.
 
 | Feature | What it is | Default |
 |---|---|---|
-| `prompt` | The task's prompt, embedded. | Always on |
-| AI model | The model that runs the task, such as `claude-opus-5-5`. | Always on |
-| effort level | How hard the model thinks, such as `high`, `xhigh` or `max`. | Always on |
-| `context` | The last 1,500 characters of the conversation before the prompt, embedded. | On |
-| `skills` | The skills the agent used, embedded by their descriptions. | Off |
-| `benchmarks` | Public facts about each AI model from [OpenRouter's model list](https://openrouter.ai/models): prices, context size, longest answer and release date. They are the same for old and new models. | Off |
+| Task | What the prompt means, how it's laid out (list items, file names, links, lines, whether it asks a question), the AI model, the effort level as a scale from low to max, the agent and who started it. | Always on |
+| Similar past tasks | What the past tasks closest in meaning really took: the closest one, the closest ten and the closest hundred, how much they varied, quick replies and real work apart, and closer, newer tasks counting more. Plus a first guess from the prompt's whole embedding. | Always on |
+| History | The project's last finished tasks, from any conversation; the conversation so far, such as how long its last task took; and how big the conversation has grown. | Always on |
+| `context`, Conversation | The end of the conversation before the prompt, embedded, and compared with the prompt. | On |
+| `skills`, Skills | Skills known before the task starts, embedded by their descriptions. Options: `named`, the skills the prompt names as a slash command, and `earlier`, the skills used earlier in the conversation. | Off |
+| `benchmarks`, Model facts | Public facts about each AI model from [OpenRouter's model list](https://openrouter.ai/models): prices, context size, longest answer and release date. They are the same for old and new models. | Off |
+| `llm`, LLM analysis | An AI model reads each task before it starts and describes the work. Options: `kind`, the kind of task and its expected size, and `description`, a few sentences on the work, embedded. | Off |
 | your own | Any text or number you compute from a task. See [Extend it](#extend-it). | — |
 
-Every task also brings its agent, who started it and the length of its prompt.
+The conversation tells a lot about a person's sessions and can mislead about a program's one-off runs. So training makes two versions, with and without the conversation, tests both, and each AI model uses the one that did better. The test report says which.
 
-Choose features at setup, or with a flag:
+Choose features at setup, or with flags. A feature named alone gets all its options:
 
 ```bash
-yardstick-predict create --yes --features context,skills,benchmarks
+yardstick-predict create --yes --features context,skills:named,llm --llm-provider claude
 ```
 
-Each embedded feature becomes what the most similar past tasks really took. A predictor keeps its features and its embedding model for good. To change them, create a new predictor.
+A predictor keeps its embedding model for good. To change its features, create a new predictor.
+
+### LLM analysis
+
+It sends each task's prompt and the end of the conversation before it to the AI model you pick, and never what the task went on to do. Pay for it one of four ways:
+
+| `--llm-provider` | How it's paid | Models |
+|---|---|---|
+| `anthropic` | An Anthropic API key, per use. Setup and refresh show the cost first. | Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 |
+| `openai` | An OpenAI API key, per use. Setup and refresh show the cost first. | GPT 6.1 Sol (the default), GPT 6 Astra, GPT 6 Luna |
+| `claude` | Your Claude subscription, through the Claude Code command. No extra bill, but it counts toward your plan's usage limits. | Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 |
+| `codex` | Your ChatGPT subscription, through the Codex command. No extra bill, but it counts toward your plan's usage limits. | Codex's own model |
+
+With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price; with Claude Haiku 5.5, about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session, so these calls never show up in the records your predictor learns from. An API key needs the providers' own libraries:
+
+```bash
+uv tool install --reinstall 'yardstick-predict[llm] @ git+https://github.com/yusufcemaydin/yardstick-predict'
+```
 
 ## Forecasts in Claude Code
 
@@ -229,7 +247,7 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 ## Privacy and safety
 
 - **Your records stay on your computer.** The dataset and the model live in `~/.yardstick`, or wherever `YARDSTICK_HOME` points. The folder is readable only by you.
-- **Only the text you choose to embed is sent, and only to Voyage,** over an encrypted connection.
+- **Only the text you choose is sent,** over an encrypted connection: to Voyage to embed it, and with LLM analysis, each task's prompt and the end of its conversation to the AI model you pick.
 - **Your Voyage key** is read from `VOYAGE_API_KEY` or kept in your computer's password store. yardstick-predict never writes it to a file of its own.
 - **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face, at one fixed version, and OpenRouter's model list if you use benchmarks.
 - **Saved models are plain JSON and plain numbers.** Loading one runs no code.
@@ -250,6 +268,7 @@ Before it embeds anything, it shows the exact token count, counted with Voyage's
 | [tokenizers](https://github.com/huggingface/tokenizers) | Counts tokens exactly with Voyage's own tokenizer, so you see the cost before paying it. |
 | [keyring](https://github.com/jaraco/keyring) | Keeps your Voyage key in your computer's password store. |
 | [scikit-learn](https://scikit-learn.org), on macOS only | Brings the OpenMP library XGBoost needs on a Mac, so there's nothing else to install. |
+| [anthropic](https://github.com/anthropics/anthropic-sdk-python) and [openai](https://github.com/openai/openai-python), only with the `llm` extra | The providers' own libraries, for LLM analysis paid with an API key. Not installed unless you ask for them. |
 
 ## Documentation
 

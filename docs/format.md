@@ -34,11 +34,13 @@ The [request schema](../schemas/forecast-request.v1.json) and the [answer schema
 | `tasks[].prompt` | yes | The prompt the agent will get. |
 | `tasks[].models` | yes | 1 to 50 AI models to forecast the task on, by the model's API name. |
 | `tasks[].context` | no | The conversation so far, if the task continues one. Used when the predictor has the `context` feature. |
-| `tasks[].skills` | no | The skills the agent will use, by name. Used when the predictor has the `skills` feature. |
+| `tasks[].skills` | no | Skills known before the task starts, by name. Used when the predictor has the `skills` feature, along with the skills the prompt names and, with `session`, those used earlier in the conversation. |
 | `tasks[].effort` | no | The thinking level, such as `high`, `xhigh` or `max`. Default: the level this model ran at most often. |
 | `tasks[].agent` | no | `claude-code` or `codex`. Default: the agent this model ran in most often. |
 | `tasks[].origin` | no | `program` when a program starts the task, `person` when a person types it. Default: `program`. |
-| `tasks[].project` | no | The project's folder name, for features you add yourself. |
+| `tasks[].project` | no | The project's folder name. The forecast uses the project's recent tasks from your records, and your own features get it too. |
+| `tasks[].session` | no | The conversation the task is in, by its id in the agent's records. The forecast uses what the conversation's earlier tasks took. |
+| `tasks[].conversation_tokens` | no | How big the conversation is so far, in tokens. 0 or left out for a new one. |
 | `tasks[].extra` | no | Any values your own features need. They reach them as `info.extra`. |
 | `distribution` | no | `true` to get each forecast's full curve. Default: `false`. |
 | `predictor` | no | Which predictor to use. Default: your default predictor, set with `yardstick-predict default NAME`. |

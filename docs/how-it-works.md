@@ -30,18 +30,23 @@ A refresh reads only the record files that changed since the last one.
 
 ## 2. Features
 
-The prompt is always used. These can be added:
+Every feature describes what's known before a task starts. Three are always used. They cost nothing, and they send nothing anywhere:
 
-- **`context`:** the last 1,500 characters of the conversation before the prompt. A longer cut made forecasts worse on real runs, and costs more.
-- **`skills`:** the skills the agent used, found in the records, with each skill's description from its own `SKILL.md`.
+- **The task:** the prompt's meaning and its layout (how many list items, file names, links and lines it has, and whether it ends in a question), the AI model, the agent, who started it, and the thinking level, both as a label and as a step on one scale from low to max, so a level with few tasks can learn from the levels next to it.
+- **Similar past tasks:** see below.
+- **History:** the project's five most recent finished tasks, from any conversation: their typical time, tokens and cost, how often they were answered directly, how many came before and how long ago the last one finished. The conversation so far: how many tasks it had, and what its last finished task took. And the conversation's size in tokens when the task started. A person's conversation and a program's one-off run grow differently, so each has its own size number.
+
+These can be added:
+
+- **`context`:** the last 1,500 characters of the conversation before the prompt. A longer cut made forecasts worse on real runs, and costs more. With it, the model also learns how close the prompt's meaning is to the conversation's, and finds past tasks similar in both.
+- **`skills`:** the skills known before the task starts, each with its description from its own `SKILL.md`: those the prompt names as a slash command, and those used earlier in the conversation. The skills a task goes on to use aren't known when it starts, so they aren't used.
 - **`benchmarks`:** public facts about each AI model from OpenRouter's model list: input, output and cache-read prices, context size, longest answer, release date, and whether it reasons. They're described the same way for old and new models. The list is downloaded at setup and at each refresh, and saved with the predictor.
+- **`llm`, LLM analysis:** an AI model reads each task's prompt and the end of the conversation before it, and reports the kind of task, how many files and steps it likely takes, whether it must run code or look things up, whether it continues earlier work, how clear it is, and its own guess of the minutes. With the description option it also writes a few sentences on the work, which are embedded like the prompt. It never sees how a task went. Each task is read once and the answer is saved.
 - **Your own:** text or number features registered by a plugin.
 
-Every task also brings its AI model, thinking level, agent, who started it and its prompt's length.
+An embedding is a list of numbers that captures what a text means: similar texts get similar numbers. Each embedded feature is embedded once with the predictor's Voyage 4 model, at 256 numbers, and saved. For a new task, the predictor finds the 100 most similar past tasks by that feature. It averages what they really took: their seconds, tokens and cost on a log scale, and how often they were answered directly. It also records how similar they were. For the prompt it adds more: what the closest task took, the same averages over the closest 10, how much the 100 varied, the typical direct answer and the typical piece of work kept apart, and an average where closer and newer tasks count more. On real runs, the closest ten told more than the hundred, and the spread said how sure to be.
 
-An embedding is a list of numbers that captures what a text means: similar texts get similar numbers. Each embedded feature is embedded once with the predictor's Voyage 4 model, at 256 numbers, and saved. For a new task, the predictor finds the 100 most similar past tasks by that feature. It averages what they really took: their seconds, tokens and cost on a log scale, and how often they were answered directly. It also records how similar they were. These five numbers are what the model learns from.
-
-This works better than giving the trees the embedding itself. 256 weak numbers let trees find patterns that don't hold for new tasks. On real runs, the raw numbers made forecasts worse, and averages over similar tasks made them better.
+This works better than giving the trees the embedding itself. 256 weak numbers let trees find patterns that don't hold for new tasks. On real runs, the raw numbers made forecasts worse, and averages over similar tasks made them better. The whole embedding still gets one say: a weighted sum of all its numbers, with the weights kept small so it can't chase coincidences, makes a first guess of the time, tokens and cost. In training, each task's guess comes from weights fit only on tasks that had finished before it, as a forecast's guess is. The trees get that guess as one more input.
 
 ## 3. The model: one curve per task
 
@@ -62,6 +67,8 @@ Three choices keep the model honest when there's little data:
 3. **Newer tasks count more.** How people use agents changes over time. A task 30 days older than the newest one counts half as much.
 
 A last step widens or narrows each AI model's curves by one factor, picked on the held-back tasks before the trees have seen them. Then every part is trained again on all the tasks.
+
+**Two versions, one for each kind of work.** The conversation so far tells a lot about a person's sessions: tasks in one conversation tend to be alike. A program's one-off runs have no conversation, and their sizes mean something else. Trees shared by both learn the common pattern and misapply it to the other. So training makes two versions, with and without the conversation's inputs, and the test below scores both. Each AI model's forecasts use the version that did better, and the report says which.
 
 ### Advanced settings
 
@@ -96,5 +103,6 @@ XGBoost needs a library called OpenMP. On a Mac, XGBoost looks for it only where
 ## 6. Speed
 
 - **Reading records** takes well under a minute for gigabytes of history. A refresh reads only what changed.
-- **Training** takes seconds for thousands of tasks, including the test.
-- **A forecast** takes about half a second from the command line. Most of that is starting Python. Add one short request to Voyage for the embeddings.
+- **Training** takes well under a minute for thousands of tasks, including the test of both versions.
+- **A forecast** takes about half a second from the command line. Most of that is starting Python. Add one short request to Voyage for the embeddings, and with LLM analysis, one request to the AI model you picked.
+- **LLM analysis** reads past tasks once, in batches: several at a time with an API key, fewer through a subscription.

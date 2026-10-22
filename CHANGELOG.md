@@ -2,6 +2,30 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Forecasts learn from much more of what's known before a task starts. A predictor made with an older version keeps its tasks and embeddings, but its model must be trained again: `yardstick-predict refresh` does that, and costs nothing unless there are new tasks to embed. Until then it gives no forecasts.
+
+### Added
+
+- Inputs that are always used, cost nothing and send nothing anywhere:
+  - Similar past tasks, in more detail: what the closest one took, the closest ten, how much the hundred closest varied, direct answers and real work kept apart, and closer, newer tasks counting more.
+  - A first guess from the prompt's whole embedding, which the trees take as one more input.
+  - The project's recent tasks, from any conversation.
+  - The conversation so far, and how big it has grown.
+  - The prompt's layout: list items, file names, links and lines, and whether it asks a question.
+  - The effort level as one scale from low to max, so a level with few tasks learns from the levels next to it.
+- With the `context` feature, how close the prompt is to the conversation before it, and past tasks found by both together.
+- Training makes two versions, with and without the conversation, and each AI model's forecasts use the one that did better on the test. The report says which.
+- LLM analysis, a new feature: an AI model reads each task before it starts and reports the kind of task, its expected size and, as an option, a few sentences on the work, which are embedded. It's paid with an Anthropic or OpenAI API key, or with a Claude or ChatGPT subscription through Claude Code or Codex. Each task is read once, never next to another task of its conversation. When it can't run, such as with no key, training goes on without it and a refresh tries again; a task it refuses is tried twice at most. The new `llm` extra installs the providers' libraries for the API keys.
+- A new Features screen at setup: each feature with its options under it, turned on and off by number. `--features` takes options too, such as `skills:named`, and `--llm-provider` and `--llm-model` set up LLM analysis.
+- Forecast requests take `session` and `conversation_tokens`, and use `project` for the project's recent tasks. The status line in Claude Code sends all three.
+
+### Changed
+
+- The `skills` feature reads only skills known before a task starts: the ones its prompt names, and the ones used earlier in the conversation. It used to read the skills a task went on to use, which a forecast can't know. A refresh embeds them again.
+- `status` lists each predictor's features with their options.
+
 ## [0.2.1] - 2026-10-22
 
 Records are read more accurately. A predictor made with an older version keeps the tasks it already read. To re-read all of yours, create a new predictor with `yardstick-predict create NAME`, then make it the default with `yardstick-predict default NAME`.

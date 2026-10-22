@@ -8,7 +8,6 @@ These build on the first version. Each one goes in only if it passes the same te
 - **Learn from stopped tasks.** A stopped task took at least as long as it ran. The score can use that instead of leaving the task out.
 - **Draw time, tokens and cost together.** A task that runs long usually uses more tokens too. Give orchestrators possible futures where the three move together.
 - **More benchmark sources.** Add public quality and speed benchmarks that describe old and new models the same way.
-- **An LLM's read of the task.** Let a language model write a short analysis of the task, and use what similar analyses took.
 - **Subscription usage limits.** Forecast a task's share of a plan's usage window, not only its dollar cost.
 
 ## Data
