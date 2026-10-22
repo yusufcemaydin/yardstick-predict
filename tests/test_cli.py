@@ -63,6 +63,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     assert by_model["gpt-unknown"]["reason"] == "unknown_model" and "effort" not in by_model["gpt-unknown"]
     # A model is forecast at every effort level it often ran at.
     assert {f["effort"] for f in result["forecasts"] if f["model"] == "claude-opus-5-5"} == {"high", "max"}
+    assert {f["task"] for f in result["forecasts"]} == {"task"}  # one prompt is one task
 
     # In a terminal, a task in quotes gets a table, on every model the predictor forecasts.
     monkeypatch.setattr(cli, "terminal_output", lambda: True)

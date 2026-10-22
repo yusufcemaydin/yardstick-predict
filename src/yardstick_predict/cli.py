@@ -720,6 +720,10 @@ def cmd_predict(args) -> int:
             tasks, distribution, chosen = parse(request)
             predictor = request_predictor(args.predictor or chosen)
         result = answer(predictor, tasks, distribution or args.distribution)
+        if prompt is not None:
+            # One prompt is one task, whatever models and effort levels it's forecast on.
+            for forecast in result["forecasts"]:
+                forecast["task"] = "task"
         code = 0
     except RequestError as error:
         result, code = error.as_answer(), 1
@@ -868,6 +872,50 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_claude_code(args) -> int:
+    """Add the status line and its hooks to Claude Code's settings, or take them out again."""
+    from . import claude_code
+
+    path = claude_code.settings_path(args.here)
+    try:
+        settings = json.loads(path.read_text()) if path.is_file() else {}
+    except ValueError:
+        raise SystemExit(f"Claude Code's settings in {path} aren't valid JSON, so they were left alone.") from None
+    where = "Claude Code sessions in this folder" if args.here else "all your Claude Code sessions"
+    if args.action == "remove":
+        changed = claude_code.removed(settings)
+        if changed == settings:
+            ui.out(f"yardstick isn't in the settings for {where}. Nothing to remove.")
+            return 0
+        path.write_text(json.dumps(changed, indent=2) + "\n")
+        ui.ok(f"Removed the forecasts from {where}. New sessions won't show them.")
+        return 0
+    if not predictor_names():
+        raise SystemExit("There's no predictor yet. Run yardstick-predict to create one first.")
+    ui.out(ui.bold("Forecasts in Claude Code"))
+    ui.line(f"This adds a status line and two hooks to {where}.")
+    ui.note(f"They go in {path}." + (" A copy of the file as it is now is kept next to it." if path.is_file() else ""))
+    ui.note("Each prompt you send there goes to Voyage to be embedded: a few tokens each.")
+    other = claude_code.other_status_line(settings)
+    if other:
+        ui.note(f"It replaces your current status line: {other}")
+    if interactive() and not args.yes:
+        if not ui.ask("Add them?", True):
+            ui.note("Nothing changed.")
+            return 0
+    elif not args.yes:
+        ui.line("Add --yes to go ahead.")
+        return 2
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup = path.with_name(path.name + ".before-yardstick")
+    if path.is_file() and not backup.exists():
+        backup.write_text(path.read_text())
+    path.write_text(json.dumps(claude_code.added(settings, sys.executable), indent=2) + "\n")
+    ui.ok("Added. Start a new Claude Code session there to see forecasts in its status line.")
+    ui.note("Remove them with: yardstick-predict claude-code remove" + (" --here" if args.here else ""))
+    return 0
+
+
 def cmd_default(args) -> int:
     names = predictor_names()
     if not args.name:
@@ -959,6 +1007,11 @@ def make_parser() -> argparse.ArgumentParser:
 
     default = commands.add_parser("default", help="Show or choose the predictor used when a command names none.")
     default.add_argument("name", nargs="?", help="The predictor to make the default.")
+
+    claude = commands.add_parser("claude-code", help="Show forecasts in Claude Code's status line, or stop.")
+    claude.add_argument("action", choices=["install", "remove"], help="Add the status line, or take it out.")
+    claude.add_argument("--here", action="store_true", help="Only for Claude Code sessions in this folder.")
+    claude.add_argument("--yes", action="store_true", help="Go ahead without asking.")
     return parser
 
 
@@ -970,6 +1023,7 @@ def main(argv: list[str] | None = None) -> int:
         "predict": cmd_predict,
         "status": cmd_status,
         "default": cmd_default,
+        "claude-code": cmd_claude_code,
     }
     problem = xgboost_problem(sys.argv[1:] if argv is None else argv)
     if problem:

@@ -2,6 +2,16 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Forecasts in Claude Code's status line. `yardstick-predict claude-code install` shows the forecast for the model and effort level you're on as soon as you send a prompt, counts up while the agent works, and shows how long the task really took. `--here` turns it on for one folder, and `yardstick-predict claude-code remove` turns it off.
+
+### Fixed
+
+- `predict "TASK" --json` gave each effort level's forecast its own task id. Every forecast for one prompt now has the task id `task`.
+
 ## [0.1.0] - 2026-10-22
 
 The first release.
@@ -21,4 +31,5 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/yusufcemaydin/yardstick-predict/releases/tag/v0.1.0

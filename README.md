@@ -93,6 +93,16 @@ yardstick-predict create --yes --features context,skills,benchmarks
 
 Each embedded feature becomes what the most similar past tasks really took. A predictor keeps its features and its embedding model for good. To change them, create a new predictor.
 
+## Forecasts in Claude Code
+
+`yardstick-predict claude-code install` puts the forecast in Claude Code's status line. When you send a prompt, it shows the forecast for the model and effort level you're on, counts up while the agent works, then shows how long the task really took:
+
+```text
+yardstick · 1:12 of ~4 min · ~$1.23
+```
+
+While it's on, every prompt you send in Claude Code goes to Voyage to be embedded, a few tokens each. Add `--here` to turn it on only for sessions in the current folder. `yardstick-predict claude-code remove` turns it off.
+
 ## Use it from a program
 
 `predict` reads a JSON request on standard input and writes a JSON answer. It never asks questions.
@@ -194,6 +204,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each predictor, its features and how it did on its test. `--json` for programs. |
 | `yardstick-predict default [NAME]` | Shows or sets your default predictor: the one commands use when they name none. `--predictor NAME` picks another for one command. |
+| `yardstick-predict claude-code install` | Shows forecasts in Claude Code's status line. `--here` for one folder, `remove` to turn it off. |
 
 ## Update or remove it
 
