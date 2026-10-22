@@ -11,6 +11,36 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 ### Fixed
 
 - `predict "TASK" --json` gave each effort level's forecast its own task id. Every forecast for one prompt now has the task id `task`.
+- The test before any forecast learned from tasks that were still running when it tested. It now learns only from tasks that had finished, and so do the similar-task features, so its accuracy is no longer too optimistic.
+- A forecast value such as cost was given without being tested, or after being tested on one or two tasks. Each value is now given only for an AI model whose test checked it on at least 30 tasks.
+- An AI model used only long ago was missing from `yardstick-predict status`. It's now listed, with the reason it has no forecasts.
+- Reading records:
+  - The conversation before a prompt was stored with each reply before its prompt. It's now in order.
+  - Codex helpers' tokens were lost, or charged to the wrong task, when a helper replied after its task finished, was reused, was started by another helper, or changed between refreshes.
+  - A task read before it finished stayed stopped. It's now repaired when it finishes.
+  - When two archives held one task, the less complete copy could win.
+  - A line written while the agent waited for you could mark the task left waiting.
+  - Two waits for you at the same time were taken off the task's time twice.
+- A refresh after a failed training run said the model was up to date. It now trains again.
+- Saving a model removed the working one before the new one was in place.
+- `--max-tasks` embedded and trained on different tasks. Setup now stops before spending anything when fewer than 30 tasks can be learned from.
+- Voyage:
+  - What a split batch had embedded was lost when a later part failed, and it was paid for again.
+  - Usage counts were lost when two processes recorded usage at once.
+  - A batch over the account's tokens-a-minute limit was retried several times before it was split.
+  - A forecast embedded texts the model couldn't use.
+  - A wrong `VOYAGE_API_BASE` was retried for about two minutes.
+- Skill descriptions written over several lines were read as `|` or `>`.
+- Your own text features saw no model, effort level or agent when forecasting.
+- A forecast answer or the test report could hold NaN, which strict JSON readers reject.
+- In Claude Code's status line:
+  - A slow forecast could replace a newer prompt's forecast.
+  - The forecast didn't know a person typed the prompt, or what came before it in the conversation.
+  - A model could be shown another model's forecast.
+  - Odd shapes in Claude Code's settings could crash it.
+- Tasks are saved with each column named, so an older dataset keeps every value in its column.
+- Two archives with the same name now get their own names.
+- Forecasting with a predictor that has no model yet says `not_trained`.
 
 ## [0.1.0] - 2026-10-22
 
