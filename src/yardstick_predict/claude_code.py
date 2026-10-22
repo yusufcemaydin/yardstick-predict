@@ -42,10 +42,16 @@ def folder() -> Path:
     return found
 
 
-def _paths(session: str) -> tuple[Path, Path, Path]:
+def _paths(session: str) -> tuple[Path, Path]:
     safe = "".join(c for c in session if c.isalnum() or c in "-_")[:80] or "session"
     base = folder() / safe
-    return base.with_suffix(".json"), base.with_suffix(".forecast.json"), base.with_suffix(".prompt")
+    return base.with_suffix(".json"), base.with_suffix(".forecast.json")
+
+
+def _prompt_path(session: str, prompt_at: float) -> Path:
+    """Where the hook leaves a prompt for its forecast. Each prompt has its own file, named by when it was sent."""
+    state_path, _ = _paths(session)
+    return state_path.with_name(f"{state_path.stem}.{prompt_at!r}.prompt")
 
 
 def _read(path: Path) -> dict:
@@ -74,15 +80,16 @@ def hook() -> int:
     session = str(event.get("session_id") or "")
     if not session:
         return 0
-    state_path, _, prompt_path = _paths(session)
+    state_path, _ = _paths(session)
     if event.get("hook_event_name") == "UserPromptSubmit":
         prompt = str(event.get("prompt") or "")
         if not prompt.strip():
             return 0
         model, effort = last_model_and_effort(event.get("transcript_path"))
-        _write(state_path, {"prompt_at": time.time(), "model": model, "effort": effort})
-        prompt_path.write_text(prompt)
-        _start_forecast(session)
+        prompt_at = time.time()
+        _write(state_path, {"prompt_at": prompt_at, "model": model, "effort": effort})
+        _prompt_path(session, prompt_at).write_text(prompt)
+        _start_forecast(session, prompt_at)
         _tidy()
     elif event.get("hook_event_name") in STOPS:
         state = _read(state_path)
@@ -119,7 +126,7 @@ def last_model_and_effort(transcript: str | None) -> tuple[str, str]:
     return "", ""
 
 
-def _start_forecast(session: str) -> None:
+def _start_forecast(session: str, prompt_at: float) -> None:
     env = dict(os.environ)
     openmp = _bundled_openmp()
     if openmp:
@@ -130,7 +137,8 @@ def _start_forecast(session: str) -> None:
         options["creationflags"] = 0x00000008 | 0x00000200  # run on its own, apart from the hook
     else:
         options["start_new_session"] = True
-    subprocess.Popen([sys.executable, "-m", MARK, "forecast", session], env=env, close_fds=True, **options)
+    command = [sys.executable, "-m", MARK, "forecast", session, repr(prompt_at)]
+    subprocess.Popen(command, env=env, close_fds=True, **options)
 
 
 def _bundled_openmp() -> str | None:
@@ -158,15 +166,20 @@ def _tidy() -> None:
 # The forecast, in the background -----------------------------------------------------------------------
 
 
-def forecast(session: str) -> int:
-    """Forecast the prompt on every AI model and effort level the predictor covers, and save it."""
-    state_path, forecast_path, prompt_path = _paths(session)
+def forecast(session: str, prompt_at: float) -> int:
+    """Forecast the prompt sent at prompt_at on every AI model and effort level the predictor covers, and save it.
+
+    A newer prompt may come while this runs. Its forecast is the one to show, so this one is saved only
+    if its prompt is still the session's latest when it's done.
+    """
+    state_path, forecast_path = _paths(session)
+    prompt_path = _prompt_path(session, prompt_at)
     try:
         prompt = prompt_path.read_text()
     except OSError:
         return 0
     prompt_path.unlink(missing_ok=True)
-    found: dict = {"prompt_at": _read(state_path).get("prompt_at")}
+    found: dict = {"prompt_at": prompt_at}
     try:
         from . import cli
         from .forecast import answer, parse
@@ -181,7 +194,8 @@ def forecast(session: str) -> int:
         found.update(predictor=predictor.name, forecasts=answer(predictor, parsed)["forecasts"])
     except Exception as error:
         found["error"] = (getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
-    _write(forecast_path, found)
+    if _read(state_path).get("prompt_at") == prompt_at:
+        _write(forecast_path, found)
     return 0
 
 
@@ -205,7 +219,7 @@ def status_line(session: str, model: str, now: float, effort: str = "", transcri
     label = _dim("yardstick")
     if not session:
         return label
-    state_path, forecast_path, _ = _paths(session)
+    state_path, forecast_path = _paths(session)
     state = _read(state_path)
     started = state.get("prompt_at")
     if not started:
@@ -346,8 +360,8 @@ def main(argv: list[str]) -> int:
         return hook()
     if argv[:1] == ["status"]:
         return status()
-    if argv[:1] == ["forecast"] and len(argv) == 2:
-        return forecast(argv[1])
+    if argv[:1] == ["forecast"] and len(argv) == 3:
+        return forecast(argv[1], float(argv[2]))
     print("Use: python -m yardstick_predict.claude_code hook|status", file=sys.stderr)
     return 2
 

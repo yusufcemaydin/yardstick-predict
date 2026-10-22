@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,11 +34,11 @@ def test_adding_keeps_your_own_settings_and_removing_puts_them_back():
 
 
 def test_the_status_line_follows_a_task_from_prompt_to_stop(monkeypatch):
-    monkeypatch.setattr(cc, "_start_forecast", lambda session: None)
+    monkeypatch.setattr(cc, "_start_forecast", lambda session, prompt_at: None)
     send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "Add a login page"})
-    state_path, forecast_path, prompt_path = cc._paths("s1")
+    state_path, forecast_path = cc._paths("s1")
     started = json.loads(state_path.read_text())["prompt_at"]
-    assert prompt_path.read_text() == "Add a login page"
+    assert cc._prompt_path("s1", started).read_text() == "Add a login page"
     assert cc.status_line("s1", "claude-opus-5-5", started + 1).endswith("· forecasting…")
 
     forecasts = [
@@ -57,6 +58,46 @@ def test_the_status_line_follows_a_task_from_prompt_to_stop(monkeypatch):
     done = json.loads(state_path.read_text())["done_at"]
     line = plain(cc.status_line("s1", "claude-opus-5-5", done + 999))
     assert line.startswith("yardstick · took 0:0") and line.endswith("· forecast ~4 min · ~$1.23")
+
+
+def test_an_older_forecast_never_replaces_a_newer_one(monkeypatch):
+    commands = forecasts_by_hand(monkeypatch)
+
+    def answer(predictor, tasks):
+        if tasks[0].prompt == "First prompt":
+            # While the first forecast runs, a second prompt is sent, and its forecast finishes first.
+            send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "Second prompt"})
+            cc.main(commands[-1])
+        seconds = 60.0 if tasks[0].prompt == "First prompt" else 120.0
+        return {"forecasts": [{"model": "m", "seconds": seconds, "tokens": 9, "usd": None}]}
+
+    monkeypatch.setattr("yardstick_predict.forecast.answer", answer)
+    send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "First prompt"})
+    assert cc.main(commands[0]) == 0
+    latest = json.loads(cc._paths("s1")[0].read_text())["prompt_at"]
+    assert plain(cc.status_line("s1", "m", latest + 1)) == "yardstick · 0:01 of ~2 min"  # the second prompt's
+
+
+def test_each_forecast_reads_its_own_prompt(monkeypatch):
+    commands = forecasts_by_hand(monkeypatch)
+    asked: list[list[str]] = []
+
+    def answer(predictor, tasks):
+        asked[-1].append(tasks[0].prompt)
+        seconds = 60.0 if tasks[0].prompt == "First prompt" else 120.0
+        return {"forecasts": [{"model": "m", "seconds": seconds, "tokens": 9, "usd": None}]}
+
+    monkeypatch.setattr("yardstick_predict.forecast.answer", answer)
+    # The second prompt is sent before the first prompt's forecast has started.
+    send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "First prompt"})
+    send(monkeypatch, {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "Second prompt"})
+    for command in commands:
+        asked.append([])
+        assert cc.main(command) == 0
+    assert "Second prompt" not in asked[0] and asked[1] == ["Second prompt"]
+    assert not list(cc.folder().glob("*.prompt"))  # each forecast took its prompt away
+    latest = json.loads(cc._paths("s1")[0].read_text())["prompt_at"]
+    assert plain(cc.status_line("s1", "m", latest + 1)) == "yardstick · 0:01 of ~2 min"
 
 
 def test_the_session_effort_level_picks_the_forecast(tmp_path):
@@ -117,6 +158,22 @@ def no_color(monkeypatch):
 def send(monkeypatch, event: dict) -> None:
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event)))
     assert cc.hook() == 0
+
+
+def forecasts_by_hand(monkeypatch) -> list[list[str]]:
+    """Keep each background forecast the hook would start, to run it here by hand with cc.main.
+
+    The forecasts use a stand-in predictor that forecasts model m. The clock moves 10 seconds at each
+    look, so two prompts never share a time.
+    """
+    commands: list[list[str]] = []
+    monkeypatch.setattr(cc.subprocess, "Popen", lambda command, **options: commands.append(command[3:]))
+    clock = iter(range(1_780_000_000, 1_790_000_000, 10))
+    monkeypatch.setattr(cc, "time", SimpleNamespace(time=lambda: float(next(clock))))
+    monkeypatch.setattr(cli, "request_predictor", lambda chosen: SimpleNamespace(name="default"))
+    monkeypatch.setattr(cli, "forecast_models", lambda predictor: ["m"])
+    monkeypatch.setattr(cli, "effort_pairs", lambda predictor, models, effort: [(model, None) for model in models])
+    return commands
 
 
 def plain(text: str) -> str:
