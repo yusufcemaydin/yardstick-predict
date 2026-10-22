@@ -648,6 +648,10 @@ def cmd_refresh(args) -> int:
     if found.updated_tasks:
         grew = len(found.updated_tasks)
         ui.note(f"{grew:,} saved tasks grew, because their helper agents finished after the last refresh.")
+    has_model = (predictor.model_dir / "model.json").is_file()
+    behind = bool(predictor.config.get("needs_training"))
+    if behind and has_model:
+        ui.note("Training didn't finish last time. The model is out of date.")
     model_name = predictor.embedding_model
     key, _ = embeddings.find_key()
     from . import features
@@ -658,8 +662,8 @@ def cmd_refresh(args) -> int:
     everything = predictor.tasks() + found.new_tasks
     pending = embedding_items(everything, chosen, have, predictor.config.get("max_tasks"))
     plan = price(pending, model_name, key)
-    nothing_new = not found.new_tasks and not found.updated_tasks and not plan.items
-    if nothing_new and (predictor.model_dir / "model.json").is_file():
+    nothing_new = not found.new_tasks and not found.updated_tasks and not plan.items and not behind
+    if nothing_new and has_model:
         ui.ok("Nothing new. The model is up to date.")
         return 0
     if plan.items:

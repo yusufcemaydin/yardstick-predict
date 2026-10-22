@@ -10,7 +10,7 @@ import pytest
 from builders import ClaudeSession, history
 from conftest import KEY
 
-from yardstick_predict import benchmarks, cli, embeddings
+from yardstick_predict import benchmarks, cli, embeddings, model_types
 from yardstick_predict.cli import main
 from yardstick_predict.store import Predictor, default_name, predictor_names
 
@@ -275,6 +275,49 @@ def test_refresh_adds_only_new_tasks(capsys, records, ready):
     assert code == 0 and "Found 3 new tasks" in out
     assert Predictor("default").count_tasks() == 423
     assert len(Predictor("default").embedded("prompt")) == 423
+
+
+def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, records, ready, monkeypatch):
+    trained: list[int] = []
+    stop = {"now": False}
+
+    class Stub:
+        def __init__(self, tasks):
+            self.meta = {"tasks": len(tasks), "report": {}}
+
+        def save(self, folder):
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "model.json").write_text(json.dumps(self.meta))
+
+    def stub_train(tasks, rows, settings):
+        if stop["now"]:
+            raise KeyboardInterrupt  # the person pressed Ctrl+C while it trained
+        trained.append(len(tasks))
+        return Stub(tasks)
+
+    monkeypatch.setitem(model_types._TYPES, "stub", (stub_train, lambda folder: None))
+    code, out = run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--model-type", "stub")
+    assert code == 0, out
+    assert trained == [420]
+
+    session = ClaudeSession(records, "brand-new", START + 90 * 86400)
+    for n in range(3):
+        session.prompt(f"new task {n}")
+        session.reply(5)
+    session.save(mtime=START)
+    stop["now"] = True
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 130
+    assert Predictor("default").count_tasks() == 423  # the new tasks were saved, but the model is the old one
+
+    stop["now"] = False
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 0, out
+    assert "Nothing new" not in out and "Training didn't finish last time" in out
+    assert trained == [420, 423]
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 0 and "Nothing new" in out
+    assert trained == [420, 423]
 
 
 def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, ready, monkeypatch):

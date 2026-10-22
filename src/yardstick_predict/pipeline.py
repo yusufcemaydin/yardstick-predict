@@ -61,6 +61,9 @@ def scan(predictor: Predictor, now: float | None = None) -> Scan:
 
 
 def save_scan(predictor: Predictor, found: Scan) -> int:
+    # The model is out of date until training succeeds, even if this run stops before then.
+    predictor.config["needs_training"] = True
+    predictor.save_config()
     added = predictor.add_tasks(found.new_tasks)
     predictor.replace_tasks(found.updated_tasks)
     predictor.remember_files(found.files)
@@ -248,6 +251,7 @@ def train(predictor: Predictor):
     model = trainer(tasks, feature_rows(predictor, tasks), model_settings)
     model.save(predictor.model_dir)
     predictor.config["refreshed_at"] = time.time()
+    predictor.config["needs_training"] = False
     predictor.save_config()
     return model
 
