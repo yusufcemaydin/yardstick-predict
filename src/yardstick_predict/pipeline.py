@@ -266,7 +266,27 @@ def train(predictor: Predictor):
     return model
 
 
+def model_ready(predictor: Predictor, wait: float = 2.0) -> bool:
+    """Whether the predictor has a model. While a new one is being swapped in, wait a moment for it.
+
+    Saving moves the old model aside and the new one into place. In between there's no model for an
+    instant, and a forecast asking then, such as the status line's, would wrongly find none.
+    """
+    path = predictor.model_dir / "model.json"
+    deadline = time.time() + wait
+    while not path.is_file():
+        if not any(predictor.dir.glob(".model-*")) or time.time() > deadline:
+            return False
+        time.sleep(0.02)
+    return True
+
+
 def load_model(predictor: Predictor):
     load_plugins(predictor)
     _, loader = model_types.get(settings(predictor).get("type", "xgboost"))
-    return loader(predictor.model_dir)
+    try:
+        return loader(predictor.model_dir)
+    except FileNotFoundError:  # a new model was swapped in while this one was read
+        if not model_ready(predictor):
+            raise
+        return loader(predictor.model_dir)

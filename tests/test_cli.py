@@ -237,6 +237,35 @@ def test_setup_never_offers_fewer_free_tasks_than_training_needs(capsys, records
     assert predictor_names() == []  # it stopped at the question, as told
 
 
+def test_only_one_refresh_of_a_predictor_runs_at_a_time(capsys):
+    from yardstick_predict import locks
+
+    predictor = Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    with locks.held(predictor.dir / "refresh.lock"):  # another command is refreshing it
+        assert main(["refresh", "--yes"]) == 1
+    assert "being set up or refreshed by another command" in capsys.readouterr().err
+
+
+def test_a_forecast_waits_for_a_model_being_swapped_in():
+    import threading
+    import time
+
+    from yardstick_predict.pipeline import model_ready
+
+    predictor = Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    assert not model_ready(predictor)  # no model, and none on its way: no waiting
+    (predictor.dir / ".model-new").mkdir()  # a save has moved the old model aside
+
+    def arrive():
+        time.sleep(0.2)
+        predictor.model_dir.mkdir()
+        (predictor.model_dir / "model.json").write_text("{}")
+
+    threading.Thread(target=arrive).start()
+    started = time.time()
+    assert model_ready(predictor) and time.time() - started >= 0.15
+
+
 def test_bad_choices_get_a_plain_reason(capsys, records, ready):
     assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "horoscope"]) == 1
     assert "Unknown feature" in capsys.readouterr().err

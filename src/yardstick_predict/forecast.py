@@ -187,7 +187,7 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
     """Forecast every task on every model it lists."""
     from .model import Features
 
-    if not (predictor.model_dir / "model.json").is_file():
+    if not pipeline.model_ready(predictor):
         raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
     model = pipeline.load_model(predictor)
     chosen = pipeline.chosen_features(predictor)

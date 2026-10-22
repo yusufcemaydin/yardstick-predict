@@ -21,7 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, embeddings, ui
+from . import __version__, embeddings, locks, ui
 from .archives import DEFAULT_ARCHIVES, FORMATS, archive_path
 from .store import NAME_PATTERN, Predictor, default_name, predictor_names, set_default
 
@@ -591,23 +591,24 @@ def cmd_create(args) -> int:
     args.max_tasks = limit
 
     predictor = Predictor.create(name, archives, {"model": model_name, "dimensions": embeddings.DIMENSIONS})
-    predictor.config.update(features=chosen, model=model_settings, plugins=list(args.plugin))
-    if args.max_tasks:
-        predictor.config["max_tasks"] = int(args.max_tasks)
-    predictor.save_config()
-    save_scan(predictor, found)
-    warning = refresh_benchmarks(predictor)
-    if warning:
-        ui.note(warning)
-    if plan.items and not embed_with_progress(predictor, plan, key):
-        return 1
-    model = train_and_report(predictor, train)
-    if model is None:
-        return 1
-    if make_default:
-        set_default(name)
-    say_how_to_use(model, name)
-    return 0
+    with locks.held(predictor.dir / "refresh.lock"):  # a refresh started meanwhile is told to try again later
+        predictor.config.update(features=chosen, model=model_settings, plugins=list(args.plugin))
+        if args.max_tasks:
+            predictor.config["max_tasks"] = int(args.max_tasks)
+        predictor.save_config()
+        save_scan(predictor, found)
+        warning = refresh_benchmarks(predictor)
+        if warning:
+            ui.note(warning)
+        if plan.items and not embed_with_progress(predictor, plan, key):
+            return 1
+        model = train_and_report(predictor, train)
+        if model is None:
+            return 1
+        if make_default:
+            set_default(name)
+        say_how_to_use(model, name)
+        return 0
 
 
 def embed_with_progress(predictor: Predictor, plan, key: str) -> bool:
@@ -674,9 +675,28 @@ def say_how_to_use(model, name: str, full: bool = True) -> None:
 
 
 def cmd_refresh(args) -> int:
-    from .pipeline import chosen_features, load_plugins, plan_embeddings, refresh_benchmarks, save_scan, scan, train
-
     predictor = pick_predictor(args.predictor)
+    # Two refreshes at once could each train, and the slower one could save an older model over a newer one.
+    with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
+        if not mine:
+            raise SystemExit(
+                f"{predictor.name} is being set up or refreshed by another command. Try again when it's done."
+            )
+        return _refresh(args, predictor)
+
+
+def _refresh(args, predictor: Predictor) -> int:
+    from .pipeline import (
+        chosen_features,
+        load_plugins,
+        model_ready,
+        plan_embeddings,
+        refresh_benchmarks,
+        save_scan,
+        scan,
+        train,
+    )
+
     load_plugins(predictor)
     can_ask = interactive()
     ask_first = getattr(args, "ask_first", False)
@@ -689,7 +709,7 @@ def cmd_refresh(args) -> int:
     if found.updated_tasks:
         grew = len(found.updated_tasks)
         ui.note(f"{grew:,} saved tasks grew, because they or their helper agents finished after the last refresh.")
-    has_model = (predictor.model_dir / "model.json").is_file()
+    has_model = model_ready(predictor)
     behind = bool(predictor.config.get("needs_training"))
     if behind and has_model:
         ui.note("Training didn't finish last time. The model is out of date.")
@@ -820,9 +840,10 @@ def effort_pairs(predictor: Predictor, models: list[str], effort: str | None) ->
 def forecast_models(predictor: Predictor) -> list[str]:
     """The AI models a predictor forecasts, for a request that names none."""
     from .forecast import RequestError
+    from .pipeline import model_ready
 
     model_file = predictor.model_dir / "model.json"
-    if not model_file.is_file():
+    if not model_ready(predictor):
         raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
     served = served_models(json.loads(model_file.read_text()).get("report", {}))
     if not served:
@@ -871,6 +892,8 @@ def show_forecasts(prompt: str, result: dict) -> None:
 
 
 def cmd_status(args) -> int:
+    from .pipeline import model_ready
+
     names = [args.predictor] if args.predictor else predictor_names()
     default = default_name()
     found = []
@@ -890,7 +913,7 @@ def cmd_status(args) -> int:
             "report": None,
         }
         model_file = predictor.model_dir / "model.json"
-        if model_file.is_file():
+        if model_ready(predictor):
             entry["report"] = json.loads(model_file.read_text()).get("report")
         found.append(entry)
     if args.json:
@@ -913,7 +936,7 @@ def cmd_status(args) -> int:
         ui.line(ui.join(facts))
         ui.line(f"Features: {', '.join(entry['features'])}")
         predictor = Predictor(entry["name"])
-        if (predictor.model_dir / "model.json").is_file():
+        if model_ready(predictor):
             model = load_model(predictor)
             ui.line(f"Trained on {model.meta['tasks']:,} tasks.")
             print_report(model)

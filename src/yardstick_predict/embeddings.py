@@ -8,7 +8,6 @@ from your computer's password store, and it is sent only to Voyage.
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import math
@@ -23,7 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 
-from . import store
+from . import locks, store
 
 DIMENSIONS = 256
 """Voyage can return shorter vectors. 256 numbers keep the dataset small and lose little."""
@@ -301,29 +300,8 @@ def _ledger_held() -> Iterator[None]:
     Two forecasts can record usage at the same moment. Without this, one could read the ledger while
     the other is still writing it, and the count it saves would undo the other's.
     """
-    lock = os.open(store.private_home() / "voyage-usage.lock", os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            while True:
-                try:
-                    msvcrt.locking(lock, msvcrt.LK_LOCK, 1)
-                    break
-                except OSError as error:  # Windows stops trying after ten seconds. Keep waiting.
-                    if error.errno != errno.EDEADLOCK:
-                        raise
-            try:
-                yield
-            finally:
-                msvcrt.locking(lock, msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(lock, fcntl.LOCK_EX)  # closing the file lets go
-            yield
-    finally:
-        os.close(lock)
+    with locks.held(store.private_home() / "voyage-usage.lock"):
+        yield
 
 
 def _ledger() -> dict:
