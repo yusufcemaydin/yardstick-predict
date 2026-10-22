@@ -495,10 +495,13 @@ class _CodexTurn:
 
 
 @dataclass
-class _CodexHelper:
-    parent: str
-    started_at: float
-    calls: list[_Call]
+class _CodexThread:
+    """One Codex thread: its id, the thread that spawned it, and its turns."""
+
+    id: str
+    parent: str | None
+    turns: list[tuple[str, float, list[_Call]]]
+    """Each turn's id, start and model calls. Calls before the first turn count from when the thread began."""
 
 
 def _read_codex(archive: dict, only: set[str] | None, now: float) -> list[Task]:
@@ -508,26 +511,26 @@ def _read_codex(archive: dict, only: set[str] | None, now: float) -> list[Task]:
         files = [p for p in files if str(p) in only]
     files.sort(key=lambda p: (p.stat().st_mtime, str(p)))
     tasks: dict[str, Task] = {}
-    helpers: list[_CodexHelper] = []
+    threads: list[_CodexThread] = []
     for path in files:
-        found, helper = _read_codex_file(path, archive["name"], now)
-        if helper:
-            helpers.append(helper)
+        found, thread = _read_codex_file(path, archive["name"], now)
+        if thread:
+            threads.append(thread)
         for task in found:
             _keep_most_complete(tasks, task)
-    _attach_codex_helpers(list(tasks.values()), helpers)
+    _attach_codex_helpers(tasks, threads)
     return list(tasks.values())
 
 
-def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Task], _CodexHelper | None]:
+def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Task], _CodexThread | None]:
     meta: dict = {}
     model, effort = "", "default"
     turn: _CodexTurn | None = None
     last_total: dict | None = None
     history = _History()
     tasks: list[Task] = []
-    helper_calls: list[_Call] = []
-    helper_start: float | None = None
+    turns: list[tuple[str, float, list[_Call]]] = []
+    began: float | None = None
     for line in _lines(path):
         kind = line.get("type")
         payload = line.get("payload") or {}
@@ -539,7 +542,7 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
                 turn.longest_gap = max(turn.longest_gap, moment - turn.last_moment)
             turn.last_moment = moment if turn.last_moment is None else max(turn.last_moment, moment)
         if kind == "session_meta" and not meta:
-            meta = payload
+            meta, began = payload, moment
             continue
         if kind == "turn_context":
             model = payload.get("model") or model
@@ -569,9 +572,9 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
                 continue
             last_total = total
             call = _codex_call(info.get("last_token_usage") or {}, model)
-            if helper_start is None and moment is not None:
-                helper_start = moment
-            helper_calls.append(call)
+            if not turns:
+                turns.append(("", began or moment or 0.0, []))
+            turns[-1][2].append(call)
             if turn is not None:
                 turn.calls.append(call)
                 if turn.first_input is None:
@@ -581,6 +584,7 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
             turn = _CodexTurn(str(payload.get("turn_id") or ""), started or 0.0, model, effort)
             turn.last_moment = moment
             turn.context = history.context()
+            turns.append((turn.turn_id, turn.started_at, []))
         elif event in ("task_complete", "turn_aborted") and turn is not None:
             task = _codex_task(turn, payload, event, meta, path, archive_name)
             if task is not None:
@@ -590,13 +594,13 @@ def _read_codex_file(path: Path, archive_name: str, now: float) -> tuple[list[Ta
         task = _codex_task(turn, {}, "never_finished", meta, path, archive_name)
         if task is not None:
             tasks.append(task)
+    thread_id = str(meta.get("id") or path.stem)
     source = meta.get("source")
     spawn = source.get("subagent", {}).get("thread_spawn") if isinstance(source, dict) else None
     if isinstance(source, dict) and "subagent" in source:
         parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
-        helper = _CodexHelper(str(parent), helper_start or 0.0, helper_calls) if parent else None
-        return [], helper
-    return tasks, None
+        return [], _CodexThread(thread_id, str(parent), turns) if parent else None
+    return tasks, _CodexThread(thread_id, None, turns)
 
 
 def _codex_task(turn: _CodexTurn, payload: dict, event: str, meta: dict, path: Path, archive_name: str) -> Task | None:
@@ -636,19 +640,27 @@ def _codex_task(turn: _CodexTurn, payload: dict, event: str, meta: dict, path: P
     )
 
 
-def _attach_codex_helpers(tasks: list[Task], helpers: list[_CodexHelper]) -> None:
-    """Add each helper thread's tokens to the parent task that was running when the helper started."""
-    by_session: dict[str, list[Task]] = {}
-    for task in tasks:
-        by_session.setdefault(task.session, []).append(task)
-    for helper in helpers:
-        for task in by_session.get(helper.parent, []):
-            if task.started_at <= helper.started_at <= task.started_at + task.seconds:
-                new_input, cache_write, cache_read, output, usd = _totals(helper.calls)
-                task.input_tokens += new_input
-                task.cache_write_tokens += cache_write
-                task.cache_read_tokens += cache_read
-                task.output_tokens += output
-                task.usd = None if task.usd is None or usd is None else task.usd + usd
-                task.calls += len(helper.calls)
-                break
+def _attach_codex_helpers(tasks: dict[str, Task], threads: list[_CodexThread]) -> None:
+    """Add each helper turn's tokens to the task of the parent's turn that started last before it.
+
+    That parent turn spawned the helper or sent it more work. So a helper's tokens count even when its
+    first reply comes after that turn finished, and a reused helper's later turns count toward the
+    later parent turns that sent them.
+    """
+    by_id = {thread.id: thread for thread in threads}
+    for thread in threads:
+        parent = by_id.get(thread.parent or "")
+        if parent is None:
+            continue
+        for _, started, calls in thread.turns:
+            sent = max(((start, turn_id) for turn_id, start, _ in parent.turns if start <= started), default=None)
+            task = tasks.get(f"codex:{sent[1]}") if sent else None
+            if task is None:
+                continue
+            new_input, cache_write, cache_read, output, usd = _totals(calls)
+            task.input_tokens += new_input
+            task.cache_write_tokens += cache_write
+            task.cache_read_tokens += cache_read
+            task.output_tokens += output
+            task.usd = None if task.usd is None or usd is None else task.usd + usd
+            task.calls += len(calls)

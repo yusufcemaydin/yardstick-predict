@@ -252,6 +252,39 @@ def test_codex_helper_threads_add_to_the_parent_task(tmp_path):
     assert tasks[0].calls == 2
 
 
+def test_a_codex_helper_whose_first_reply_comes_after_its_parent_finished_still_counts(tmp_path):
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Start a helper and finish", calls=[(1000, 0, 100)], seconds=10)
+    parent.save(mtime=START)
+    # The helper starts during the parent's turn, but its first reply takes a minute.
+    helper = CodexSession(tmp_path, "helper", START + 5, parent="parent")
+    helper.turn("h1", "Slow helper part", calls=[(200, 0, 20)], seconds=60)
+    helper.save(mtime=START)
+
+    tasks = read_archive(codex_archive(tmp_path), now=LATER)
+    assert [t.prompt for t in tasks] == ["Start a helper and finish"]
+    assert tasks[0].calls == 2
+    assert tasks[0].input_tokens == 1200
+
+
+def test_a_reused_codex_helper_charges_each_turn_to_the_task_that_sent_it(tmp_path):
+    parent = CodexSession(tmp_path, "parent", START)
+    parent.turn("t1", "Start a helper", calls=[(1000, 0, 100)], seconds=100)
+    parent.clock = START + 200
+    parent.turn("t2", "Ask the same helper for more", calls=[(1000, 0, 100)], seconds=100)
+    parent.save(mtime=START)
+    helper = CodexSession(tmp_path, "helper", START + 10, parent="parent")
+    helper.turn("h1", "First job", calls=[(200, 0, 20)], seconds=5)
+    helper.clock = START + 210
+    helper.turn("h2", "Second job", calls=[(300, 0, 30), (300, 0, 30)], seconds=5)
+    helper.save(mtime=START)
+
+    tasks = {t.prompt: t for t in read_archive(codex_archive(tmp_path), now=LATER)}
+    first, second = tasks["Start a helper"], tasks["Ask the same helper for more"]
+    assert (first.calls, first.input_tokens) == (2, 1200)
+    assert (second.calls, second.input_tokens) == (3, 1600)
+
+
 def test_the_context_keeps_the_conversation_in_order(tmp_path):
     claude = ClaudeSession(tmp_path / "claude", "s1", START)
     claude.prompt("First question")
