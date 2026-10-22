@@ -176,14 +176,16 @@ def choose_archives(can_ask: bool, given: list[str]) -> list[dict]:
     chosen = []
     say("Where your past runs are:")
     for archive in found:
-        if ask(f"  Use your {archive['name']} records in {archive['path']}?", True):
+        if ask(f"  Use your {archive['name']} records in their default location ({archive['path']})?", True):
             chosen.append(archive)
     for archive in DEFAULT_ARCHIVES:
         if not archive_path(archive).is_dir():
-            say(f"  No {archive['name']} records in {archive['path']}.")
+            say(f"  No {archive['name']} records in their default location ({archive['path']}).")
     while True:
+        # With no records chosen yet, a folder is the only way to get some, so it isn't optional.
+        optional = "(Optional) " if chosen else ""
         extra = input(
-            "  Add a folder of records in Claude Code or Codex format? Paste its path, or press Enter: "
+            f"  {optional}Add a folder of records in Claude Code or Codex format? Paste its path, or press Enter: "
         ).strip()
         if not extra:
             break

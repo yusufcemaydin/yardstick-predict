@@ -9,7 +9,7 @@ import pytest
 from builders import ClaudeSession, history
 from conftest import KEY
 
-from yardstick_predict import benchmarks, embeddings
+from yardstick_predict import benchmarks, cli, embeddings
 from yardstick_predict.cli import main
 from yardstick_predict.store import Predictor, predictor_names
 
@@ -63,6 +63,35 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready):
     status = json.loads(out)["predictors"][0]
     assert status["tasks"] == 420 and status["features"] == ["prompt", "context"]
     assert status["report"]["windows"] == 3
+
+
+def test_adding_a_folder_is_optional_only_once_some_records_are_chosen(tmp_path, monkeypatch, capsys):
+    (tmp_path / ".claude" / "projects").mkdir(parents=True)
+    copied = tmp_path / "copied-runs"
+    copied.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows finds the home folder here, not in HOME
+
+    def answer(*replies: str) -> list[str]:
+        asked, queue = [], list(replies)
+
+        def fake_input(question: str = "") -> str:
+            asked.append(question.strip())
+            return queue.pop(0)
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        return asked
+
+    asked = answer("y", "")
+    assert [a["name"] for a in cli.choose_archives(True, [])] == ["claude-code"]
+    assert "records in their default location (~/.claude/projects)?" in asked[0]
+    assert asked[1].startswith("(Optional) Add a folder")
+    assert "No codex records in their default location (~/.codex/sessions)." in capsys.readouterr().out
+
+    asked = answer("n", str(copied), "codex", "")
+    assert [a["path"] for a in cli.choose_archives(True, [])] == [str(copied)]
+    assert asked[1].startswith("Add a folder")
+    assert asked[3].startswith("(Optional) Add a folder")
 
 
 def test_a_program_must_agree_to_the_cost(capsys, records, ready):
