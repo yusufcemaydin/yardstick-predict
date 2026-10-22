@@ -154,13 +154,18 @@ def _embed(predictor: Predictor, items: list[tuple[str, str, str]]) -> dict[str,
             "no_embedding_key",
             "This predictor uses Voyage embeddings. Set VOYAGE_API_KEY or run yardstick-predict to save a key.",
         )
+    # The same text, such as one prompt forecast at several effort levels, is sent once.
+    texts = list(dict.fromkeys(text for _, _, text in items))
+    found: dict[int, np.ndarray] = {}
     try:
-        for positions, batch in embeddings.embed([text for _, _, text in items], predictor.embedding_model, key):
+        for positions, batch in embeddings.embed(texts, predictor.embedding_model, key):
             for position, vector in zip(positions, batch):
-                task_id, name, _ = items[position]
-                vectors.setdefault(name, {})[task_id] = np.asarray(vector, dtype=np.float32)
+                found[position] = np.asarray(vector, dtype=np.float32)
     except embeddings.VoyageError as error:
         raise RequestError("embedding_failed", str(error)) from None
+    where = {text: position for position, text in enumerate(texts)}
+    for task_id, name, text in items:
+        vectors.setdefault(name, {})[task_id] = found[where[text]]
     return vectors
 
 
@@ -203,7 +208,11 @@ def answer(predictor: Predictor, tasks: list[TaskRequest], distribution: bool = 
     results = iter(model.forecast(rows))
     forecasts = []
     for task, name, served, reason in pairs:
-        forecast: dict = {"task": task.id, "model": name, "seconds": None, "tokens": None, "usd": None}
+        forecast: dict = {"task": task.id, "model": name}
+        effort = task.effort or defaults.get(name, {}).get("effort")
+        if effort:
+            forecast["effort"] = effort  # the request's, or the level this model ran at most often
+        forecast.update(seconds=None, tokens=None, usd=None)
         if reason:
             forecast["reason"] = reason  # only when the numbers are null
         result = next(results) if served else None

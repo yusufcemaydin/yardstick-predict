@@ -274,7 +274,15 @@ class CodexSession:
 WORDS = "fix add test refactor page login api cache docs build deploy schema query parser cli model".split()
 
 
-def history(root: Path, tasks: int, start: float, models=("claude-opus-5-5",), seed: int = 0, sessions_of: int = 5):
+def history(
+    root: Path,
+    tasks: int,
+    start: float,
+    models=("claude-opus-5-5",),
+    seed: int = 0,
+    sessions_of: int = 5,
+    efforts=("high",),
+):
     """Many Claude Code tasks whose time and tokens depend on the prompt, so a model has something to learn."""
     rng = random.Random(seed)
     made = 0
@@ -284,6 +292,7 @@ def history(root: Path, tasks: int, start: float, models=("claude-opus-5-5",), s
         builder = ClaudeSession(root, f"s{seed}-{session}", clock)
         for _ in range(min(sessions_of, tasks - made)):
             model = models[made % len(models)]
+            effort = efforts[(made // len(models)) % len(efforts)]
             size = rng.randint(1, 60)
             prompt = " ".join(rng.choice(WORDS) for _ in range(size))
             line = builder.prompt(prompt)
@@ -296,6 +305,7 @@ def history(root: Path, tasks: int, start: float, models=("claude-opus-5-5",), s
                 tool = builder.reply(
                     seconds,
                     model=model,
+                    effort=effort,
                     tool=None if last else "Bash",
                     calls_usage=usage(read=20_000 + 3_000 * step, output=100 + 10 * size),
                 )

@@ -21,7 +21,7 @@ SCHEMAS = Path(__file__).resolve().parent.parent / "schemas"
 @pytest.fixture
 def records(tmp_path):
     root = tmp_path / "claude-projects"
-    history(root, tasks=420, start=START, models=("claude-opus-5-5", "claude-sonnet-5-5"))
+    history(root, tasks=420, start=START, models=("claude-opus-5-5", "claude-sonnet-5-5"), efforts=("high", "max"))
     return root
 
 
@@ -60,12 +60,18 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     jsonschema.validate(result, json.loads((SCHEMAS / "forecast-response.v1.json").read_text()))
     by_model = {f["model"]: f for f in result["forecasts"]}
     assert by_model["claude-opus-5-5"]["seconds"] > 0
-    assert by_model["gpt-unknown"]["reason"] == "unknown_model"
+    assert by_model["gpt-unknown"]["reason"] == "unknown_model" and "effort" not in by_model["gpt-unknown"]
+    # A model is forecast at every effort level it often ran at.
+    assert {f["effort"] for f in result["forecasts"] if f["model"] == "claude-opus-5-5"} == {"high", "max"}
 
     # In a terminal, a task in quotes gets a table, on every model the predictor forecasts.
     monkeypatch.setattr(cli, "terminal_output", lambda: True)
+    sent = len(ready.requests)
     code, out = run(capsys, "predict", "fix the api")
-    assert code == 0 and re.search(r"claude-opus-5-5\s+\d+ (s|min|h)\s+[\d.]+[kM]? tokens\s+\$", out)
+    row = r"\s+\d+ (s|min|h)\s+[\d.]+[kM]? tokens\s+\$"
+    assert code == 0 and re.search(r"claude-opus-5-5\s+high" + row, out) and re.search(r"\n\s+max" + row, out)
+    texts = [text for body in ready.requests[sent:] for text in body["input"]]
+    assert texts.count("fix the api") == 1  # one prompt at several effort levels is embedded once
     assert "predictor default, updated just now" in out and "{" not in out
     monkeypatch.setattr(cli, "terminal_output", lambda: False)
 

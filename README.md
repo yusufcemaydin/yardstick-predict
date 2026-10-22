@@ -12,8 +12,9 @@ $ yardstick-predict predict "Add a login page with tests"
 
   Add a login page with tests
 
-  claude-opus-5-5   4 min   1.8M tokens   $0.92
-  gpt-6.1-sol       5 min   950k tokens   $0.41
+  claude-opus-5-5   max     4 min   1.8M tokens   $0.92
+                    xhigh   3 min   1.2M tokens   $0.61
+  gpt-6.1-sol       xhigh   5 min   950k tokens   $0.41
 
   Expected values from your own runs · predictor default, updated 2 days ago · add --json for details
 ```
@@ -22,7 +23,7 @@ The numbers above are an example. Yours come from your own history.
 
 ## Features
 
-- **Expected time, tokens and cost** for any task on any AI model you've used, with the full probability curve on request.
+- **Expected time, tokens and cost** for any task on any AI model and effort level you've used, with the full probability curve on request.
 - **Learns from records you already have.** Claude Code and Codex keep a record of every run. There's nothing to label.
 - **Tests itself before it forecasts.** It replays your newest tasks and gives forecasts only for AI models that pass.
 - **One fixed, versioned JSON format,** with published schemas, so any program in any language can call it.
@@ -64,23 +65,25 @@ It finds your past runs, asks which features to use, shows the exact cost of eac
 yardstick-predict predict "Add a login page with tests"
 ```
 
-It shows the expected time, tokens and cost on each AI model your predictor covers. `--model` names the models yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
+It shows the expected time, tokens and cost on each AI model your predictor covers, at each effort level you often use it at. `--model` and `--effort` name them yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
 
 Run `yardstick-predict` every week or so. It tells you how many new tasks it found and what embedding them costs, and asks before it refreshes.
 
 ## Features the model learns from
 
-The prompt is always used. You can add more, and each one is tested on your data like everything else.
+The prompt, the AI model and its effort level are always used. You can add more, and each one is tested on your data like everything else.
 
 | Feature | What it is | Default |
 |---|---|---|
 | `prompt` | The task's prompt, embedded. | Always on |
+| AI model | The model that runs the task, such as `claude-opus-5-5`. | Always on |
+| effort level | How hard the model thinks, such as `high`, `xhigh` or `max`. | Always on |
 | `context` | The last 1,500 characters of the conversation before the prompt, embedded. | On |
 | `skills` | The skills the agent used, embedded by their descriptions. | Off |
 | `benchmarks` | Public facts about each AI model from [OpenRouter's model list](https://openrouter.ai/models): prices, context size, longest answer and release date. They are the same for old and new models. | Off |
 | your own | Any text or number you compute from a task. See [Extend it](#extend-it). | — |
 
-Every task also brings its AI model, thinking level, agent, who started it and the length of its prompt.
+Every task also brings its agent, who started it and the length of its prompt.
 
 Choose features at setup, or with a flag:
 
@@ -121,6 +124,7 @@ cheapest = min(priced, key=lambda f: f["usd"])
 print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minutes and ${cheapest['usd']:.2f}.")
 ```
 
+- **`effort`** is the effort level the forecast is for: the request's, or the level the model ran at most often.
 - **`seconds`, `tokens` and `usd`** are expected values: averages, not middles. They add up, so the expected total of ten tasks is the sum of their ten forecasts.
 - **`tokens`** counts every kind: new input, cache writes, cache reads and output, including helper agents.
 - **`usd`** is the cost at the model's list price.

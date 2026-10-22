@@ -239,7 +239,7 @@ def choose_features(can_ask: bool, given: str | None) -> list[str]:
         if not can_ask:
             return features.check(list(features.DEFAULT))
         ui.heading("Features")
-        ui.note("The prompt is always used. You can add:")
+        ui.note("The prompt, the AI model and its effort level are always used. You can add:")
         chosen = ["prompt"]
         for name, description in features.available().items():
             if ui.ask(f"{ui.bold(name)}: {description}. Add it?", name in features.DEFAULT):
@@ -698,12 +698,16 @@ def cmd_predict(args) -> int:
     table = prompt is not None and terminal_output() and not args.json and not args.distribution
     try:
         if prompt is not None:
-            task = {"id": "task", "prompt": prompt, "context": args.context or "", "skills": args.skill}
-            if args.effort:
-                task["effort"] = args.effort
             predictor = request_predictor(args.predictor)
-            task["models"] = args.model or forecast_models(predictor)
-            tasks, distribution, _ = parse({"version": 1, "distribution": args.distribution, "tasks": [task]})
+            pairs = effort_pairs(predictor, args.model or forecast_models(predictor), args.effort)
+            asked = []
+            for number, (model, effort) in enumerate(pairs, start=1):
+                task = {"id": "task" if len(pairs) == 1 else f"task-{number}", "prompt": prompt, "models": [model]}
+                task.update(context=args.context or "", skills=args.skill)
+                if effort:
+                    task["effort"] = effort
+                asked.append(task)
+            tasks, distribution, _ = parse({"version": 1, "distribution": args.distribution, "tasks": asked})
         else:
             if sys.stdin.isatty():
                 raise RequestError(
@@ -744,6 +748,24 @@ def request_predictor(chosen: str | None) -> Predictor:
         raise RequestError("no_predictor", str(error)) from None
 
 
+def effort_pairs(predictor: Predictor, models: list[str], effort: str | None) -> list[tuple[str, str | None]]:
+    """Each AI model with each effort level to forecast: the one asked for, or every level it ran at often.
+
+    A level counts as often when the model ran 30 tasks at it. A model with no such level is forecast at
+    the level it ran at most often.
+    """
+    from .model import MIN_TEST_TASKS
+
+    if effort:
+        return [(model, effort) for model in models]
+    counts = predictor.effort_counts()
+    pairs: list[tuple[str, str | None]] = []
+    for model in models:
+        common = [level for level, count in counts.get(model, []) if count >= MIN_TEST_TASKS]
+        pairs += [(model, level) for level in common] or [(model, None)]
+    return pairs
+
+
 def forecast_models(predictor: Predictor) -> list[str]:
     """The AI models a predictor forecasts, for a request that names none."""
     from .forecast import RequestError
@@ -759,16 +781,21 @@ def forecast_models(predictor: Predictor) -> list[str]:
 def show_forecasts(prompt: str, result: dict) -> None:
     """The forecasts as a small table, for a person in a terminal."""
     pad = max(len(forecast["model"]) for forecast in result["forecasts"])
-    rows, missing = [], []
+    rows, missing, previous = [], {}, None
     for forecast in result["forecasts"]:
-        name = ui.bold(forecast["model"].ljust(pad))
+        model = forecast["model"]
         seconds, tokens, usd = forecast["seconds"], forecast["tokens"], forecast["usd"]
         if seconds is None and tokens is None and usd is None:
-            missing.append(f"{name}   {ui.dim(REASONS.get(forecast.get('reason', ''), 'no forecast'))}")
+            reason = REASONS.get(forecast.get("reason", ""), "no forecast")
+            missing.setdefault(model, f"{ui.bold(model.ljust(pad))}   {ui.dim(reason)}")
             continue
+        # A model forecast at several effort levels is named once, on its first row.
+        name = ui.bold(model.ljust(pad)) if model != previous else " " * pad
+        previous = model
         rows.append(
             (
                 name,
+                forecast.get("effort", ""),
                 duration(seconds) if seconds is not None else ui.dim("-"),
                 f"{short_tokens(tokens)} tokens" if tokens is not None else ui.dim("-"),
                 money(usd) if usd is not None else ui.dim("-"),
@@ -778,8 +805,8 @@ def show_forecasts(prompt: str, result: dict) -> None:
     ui.out()
     ui.line(ui.bold(shown))
     ui.out()
-    ui.table(rows, align="lrrr")
-    for text in missing:
+    ui.table(rows, align="llrrr")
+    for text in missing.values():
         ui.line(text)
     predictor = Predictor(result["predictor"])
     footer = [

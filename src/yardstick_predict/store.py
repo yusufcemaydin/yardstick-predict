@@ -151,6 +151,17 @@ class Predictor:
     def count_tasks(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 
+    def effort_counts(self) -> dict[str, list[tuple[str, int]]]:
+        """How many finished tasks each AI model ran at each effort level, the most used first."""
+        rows = self.db.execute(
+            "SELECT model, effort, COUNT(*) FROM tasks WHERE NOT stopped AND NOT idle "
+            "GROUP BY model, effort ORDER BY COUNT(*) DESC, effort"
+        )
+        found: dict[str, list[tuple[str, int]]] = {}
+        for model, effort, count in rows:
+            found.setdefault(model, []).append((effort, count))
+        return found
+
     def task_ids(self) -> set[str]:
         return {row[0] for row in self.db.execute("SELECT id FROM tasks")}
 

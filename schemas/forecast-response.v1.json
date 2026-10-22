@@ -46,6 +46,10 @@
           "model": {
             "type": "string"
           },
+          "effort": {
+            "type": "string",
+            "description": "The effort level the forecast is for: the request's, or the level this model ran at most often. Left out for a model with no past tasks when the request names no level."
+          },
           "seconds": {
             "type": [
               "number",
