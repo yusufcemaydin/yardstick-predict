@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+import sqlite3
+from dataclasses import fields
 
 from builders import ClaudeSession, CodexSession, usage
 
 from yardstick_predict import model_types
+from yardstick_predict.archives import Task
 from yardstick_predict.pipeline import embedding_items, read_all, save_scan, scan, train
 from yardstick_predict.store import Predictor
 
@@ -208,3 +211,30 @@ def test_max_tasks_trains_on_the_same_tasks_it_embeds(tmp_path, monkeypatch):
     train(predictor)
     embedded = [text for _, _, text in embedding_items(predictor.tasks(), ["prompt"], limit=2)]
     assert sorted(t.prompt for t in given) == sorted(embedded) == ["Middle", "Newest finished"]
+
+
+def test_an_older_dataset_with_its_columns_in_another_order_keeps_each_value_in_its_column(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    line = session.prompt("Add a login page")
+    session.reply(5)
+    session.save(mtime=START)
+    archive = {"name": "claude-code", "format": "claude-code", "path": str(tmp_path)}
+    predictor = Predictor.create("default", [archive], {"model": "voyage-4", "dimensions": 256})
+    # An older version made the table without these columns. Adding them later puts them at the end.
+    older = [f.name for f in fields(Task) if f.name not in ("agent_version", "effort")]
+    db = sqlite3.connect(predictor.dir / "dataset.sqlite")
+    db.execute(f"CREATE TABLE tasks ({', '.join(older)}, PRIMARY KEY (id))")
+    db.commit()
+    db.close()
+
+    found = read_all([archive], now=LATER)
+    save_scan(predictor, found)
+    assert predictor.tasks() == found.new_tasks
+
+    session.helper(line["promptId"], calls=2)
+    for path in (session.folder / "s1" / "subagents").glob("*.jsonl"):
+        os.utime(path, (START + 60, START + 60))
+    found = scan(predictor, now=LATER)
+    assert [t.calls for t in found.updated_tasks] == [3]
+    save_scan(predictor, found)
+    assert predictor.tasks() == found.updated_tasks

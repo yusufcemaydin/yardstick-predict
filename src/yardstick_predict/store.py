@@ -20,6 +20,8 @@ from .archives import Task
 
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _COLUMNS = [f.name for f in fields(Task)]
+_TASK_ROW = f"({', '.join(_COLUMNS)}) VALUES ({', '.join('?' for _ in _COLUMNS)})"
+"""A task's values, with each column named. A column added to an older dataset sits at the end, not in Task's order."""
 
 
 def home() -> Path:
@@ -133,15 +135,13 @@ class Predictor:
     def add_tasks(self, tasks: list[Task]) -> int:
         """Add tasks the dataset doesn't have yet. A task already there, such as a copy, is skipped."""
         before = self.count_tasks()
-        marks = ", ".join("?" for _ in _COLUMNS)
-        self.db.executemany(f"INSERT OR IGNORE INTO tasks VALUES ({marks})", [astuple(t) for t in tasks])
+        self.db.executemany(f"INSERT OR IGNORE INTO tasks {_TASK_ROW}", [astuple(t) for t in tasks])
         self.db.commit()
         return self.count_tasks() - before
 
     def replace_tasks(self, tasks: list[Task]) -> None:
         """Store newer copies of tasks the dataset already has, such as a parent whose helper finished later."""
-        marks = ", ".join("?" for _ in _COLUMNS)
-        self.db.executemany(f"INSERT OR REPLACE INTO tasks VALUES ({marks})", [astuple(t) for t in tasks])
+        self.db.executemany(f"INSERT OR REPLACE INTO tasks {_TASK_ROW}", [astuple(t) for t in tasks])
         self.db.commit()
 
     def known_calls(self) -> dict[str, int]:
