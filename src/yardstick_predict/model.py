@@ -180,6 +180,15 @@ def target_value(task: Task, target: str) -> float | None:
     return value if value is not None and value > 0 else None
 
 
+def finish_times(tasks: list[Task]) -> np.ndarray:
+    """When each task finished: its start plus its seconds. A task's outcome is known only from then on.
+
+    Seconds leave out time spent waiting for a person, so for a task that waited this is a lower bound:
+    it really finished later.
+    """
+    return np.array([t.started_at + t.seconds for t in tasks], dtype=float)
+
+
 def recency_weights(tasks: list[Task], half_life_days: float | None) -> np.ndarray:
     if half_life_days is None or not tasks:
         return np.ones(len(tasks))
@@ -408,11 +417,20 @@ def outcomes(tasks: list[Task]) -> np.ndarray:
     return np.array(rows, dtype=np.float32).reshape(len(tasks), 4)
 
 
-def similar_tasks(pool: np.ndarray, results: np.ndarray, queries: np.ndarray, has: np.ndarray, earlier_only: bool):
+def similar_tasks(
+    pool: np.ndarray,
+    results: np.ndarray,
+    queries: np.ndarray,
+    has: np.ndarray,
+    earlier_only: bool,
+    started: np.ndarray | None = None,
+    finished: np.ndarray | None = None,
+):
     """For each query, the average of what the most similar past tasks took, and how similar they were.
 
     With `earlier_only`, the queries are the pool itself in time order. Each one only looks at the
     NEIGHBOR_POOL tasks just before it, the same reach a forecast has, so training never peeks at the future.
+    Given each task's start and finish times, it also skips tasks that hadn't finished when the query started.
     """
     out = np.full((len(queries), 5), np.nan, dtype=np.float64)
     if len(pool) == 0:
@@ -426,7 +444,10 @@ def similar_tasks(pool: np.ndarray, results: np.ndarray, queries: np.ndarray, ha
         if earlier_only:
             position = np.arange(low, high)[None, :]
             row = np.arange(start, stop)[:, None]
-            block[(position >= row) | (position < row - NEIGHBOR_POOL)] = -np.inf
+            unknown = (position >= row) | (position < row - NEIGHBOR_POOL)
+            if finished is not None:
+                unknown |= finished[None, low:high] > started[start:stop, None]
+            block[unknown] = -np.inf
         k = min(NEIGHBORS, high - low)
         top = np.argpartition(-block, k - 1, axis=1)[:, :k]
         similarity = np.take_along_axis(block, top, axis=1)
@@ -733,11 +754,14 @@ def fit(tasks: list[Task], rows: list[Features], settings: dict) -> Model:
     }
     model = Model(meta, {})
     results = outcomes(tasks)
+    started, finished = np.array([t.started_at for t in tasks], dtype=float), finish_times(tasks)
     similar: dict[str, np.ndarray] = {}
     for name in text_fields:
         size = len(next(r.vectors[name] for r in rows if r.vectors.get(name) is not None))
         queries, has = _unit([r.vectors.get(name) for r in rows], size)
-        similar[name] = similar_tasks(queries, results, queries, has, earlier_only=True)
+        similar[name] = similar_tasks(
+            queries, results, queries, has, earlier_only=True, started=started, finished=finished
+        )
         newest = np.flatnonzero(has)[-NEIGHBOR_POOL:]
         model.pools[name] = (queries[newest], results[newest])
     matrix = model.matrix(rows, similar)
@@ -999,19 +1023,28 @@ def simple_rule(train_tasks: list[Task], target: str) -> dict:
 
 
 def test(tasks: list[Task], rows: list[Features], settings: dict) -> dict:
-    """Forecast the newest tasks window by window, each from the tasks before it, and judge each AI model."""
+    """Forecast the newest tasks window by window, each from the tasks before it, and judge each AI model.
+
+    A window learns only from tasks that had finished when it starts. A task that started earlier but
+    was still running then hadn't shown its outcome yet.
+    """
     settings = settings_for(settings)
     if len(tasks) < 100:
         return {"trained_on": len(tasks), "tested_on": 0, "windows": 0, "models": {}, "pit": {}}
     windows = settings["test_windows"]
     size = max(int(len(tasks) * settings["test_share"] / windows), 1)
     first = len(tasks) - size * windows
+    finished = finish_times(tasks)
     scored = []
     for k in range(windows):
         cut = first + k * size
         end = cut + size if k < windows - 1 else len(tasks)
-        trial = fit(tasks[:cut], rows[:cut], settings)
-        scored.append(_score_window(trial, tasks[:cut], tasks[cut:end], rows[cut:end]))
+        known = [i for i in range(cut) if finished[i] <= tasks[cut].started_at]
+        if len(known) < MIN_TASKS:
+            continue
+        train_tasks, train_rows = [tasks[i] for i in known], [rows[i] for i in known]
+        trial = fit(train_tasks, train_rows, settings)
+        scored.append(_score_window(trial, train_tasks, tasks[cut:end], rows[cut:end]))
     return _verdicts(scored, trained_on=first, tested_on=len(tasks) - first, settings=settings)
 
 

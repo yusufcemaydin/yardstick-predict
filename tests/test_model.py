@@ -168,6 +168,51 @@ def test_similar_tasks_never_look_at_the_future():
         np.testing.assert_allclose(found[i, :4], results[top].mean(axis=0), atol=1e-5)
 
 
+def test_similar_tasks_for_training_had_finished_before_the_task_started(monkeypatch):
+    tasks = [task(i, "claude-opus-5-5", "word", 60.0, 50_000, False) for i in range(60)]
+    tasks[10].seconds = 10 * 3600  # still running when every later task here started
+    vectors = {"prompt": {t.id: np.ones(8, dtype=np.float32) for t in tasks}}
+    found = []
+    real = M.similar_tasks
+
+    def similar_tasks(*args, **kwargs):
+        result = real(*args, **kwargs)
+        if kwargs.get("earlier_only"):
+            found.append(result)
+        return result
+
+    monkeypatch.setattr(M, "similar_tasks", similar_tasks)
+    M.fit(tasks, rows_for(tasks, vectors), {})
+    seconds = found[0][:, 0]  # the average log seconds of each task's similar tasks
+    assert np.isfinite(seconds[M.MIN_NEIGHBORS + 1 :]).all()
+    np.testing.assert_allclose(seconds[np.isfinite(seconds)], math.log(60.0))
+
+
+def test_a_test_window_learns_only_from_tasks_that_finished_before_it_starts(monkeypatch):
+    tasks = synthetic(150)
+    for t in tasks[::4]:
+        t.seconds = 5 * 3600  # still running when the next 30 tasks start
+    learned, scored = [], []
+    real_fit, real_score = M.fit, M._score_window
+
+    def fit(train_tasks, train_rows, settings):
+        learned.append(train_tasks)
+        return real_fit(train_tasks, train_rows, settings)
+
+    def score(trial, train_tasks, test_tasks, test_rows):
+        scored.append((train_tasks, test_tasks))
+        return real_score(trial, train_tasks, test_tasks, test_rows)
+
+    monkeypatch.setattr(M, "fit", fit)
+    monkeypatch.setattr(M, "_score_window", score)
+    M.test(tasks, rows_for(tasks), {})
+    assert len(learned) == len(scored) == 3
+    for fitted, (simple_rule, window) in zip(learned, scored):
+        opens = min(t.started_at for t in window)
+        finished = [t.id for t in tasks if t.started_at + t.seconds <= opens]
+        assert [t.id for t in fitted] == [t.id for t in simple_rule] == finished
+
+
 def kinds(n: int = 900, seed: int = 3):
     """Tasks whose time depends on what the text says, not on its length."""
     rng = random.Random(seed)
