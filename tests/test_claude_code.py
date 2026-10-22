@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from builders import ClaudeSession
 
 from yardstick_predict import claude_code as cc
 from yardstick_predict import cli
+from yardstick_predict.archives import read_archive
 from yardstick_predict.store import Predictor
 
 THEIRS = {
@@ -98,6 +101,37 @@ def test_each_forecast_reads_its_own_prompt(monkeypatch):
     assert not list(cc.folder().glob("*.prompt"))  # each forecast took its prompt away
     latest = json.loads(cc._paths("s1")[0].read_text())["prompt_at"]
     assert plain(cc.status_line("s1", "m", latest + 1)) == "yardstick · 0:01 of ~2 min"
+
+
+def test_the_forecast_says_a_person_typed_the_prompt_after_the_conversation_so_far(tmp_path, monkeypatch):
+    commands = forecasts_by_hand(monkeypatch)
+    asked = []
+
+    def answer(predictor, tasks):
+        asked.extend(tasks)
+        return {"forecasts": []}
+
+    monkeypatch.setattr("yardstick_predict.forecast.answer", answer)
+    sent = 1_780_000_000  # when the hook runs, by the clock of forecasts_by_hand
+    session = ClaudeSession(tmp_path, "s1", sent - 600)
+    session.prompt("Add a login page")
+    session.reply(5, text="Added the login page.")
+    session.prompt("continue")
+    session.reply(5, text="Styled the form too.")
+    session.clock = sent - 1
+    session.prompt("continue")  # the prompt being forecast, recorded just before the hook ran
+    session.reply(60, text="Checking the tests.")  # the agent's answer, after it
+    record = session.save()
+    tasks = read_archive({"name": "c", "format": "claude-code", "path": str(tmp_path)}, now=time.time() + 86400)
+    trained = max(tasks, key=lambda t: t.started_at).context  # the context training gives this prompt
+    assert trained.endswith("User: continue\n\nAssistant: Styled the form too.")
+
+    for lines in (session.lines, session.lines[:-2]):  # with the prompt already in the record, and not yet
+        record.write_text("".join(json.dumps(line) + "\n" for line in lines))
+        event = {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "continue"}
+        send(monkeypatch, {**event, "transcript_path": str(record)})
+        assert cc.main(commands[-1]) == 0
+    assert [(t.origin, t.agent, t.context) for t in asked] == [("person", "claude-code", trained)] * 2
 
 
 def test_the_session_effort_level_picks_the_forecast(tmp_path):

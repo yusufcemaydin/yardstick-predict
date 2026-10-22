@@ -85,9 +85,10 @@ def hook() -> int:
         prompt = str(event.get("prompt") or "")
         if not prompt.strip():
             return 0
-        model, effort = last_model_and_effort(event.get("transcript_path"))
+        transcript = event.get("transcript_path")
+        model, effort = last_model_and_effort(transcript)
         prompt_at = time.time()
-        _write(state_path, {"prompt_at": prompt_at, "model": model, "effort": effort})
+        _write(state_path, {"prompt_at": prompt_at, "model": model, "effort": effort, "transcript": transcript})
         _prompt_path(session, prompt_at).write_text(prompt)
         _start_forecast(session, prompt_at)
         _tidy()
@@ -186,8 +187,11 @@ def forecast(session: str, prompt_at: float) -> int:
 
         predictor = cli.request_predictor(None)
         pairs = cli.effort_pairs(predictor, cli.forecast_models(predictor), None)
+        # A person typed the prompt in Claude Code, after the conversation so far.
+        context = conversation_before(_read(state_path).get("transcript"), prompt, prompt_at)
+        task = {"prompt": prompt, "origin": "person", "agent": "claude-code", "context": context}
         tasks = [
-            {"id": f"t{number}", "prompt": prompt, "models": [model], **({"effort": effort} if effort else {})}
+            {"id": f"t{number}", **task, "models": [model], **({"effort": effort} if effort else {})}
             for number, (model, effort) in enumerate(pairs)
         ]
         parsed, _, _ = parse({"version": 1, "tasks": tasks})
@@ -197,6 +201,44 @@ def forecast(session: str, prompt_at: float) -> int:
     if _read(state_path).get("prompt_at") == prompt_at:
         _write(forecast_path, found)
     return 0
+
+
+def conversation_before(transcript: object, prompt: str, sent_at: float) -> str:
+    """The end of the session's conversation before a prompt, built the way training builds a task's context.
+
+    Only lines written before the prompt was sent count. When the record already holds the prompt itself,
+    it's left out, as training leaves each task's own prompt out of its context.
+    """
+    from .archives import _claude_call, _claude_origin, _claude_turn_start, _History, _lines, _timestamp
+
+    if not isinstance(transcript, str) or not transcript:
+        return ""
+    history = _History()
+    latest = None  # the latest prompt
+    before_latest = ""  # the context the latest prompt had
+    answered = False  # whether the agent answered the latest prompt
+    try:
+        for line in _lines(Path(transcript)):
+            moment = _timestamp(line.get("timestamp"))
+            if moment is not None and moment >= sent_at:
+                break
+            text = _claude_turn_start(line)
+            if text is not None:
+                before_latest, latest, answered = history.context(), text, False
+                if _claude_origin(line, text) is not None:
+                    history.add("User", text)
+            elif latest is not None and line.get("type") == "assistant" and not line.get("isSidechain"):
+                if _claude_call(line) is None:
+                    continue
+                answered = True
+                for part in (line.get("message") or {}).get("content") or []:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        history.add("Assistant", part.get("text") or "")
+    except OSError:
+        return ""
+    if latest is not None and latest.strip() == prompt.strip() and not answered:
+        return before_latest  # the record already holds this prompt
+    return history.context()
 
 
 # The status line ---------------------------------------------------------------------------------------
