@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 
 import pytest
@@ -110,10 +111,13 @@ def test_the_computers_memory_comes_from_the_operating_system(monkeypatch):
         raise ValueError(name)
 
     monkeypatch.setattr(estimate.sys, "platform", "linux")
-    monkeypatch.setattr(estimate.os, "sysconf", unknown)
+    monkeypatch.setattr(estimate.os, "sysconf", unknown, raising=False)  # Windows' Python has no sysconf
     assert estimate.total_memory() is None
     monkeypatch.setattr(estimate.sys, "platform", "win32")
-    assert estimate.total_memory() is None  # no Windows to ask here
+    if os.name == "nt":
+        assert estimate.total_memory() > 0  # Windows says
+    else:
+        assert estimate.total_memory() is None  # no Windows to ask here
 
 
 # What the commands say ----------------------------------------------------------------------------------------

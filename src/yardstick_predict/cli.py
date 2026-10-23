@@ -914,6 +914,9 @@ def _create(args, held) -> int:
             predictor = Predictor.create(name, archives, embedding, **config)
         except ValueError:
             raise SystemExit(already_exists(name)) from None
+        # The dataset closes as setup ends, before the predictor's lock goes. Otherwise it stays open until Python
+        # tidies up, and Windows can't delete an open file, as a delete in the same program, such as a test, would.
+        held.callback(predictor.close)
     if first:
         set_default(name)  # the first predictor is the default, even when setup stops before it's trained
     save_scan(predictor, found)

@@ -50,24 +50,39 @@ def as_0_3_forecast(monkeypatch):
     )
 
 
-def same(found, expected, path="answer") -> None:
-    """Fail unless two answers match: every field, with numbers equal up to their last few digits.
+def same(found, expected) -> None:
+    """Fail unless two answers match: every field, with each number equal or one unit apart in its last digit.
 
-    On the computer that made the fixture they're equal to the last digit. Another kind of processor may
-    round the last digits of a sum differently.
+    The answer rounds each number: seconds to a tenth, tokens to a whole number and the rest to 6 decimals. On the
+    computer that made the fixture they're equal. Another kind of processor may add up the last digits of a sum
+    differently, so a number that lands just on a rounding edge comes out one unit apart. It says every field
+    that differs, not just the first.
     """
+    differ = list(apart(found, expected, "answer"))
+    assert not differ, "\n".join(differ)
+
+
+def apart(found, expected, path: str):
+    """Where two answers differ, one line each."""
     if isinstance(expected, dict):
-        assert isinstance(found, dict) and sorted(found) == sorted(expected), path
+        if not isinstance(found, dict) or sorted(found) != sorted(expected):
+            yield f"{path}: the fields {sorted(found) if isinstance(found, dict) else found!r} != {sorted(expected)}"
+            return
         for key in expected:
-            same(found[key], expected[key], f"{path}.{key}")
+            yield from apart(found[key], expected[key], f"{path}.{key}")
     elif isinstance(expected, list):
-        assert isinstance(found, list) and len(found) == len(expected), path
+        if not isinstance(found, list) or len(found) != len(expected):
+            yield f"{path}: {found!r} != {expected!r}"
+            return
         for n, (one, other) in enumerate(zip(found, expected)):
-            same(one, other, f"{path}[{n}]")
-    elif isinstance(expected, float):
-        assert isinstance(found, (int, float)) and math.isclose(found, expected, rel_tol=1e-6, abs_tol=1e-9), path
-    else:
-        assert found == expected, path
+            yield from apart(one, other, f"{path}[{n}]")
+    elif isinstance(expected, float) or (isinstance(expected, int) and path.endswith(".tokens")):
+        unit = 0.1 if path.endswith(".seconds") else 1 if path.endswith(".tokens") else 1e-6
+        close = isinstance(found, (int, float)) and math.isclose(found, expected, rel_tol=1e-6, abs_tol=unit * 1.000001)
+        if not close:
+            yield f"{path}: {found!r} != {expected!r}"
+    elif found != expected:
+        yield f"{path}: {found!r} != {expected!r}"
 
 
 def ask_what_0_3_was_asked(predictor: Predictor) -> dict:

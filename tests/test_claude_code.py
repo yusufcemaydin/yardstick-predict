@@ -120,8 +120,8 @@ def test_adding_keeps_your_own_settings_and_removing_puts_them_back():
     assert added["model"] == "opus" and added["permissions"] == THEIRS["permissions"]
     stop = [entry["command"] for group in added["hooks"]["Stop"] for entry in group["hooks"]]
     assert stop[0] == "say done" and stop[1].endswith("-P -m yardstick_predict.claude_code hook")
-    assert (
-        added["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == "/py -P -m yardstick_predict.claude_code hook"
+    assert added["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == (
+        f"{cc._quoted('/py')} -P -m yardstick_predict.claude_code hook"  # in double quotes on Windows
     )
     assert added["statusLine"]["command"].endswith("-m yardstick_predict.claude_code status")
     assert added["statusLine"]["refreshInterval"] == 1  # the clock ticks once a second
@@ -174,7 +174,7 @@ def test_installing_again_replaces_the_commands_from_before_which_lacked_P():
     hooks = [entry["command"] for groups in added["hooks"].values() for group in groups for entry in group["hooks"]]
     ours = [command for command in hooks if cc.MARK in command] + [added["statusLine"]["command"]]
     assert hooks.count("say done") == 1 and len(ours) == 4  # one each on prompts, stops, failed stops, and the line
-    assert all(command.startswith("/py -P -m ") for command in ours)
+    assert all(command.startswith(f"{cc._quoted('/py')} -P -m ") for command in ours)
 
 
 def test_the_commands_never_run_code_from_the_session_folder(tmp_path):
@@ -224,10 +224,11 @@ def test_the_background_job_keeps_the_session_folder_out_too(monkeypatch):
 
 
 def test_paths_with_spaces_stay_one_word_for_the_shell():
-    python, home = "/Users/Jo Smith/my $env/bin/python", '/Users/Jo Smith/it\'s "here"'
-    hook, status = cc.commands(python, home)
-    assert shlex.split(hook) == [python, "-P", "-m", cc.MARK, "--home", home, "hook"]
-    assert cc.installed_home({"statusLine": {"command": status}}) == home
+    if os.name != "nt":  # a POSIX shell's quotes. Windows has no " in its paths, and its quotes are below.
+        python, home = "/Users/Jo Smith/my $env/bin/python", '/Users/Jo Smith/it\'s "here"'
+        hook, status = cc.commands(python, home)
+        assert shlex.split(hook) == [python, "-P", "-m", cc.MARK, "--home", home, "hook"]
+        assert cc.installed_home({"statusLine": {"command": status}}) == home
     # On Windows, cmd and Git Bash both read double quotes, and forward slashes, the same way.
     assert (
         cc._quoted(r"C:\Program Files\Python 3.12\python.exe", windows=True)
@@ -336,8 +337,10 @@ def test_install_puts_the_yardstick_folder_into_the_commands_and_the_hook_uses_i
     home = str(tmp_path / "my yardstick")
     assert cli.main(["claude-code", "install", "--here", "--yes"]) == 0
     settings = json.loads((tmp_path / ".claude" / "settings.local.json").read_text())
-    assert shlex.split(settings["statusLine"]["command"])[-3:] == ["--home", home, "status"]
-    assert cc.installed_home(settings) == home
+    found = shlex.split(settings["statusLine"]["command"])[-3:]
+    # On Windows the commands have forward slashes, which mean the same as backslashes there.
+    assert found[0] == "--home" and Path(found[1]) == Path(home) and found[2] == "status"
+    assert Path(cc.installed_home(settings)) == Path(home)
     # The hook keeps its forecasts there, whatever folder Claude Code's own environment names.
     monkeypatch.setenv("YARDSTICK_HOME", str(tmp_path / "elsewhere"))
     monkeypatch.setattr(cc, "_start_worker", lambda session: None)
@@ -571,7 +574,12 @@ def test_the_status_line_takes_the_model_and_effort_as_objects_or_as_text(monkey
     assert lines[2:] == ["yardstick · no forecast for this model yet", "yardstick"]
 
 
-@pytest.mark.parametrize("raw", [b"", b"not json", b"[1, 2]", b'{"session_id": 5}', b"\xff\xfe{", b"[" * 100_000])
+@pytest.mark.parametrize(
+    "raw",
+    [b"", b"not json", b"[1, 2]", b'{"session_id": 5}', b"\xff\xfe{", b"[" * 100_000],
+    # Short names: pytest keeps the test's name in a variable, which Windows allows only 32,767 characters.
+    ids=["empty", "not-json", "a-list", "a-number-for-the-session", "not-utf-8", "deeply-nested"],
+)
 def test_nothing_it_is_sent_breaks_the_hook_or_the_status_line(monkeypatch, capsys, raw):
     for run in (cc.hook, cc.status):
         monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(raw)))
