@@ -35,6 +35,7 @@ from .store import (
     Predictor,
     default_name,
     llm_answers,
+    name_lock,
     name_problem,
     predictor_folder,
     predictor_names,
@@ -704,6 +705,16 @@ def unknown_embedding(model: str) -> str:
 
 
 def cmd_create(args) -> int:
+    from contextlib import ExitStack
+
+    # Setup takes locks as it goes, and holds them until it's done.
+    with ExitStack() as held:
+        return _create(args, held)
+
+
+def _create(args, held) -> int:
+    """Set up a new predictor: read the records, choose the features, then embed, analyze and train. `held` keeps
+    the locks it takes until it's done."""
     from . import model_types
 
     if args.express:
@@ -786,6 +797,11 @@ def cmd_create(args) -> int:
         )
     picked = choose_features(can_ask, args)
     chosen, settings = picked.features, picked.config()
+    # From here, setup reads the feature store to plan what to make, and then saves to it. It holds the lock of the
+    # store's users until it's done, so no features delete takes away what it planned with or saved.
+    from . import feature_store
+
+    held.enter_context(feature_store.writing())
     # What the same AI model said about these tasks for another predictor is in the feature store already,
     # descriptions included, so they're embedded with the rest.
     answers = llm_answers(settings)
@@ -887,36 +903,38 @@ def cmd_create(args) -> int:
     embedding = {"model": model_name, "dimensions": embeddings.DIMENSIONS}
     folder = predictor_folder(name)
     private_home()
-    folder.mkdir(parents=True, exist_ok=True)
-    # The lock is taken before the predictor exists, so no refresh can start on it until setup is done.
-    with locks.held(folder / "refresh.lock", wait=False) as mine:
-        if not mine:
+    # A delete of an older predictor with this name holds the name's lock until its folder is gone. Setup waits for
+    # it, so the delete never takes away what setup makes. The refresh lock is taken before the predictor exists,
+    # so no refresh can start on it until setup is done.
+    with name_lock(name):
+        folder.mkdir(parents=True, exist_ok=True)
+        if not held.enter_context(locks.held(folder / "refresh.lock", wait=False)):
             raise SystemExit(f"A predictor called {name!r} is being set up by another command.")
         try:
             predictor = Predictor.create(name, archives, embedding, **config)
         except ValueError:
             raise SystemExit(already_exists(name)) from None
-        if first:
-            set_default(name)  # the first predictor is the default, even when setup stops before it's trained
-        save_scan(predictor, found)
-        warning = refresh_benchmarks(predictor)
-        if warning:
-            ui.note(warning)
-        if asks:
-            analyze_with_progress(predictor, asks)
-            plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
-        if plan.items and not embed_with_progress(predictor, plan, key):
-            return 1
-        if checking:
-            stop = check_and_choose(predictor, key)
-            if stop is not None:
-                return stop
-        model = train_and_report(predictor, train)
-        if model is None:
-            return 1
-        default_when_ready(predictor)
-        say_how_to_use(model, name)
-        return 0
+    if first:
+        set_default(name)  # the first predictor is the default, even when setup stops before it's trained
+    save_scan(predictor, found)
+    warning = refresh_benchmarks(predictor)
+    if warning:
+        ui.note(warning)
+    if asks:
+        analyze_with_progress(predictor, asks)
+        plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
+    if plan.items and not embed_with_progress(predictor, plan, key):
+        return 1
+    if checking:
+        stop = check_and_choose(predictor, key)
+        if stop is not None:
+            return stop
+    model = train_and_report(predictor, train)
+    if model is None:
+        return 1
+    default_when_ready(predictor)
+    say_how_to_use(model, name)
+    return 0
 
 
 def with_key(plan, model: str, key: str | None):
@@ -1203,6 +1221,8 @@ def cmd_refresh(args) -> int:
     deleted = f"There's no predictor called {predictor.name!r} anymore: it was deleted."
     if gone(predictor):
         raise SystemExit(deleted)
+    from . import feature_store
+
     # Two refreshes at once could each train, and the slower one could save an older model over a newer one.
     with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
         if not mine:
@@ -1211,7 +1231,9 @@ def cmd_refresh(args) -> int:
             )
         if gone(predictor):
             raise SystemExit(deleted)
-        return _refresh(args, predictor)
+        # It reads the feature store to plan what to make, and saves to it, so no features delete runs meanwhile.
+        with feature_store.writing():
+            return _refresh(args, predictor)
 
 
 def gone(predictor: Predictor) -> bool:
@@ -1573,6 +1595,8 @@ def coverage_of(predictor: Predictor) -> tuple[dict | None, str | None]:
         total, uses = feature_uses_of(predictor, count=True)
     except model_types.PluginError as error:
         return None, f"Its coverage can't be counted until its plugin loads. {error}"
+    except StoreBusy:
+        return None, "Its coverage can't be counted while another command is using the feature store."
     except BlockingIOError:
         return None, "Its coverage can't be counted while another command sets it up or refreshes it."
     except Exception as error:  # such as a plugin's feature that fails on a task: the rest of status still shows
@@ -1786,7 +1810,7 @@ def cmd_delete(args) -> int:
     """Delete a predictor: its folder, with its settings, its dataset of tasks, its prepared dataset and its model.
     Your records, the feature store and your other predictors stay. In a terminal it says what goes and asks
     first. A program adds --yes, and --json for an answer in JSON."""
-    from .store import Busy, contents, delete_predictor
+    from .store import Busy, being_refreshed, contents, delete_predictor
 
     names = predictor_names()
     name = args.name
@@ -1794,9 +1818,7 @@ def cmd_delete(args) -> int:
         message = f"There's no predictor called {name!r}. Your predictors: {', '.join(names) or 'none'}."
         return answer_error(args, "unknown_predictor", message)
     # A setup or refresh of it would make it again, so it's refused before anything is asked.
-    with locks.held(predictor_folder(name) / "refresh.lock", wait=False) as free:
-        pass
-    if not free:
+    if being_refreshed(name):
         busy = f"{name} is being set up or refreshed by another command. Try again when it's done."
         return answer_error(args, "busy", busy)
     found = contents(name)
@@ -1822,10 +1844,19 @@ def cmd_delete(args) -> int:
         )
     now = default_name()
     if args.json:
-        deleted = {"name": name, "folder": str(found.folder), "tasks": found.tasks, "bytes": found.size}
+        deleted = {
+            "name": name,
+            "folder": str(found.folder),
+            "link_to": None if found.link_to is None else str(found.link_to),  # only the link went
+            "tasks": found.tasks,
+            "bytes": found.size,
+        }
         print(json.dumps({"version": 1, "deleted": deleted, "default": now}, indent=2))
         return 0
-    ui.ok(f"Deleted {name}.")
+    if found.link_to is not None:
+        ui.ok(f"Deleted the link {name}. {found.link_to} stays as it was.")
+    else:
+        ui.ok(f"Deleted {name}.")
     say_default_after(name, default, now)
     return 0
 
@@ -1833,6 +1864,12 @@ def cmd_delete(args) -> int:
 def say_what_goes(name: str, found, is_default: bool) -> None:
     """Exactly what deleting a predictor removes, and what stays."""
     ui.heading(f"Delete {name}")
+    if found.link_to is not None:
+        ui.line(f"{name} is a link to {found.link_to}, not a folder of its own.")
+        ui.line("This deletes only the link. What it links to stays, with everything in it.")
+        if is_default:
+            ui.note("It's your default predictor.")
+        return
     ui.line(f"This deletes its folder, {found.folder}, and everything in it:")
     goes = ["its settings"] if found.settings else []
     if found.dataset:
@@ -1931,7 +1968,10 @@ def cmd_check(args) -> int:
         if args.json:
             feature_store.tell = notes.append  # a program reads them in the answer, not before it
         try:
-            given = check.inputs(predictor)
+            with moving_in(predictor) as free:
+                if not free:
+                    return stop("busy", STORE_BUSY)
+                given = check.inputs(predictor)
         finally:
             feature_store.tell = told
     if not given.features:
@@ -1986,7 +2026,8 @@ def feature_uses_of(predictor: Predictor, count: bool):
     """The predictor's features and how many of its tasks each covers, as pipeline.feature_uses gives them.
 
     A predictor an older version made has its vectors and LLM answers moved to the feature store first, once. A
-    refresh or setup does that too, so while one runs, this waits for none: it raises BlockingIOError.
+    refresh or setup does that too, so while one runs, this waits for none: it raises BlockingIOError. While a
+    features delete runs, it raises StoreBusy.
     """
     from .pipeline import feature_uses
 
@@ -1995,8 +2036,32 @@ def feature_uses_of(predictor: Predictor, count: bool):
     with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
         if not mine:
             raise BlockingIOError
-        predictor.move_in()
-        return feature_uses(predictor, count)
+        with moving_in(predictor) as free:
+            if not free:
+                raise StoreBusy
+            predictor.move_in()
+            return feature_uses(predictor, count)
+
+
+class StoreBusy(BlockingIOError):
+    """Another command is using the feature store, as a features delete does, so a predictor an older version made
+    can't move its vectors and LLM answers in now."""
+
+
+STORE_BUSY = "Another command is using the feature store. Try again when it's done."
+
+
+def moving_in(predictor: Predictor):
+    """The lock of the feature store's users, shared and without waiting, when the predictor still has its
+    vectors and LLM answers to move into the store, as one an older version made does. It yields False when a
+    features delete is running. For a predictor that moved in already, it holds nothing and yields True."""
+    from contextlib import nullcontext
+
+    if predictor.config.get("feature_store"):
+        return nullcontext(True)
+    from . import feature_store
+
+    return feature_store.writing(wait=False)
 
 
 def cmd_features(args) -> int:
@@ -2043,6 +2108,8 @@ def cmd_features(args) -> int:
                 entry["error"] = str(error)
             except model_types.PluginError as error:
                 entry["error"] = f"{error} Its features can't be listed until the plugin loads."
+            except StoreBusy:
+                entry["error"] = STORE_BUSY
             except BlockingIOError:
                 entry["error"] = f"{name} is being set up or refreshed by another command. Try again when it's done."
         found = feature_store.stored()
@@ -2080,10 +2147,9 @@ def cmd_features(args) -> int:
 def delete_feature(args, notes: list[str]) -> int:
     """Delete a stored feature: its folder in the feature store and its line in the index. It says which
     predictors use it and what making it again costs, and in a terminal it asks first. A program adds --yes. It's
-    refused while any predictor is set up or refreshed, since that may be saving to it. `notes` collects what the
-    store says, for an answer in JSON."""
+    refused while any command that saves to the store runs, such as a setup or a refresh: that may be saving to
+    it, or have planned with it. `notes` collects what the store says, for an answer in JSON."""
     from . import feature_store
-    from .store import all_refresh_locks
 
     if not args.id:
         return answer_error(
@@ -2097,14 +2163,18 @@ def delete_feature(args, notes: list[str]) -> int:
         message = f"There's no stored feature {args.id!r}. yardstick-predict features lists each one with its id."
         return answer_error(args, "unknown_feature", message)
 
-    def refused(busy: str) -> int:
-        message = f"{busy} is being set up or refreshed by another command, which may be using it. Try again later."
+    def refused() -> int:
+        message = (
+            "Another command that saves to the feature store is running, such as a setup or a refresh, and it may be "
+            "using this feature. Try again when it's done."
+        )
         return answer_error(args, "busy", message)
 
-    with all_refresh_locks() as busy:
+    # Each command that saves to the store holds its users' lock, shared, while it runs. A delete holds it alone.
+    with feature_store.deleting() as free:
         pass
-    if busy is not None:
-        return refused(busy)
+    if not free:
+        return refused()
     users, unsure = users_of(found.feature.id)
     remade = None
     if not args.xgboost:  # which tasks get it again is worked out as training picks them, with XGBoost
@@ -2119,15 +2189,15 @@ def delete_feature(args, notes: list[str]) -> int:
             return 0
     elif not args.yes:
         return answer_error(args, "needs_yes", "Add --yes to delete it. Nothing was deleted.", exit_code=2)
-    with all_refresh_locks() as busy:
-        if busy is None:
+    with feature_store.deleting() as free:
+        if free:
             try:
                 feature_store.delete(found.feature.id)
             except OSError as error:
                 message = f"Couldn't delete all of it: {error.strerror or error}. Try again when no other program "
                 return answer_error(args, "delete_failed", message + "is using its files.")
-    if busy is not None:
-        return refused(busy)
+    if not free:
+        return refused()
     if args.json:
         deleted = stored_json(found, {found.feature.id: [predictor.name for predictor in users]})
         remaking = dataclasses.asdict(remade) if remade is not None else None

@@ -11,6 +11,7 @@ can go stale.
     features/
       index.json            the features that should exist, saved in one step
       store.lock            held while anything here is written
+      users.lock            held, shared, by each command that may save here while it runs, and alone by a delete
       <feature-id>/
         data.parquet        the feature's rows, compacted
         part-<n>.parquet    rows saved since, one file for each save, each written in one step
@@ -250,6 +251,34 @@ def _held() -> Iterator[Path]:
     where = _private_folder()
     with locks.held(where / "store.lock"):
         yield where
+
+
+@contextmanager
+def writing(wait: bool = True) -> Iterator[bool]:
+    """Hold the lock of the store's users, shared, while a command that may save to the store runs, and yield True.
+
+    Setup and refresh hold it from before they first read the store, to plan what to make, until they're done. The
+    feature check and the listings hold it while they move a predictor an older version made into the store. Many
+    commands hold it at once. A features delete holds it alone, so it never deletes what a running command planned
+    with or saves. A command that finds a delete running waits for it, with a note, or without `wait` yields False
+    at once and holds nothing. Windows has no shared locks, so there the commands that hold it take turns.
+    """
+    path = _private_folder() / "users.lock"
+    with locks.held(path, wait=False, shared=True) as mine:
+        if mine or not wait:
+            yield mine
+            return
+    _note("Another command is using the feature store. Waiting for it to finish.")
+    with locks.held(path, shared=True) as mine:
+        yield mine
+
+
+@contextmanager
+def deleting() -> Iterator[bool]:
+    """Hold the lock of the store's users alone, without waiting, while a feature is deleted, and yield True. It
+    yields False, and holds nothing, while a command that may save to the store runs, as writing() says."""
+    with locks.held(_private_folder() / "users.lock", wait=False) as mine:
+        yield mine
 
 
 def _schema(feature: Feature) -> pa.Schema:

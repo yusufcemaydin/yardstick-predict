@@ -15,7 +15,7 @@ import sqlite3
 import subprocess
 import time
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import astuple, dataclass, fields
 from pathlib import Path
 
@@ -101,6 +101,20 @@ def predictor_folder(name: str) -> Path:
     return home() / "predictors" / name
 
 
+def name_lock(name: str, wait: bool = True):
+    """Hold the lock of a predictor's name while the block runs, and yield True. Without `wait`, it yields False at
+    once when another command holds it.
+
+    A delete holds it until the predictor's folder is gone, and setup while it makes the folder and saves the
+    settings. So a setup of a new predictor with the same name waits for the delete, and the delete never removes
+    what setup makes. It sits beside the predictors' folders, as predictors/.NAME.lock, readable only by you, so it
+    stays when the folder goes. It's never deleted: a command waiting for it would then hold a lock no other sees.
+    """
+    root = private_home() / "predictors"
+    root.mkdir(exist_ok=True)
+    return locks.held(root / f".{name}.lock", wait=wait)
+
+
 def predictor_names() -> list[str]:
     root = home() / "predictors"
     if not root.is_dir():
@@ -167,6 +181,9 @@ class Contents:
     model: int
     other: int
     """Everything else, such as its settings and the model facts it downloaded."""
+    link_to: Path | None = None
+    """Where the folder leads, when it's a link to another folder rather than a folder of its own, as one made by
+    hand to give a predictor a second name. Deleting it deletes only the link, so nothing else counts then."""
 
     @property
     def size(self) -> int:
@@ -176,64 +193,84 @@ class Contents:
 def contents(name: str) -> Contents:
     """What a predictor's folder holds, read without changing anything, even when its settings are broken."""
     folder = predictor_folder(name)
+    found = (folder / "predictor.json").is_file()
+    if is_link(folder):
+        return Contents(folder, found, 0, 0, 0, 0, 0, link_to=folder.resolve())
     sizes = {"dataset": 0, "prepared": 0, "model": 0, "other": 0}
     named = {PREPARED: "prepared", "model": "model"}
     for path in _entries(folder):
         # The dataset comes with the files SQLite keeps beside it while it writes.
         part = "dataset" if path.name.startswith("dataset.sqlite") else named.get(path.name, "other")
         sizes[part] += _bytes(path)
-    return Contents(folder, (folder / "predictor.json").is_file(), _count_tasks(folder / "dataset.sqlite"), **sizes)
+    return Contents(folder, found, _count_tasks(folder / "dataset.sqlite"), **sizes)
 
 
 def delete_predictor(name: str) -> bool:
     """Delete a predictor's folder: its settings, its dataset of tasks, its prepared dataset and its model. False
     when the folder was gone already.
 
-    Nothing outside the folder changes, except that a default setting naming the predictor is forgotten: your
-    records, the feature store and the other predictors stay as they are. It raises Busy while a setup or refresh
-    of the predictor runs, and waits for a forecast that is reading its model. The settings go last, so a delete
-    that stops halfway, as on a file another program has open, leaves the predictor listed, to delete again.
+    Nothing outside the folder changes, except that a default setting naming the predictor is forgotten, and the
+    name's lock, an empty file beside the folder, stays: your records, the feature store and the other predictors
+    stay as they are. Nothing is ever deleted through a link:
+    a folder that is itself a link to another folder has only the link deleted, and a link inside the folder goes
+    without what it links to. It raises Busy while a setup or refresh of the predictor runs, and waits for a
+    forecast that is reading its model. The settings go last, so a delete that stops halfway, as on a file another
+    program has open, leaves the predictor listed, to delete again. The name's lock is held until the folder is
+    gone, so a setup of a new predictor with the same name waits, and keeps everything it makes.
     """
     folder = predictor_folder(name)
-    if not folder.is_dir():
-        return False
-    refresh_lock, model_lock = (folder / lock for lock in LOCKS)
-    with locks.held(refresh_lock, wait=False) as mine:
-        if not mine:
-            raise Busy(f"{name} is being set up or refreshed by another command. Try again when it's done.")
-        with locks.held(model_lock):  # a forecast holds it, shared, while it reads the model
-            for path in sorted(_entries(folder), key=lambda path: path.name == "predictor.json"):
-                if path.name not in LOCKS:
-                    _remove(path)
-    # The lock files go once no command holds them. On Windows one that another command opened meanwhile stays,
-    # with the folder: no predictor shows without its settings.
-    shutil.rmtree(folder, ignore_errors=True)
-    if settings().get("default") == name:
-        forget_setting("default")
+    with name_lock(name):
+        link = is_link(folder)
+        if not link and not folder.is_dir():
+            return False
+        refresh_lock, model_lock = (folder / lock for lock in LOCKS)
+        # A link's locks are in the folder it leads to, where a command using the predictor through the link holds
+        # them. No lock file is made there, so nothing where the link leads changes.
+        with _lock(refresh_lock, wait=False, make=not link) as mine:
+            if not mine:
+                raise Busy(f"{name} is being set up or refreshed by another command. Try again when it's done.")
+            with _lock(model_lock, make=not link):  # a forecast holds it, shared, while it reads the model
+                if link:
+                    folder.unlink()  # only the link: the folder it leads to stays as it is
+                else:
+                    for path in sorted(_entries(folder), key=lambda path: path.name == "predictor.json"):
+                        if path.name not in LOCKS:
+                            _remove(path)
+        if not link:
+            # The lock files go once no command holds them. On Windows one that another command opened meanwhile
+            # stays, with the folder: no predictor shows without its settings.
+            shutil.rmtree(folder, ignore_errors=True)
+        if settings().get("default") == name:
+            forget_setting("default")  # before a setup of the same name can make it the default again
     return True
 
 
-@contextmanager
-def all_refresh_locks() -> Iterator[str | None]:
-    """Hold the refresh lock of every predictor's folder, without waiting, so no setup or refresh starts meanwhile.
+def being_refreshed(name: str) -> bool:
+    """Whether another command is setting up or refreshing the predictor: it holds the predictor's refresh lock.
+    Where the predictor's folder is a link, no lock file is made where it leads."""
+    folder = predictor_folder(name)
+    with _lock(folder / LOCKS[0], wait=False, make=not is_link(folder)) as free:
+        return not free
 
-    It yields None while it holds them all. When another command is setting up or refreshing a predictor, it
-    yields that predictor's name, and holds none.
-    """
-    with ExitStack() as held:
-        busy = None
-        for folder in sorted(_entries(home() / "predictors")):
-            if folder.name.startswith(".") or not folder.is_dir():
-                continue
-            try:
-                mine = held.enter_context(locks.held(folder / LOCKS[0], wait=False))
-            except FileNotFoundError:  # the folder was deleted meanwhile
-                continue
-            if not mine:
-                busy = folder.name
-                held.close()
-                break
-        yield busy
+
+@contextmanager
+def _lock(path: Path, wait: bool = True, make: bool = True) -> Iterator[bool]:
+    """Hold a lock, as locks.held does. Without `make`, a lock file that isn't there isn't made: no command can
+    hold it then, so it yields True and holds nothing."""
+    if not make and not path.exists():
+        yield True
+        return
+    with locks.held(path, wait=wait) as mine:
+        yield mine
+
+
+def is_link(path: Path) -> bool:
+    """Whether a path is a link that leads somewhere else, rather than a file or folder of its own: a symbolic
+    link, or on Windows a junction, which leads from one folder to another."""
+    try:
+        return path.is_symlink() or path.is_junction()
+    except OSError:
+        return False
 
 
 def _entries(folder: Path) -> list[Path]:
@@ -246,7 +283,7 @@ def _entries(folder: Path) -> list[Path]:
 def _bytes(path: Path) -> int:
     """The bytes a file takes, or all the files in a folder. A link counts as itself: it's never followed."""
     try:
-        if path.is_dir() and not path.is_symlink():
+        if path.is_dir() and not is_link(path):
             return sum(found.lstat().st_size for found in path.rglob("*") if not found.is_dir())
         return path.lstat().st_size
     except OSError:
@@ -254,8 +291,9 @@ def _bytes(path: Path) -> int:
 
 
 def _remove(path: Path) -> None:
-    """Delete a file or a folder with what's in it. A link is deleted itself, and what it links to stays."""
-    if path.is_dir() and not path.is_symlink():
+    """Delete a file or a folder with what's in it. A link is deleted itself, and what it links to stays. Inside a
+    folder, shutil.rmtree deletes each link itself too."""
+    if path.is_dir() and not is_link(path):
         shutil.rmtree(path)
     else:
         path.unlink(missing_ok=True)
@@ -346,7 +384,9 @@ class Predictor:
     def create(cls, name: str, archives: list[dict], embedding: dict, **settings) -> Predictor:
         """Make a new predictor. Its whole config, `settings` included, is saved in one step.
 
-        So a command that finds the new predictor, such as a refresh, never sees it half made.
+        So a command that finds the new predictor, such as a refresh, never sees it half made. Setup holds the
+        name's lock while it calls this, as name_lock says, so a delete of an older predictor with the same name
+        never takes away what it makes.
         """
         problem = name_problem(name)
         if problem:

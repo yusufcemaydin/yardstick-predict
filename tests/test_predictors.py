@@ -368,6 +368,124 @@ def test_a_predictor_being_refreshed_isnt_deleted_and_a_forecast_reading_its_mod
     assert not predictor.dir.exists()
 
 
+def can_link(folder: Path) -> bool:
+    """Whether this computer lets the tests make a link to a folder. Windows needs a setting for it."""
+    probe = folder / "probe-link"
+    try:
+        probe.symlink_to(folder, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return False
+    probe.unlink()
+    return True
+
+
+@pytest.mark.usefixtures("quick")
+def test_deleting_a_predictor_that_is_a_link_deletes_only_the_link(capsys, tmp_path):
+    if not can_link(tmp_path):
+        pytest.skip("This computer doesn't let the tests make links.")
+    from test_embeddings import _task
+
+    default = quick_predictor("default")
+    default.add_tasks([_task(n, f"task {n}") for n in range(3)])
+    default.close()
+    work = store.predictor_folder("work")
+    work.symlink_to(default.dir, target_is_directory=True)  # another name for the same predictor
+    assert predictor_names() == ["default", "work"]
+    store.set_default("work")
+    before = everything(default.dir)
+
+    code, out = run(capsys, "delete", "work")
+    assert code == 2 and f"work is a link to {default.dir.resolve()}, not a folder of its own." in out
+    assert "This deletes only the link. What it links to stays, with everything in it." in out
+    assert "its dataset" not in out and everything(default.dir) == before
+    code, out = run(capsys, "delete", "work", "--yes")
+    assert code == 0 and f"Deleted the link work. {default.dir.resolve()} stays as it was." in out
+    assert not work.is_symlink() and not work.exists() and predictor_names() == ["default"]
+    assert everything(default.dir) == before  # nothing changed where the link led, not even a lock file
+    assert default_name() == "default" and "work" not in store.settings().values()
+
+    work.symlink_to(default.dir, target_is_directory=True)
+    code, out = run(capsys, "delete", "work", "--yes", "--json")
+    deleted = json.loads(out)["deleted"]
+    assert code == 0 and deleted["link_to"] == str(default.dir.resolve())
+    assert (deleted["tasks"], deleted["bytes"]) == (0, 0)
+    assert not work.is_symlink() and everything(default.dir) == before
+    assert Predictor("default").count_tasks() == 3
+
+
+def test_deleting_a_predictor_never_follows_a_link_out_of_its_folder(capsys, tmp_path):
+    if not can_link(tmp_path):
+        pytest.skip("This computer doesn't let the tests make links.")
+    outside = tmp_path / "outside"
+    (outside / "deeper").mkdir(parents=True)
+    (outside / "notes.txt").write_text("mine")
+    (outside / "deeper" / "more.txt").write_text("mine too")
+    other = Predictor.create("other", [], EMBEDDING)
+    other.model_dir.mkdir()
+    (other.model_dir / "model.json").write_text("{}")
+    work = Predictor.create("work", [], EMBEDDING)
+    (work.dir / "model").symlink_to(other.model_dir, target_is_directory=True)
+    (work.dir / "notes").symlink_to(outside, target_is_directory=True)
+    (work.dir / "notes.txt").symlink_to(outside / "notes.txt")
+    (work.dir / "extra").mkdir()
+    (work.dir / "extra" / "deeper").symlink_to(outside / "deeper", target_is_directory=True)
+    before = everything(outside, other.dir)
+    assert main(["delete", "work", "--yes"]) == 0
+    assert not work.dir.exists() and everything(outside, other.dir) == before
+
+
+def asks_for_lock(monkeypatch, thread: list[threading.Thread], picked, ready: threading.Event) -> None:
+    """Set `ready` as the thread in `thread` asks for a lock that `picked` picks out by its path and whether it's
+    shared, before it waits for it."""
+    from contextlib import contextmanager
+
+    real = locks.held
+
+    @contextmanager
+    def held(path, wait=True, shared=False):
+        if thread and threading.current_thread() is thread[0] and picked(Path(path), shared):
+            ready.set()
+        with real(path, wait, shared) as mine:
+            yield mine
+
+    monkeypatch.setattr(locks, "held", held)
+
+
+def test_a_setup_of_the_same_name_as_a_predictor_being_deleted_keeps_all_it_makes(capsys, monkeypatch, quickly):
+    import shutil
+
+    assert main(["create", "--yes", *quickly]) == 0
+    folder = store.predictor_folder("default")
+    setup: list[threading.Thread] = []
+    codes: list[int] = []
+    ready = threading.Event()
+    asks_for_lock(monkeypatch, setup, lambda path, shared: path.parent == folder.parent, ready)
+    real_rmtree = shutil.rmtree
+
+    def setting_up() -> None:
+        try:
+            codes.append(main(["create", "--yes", *quickly]))
+        finally:
+            ready.set()
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path) == folder and not setup:
+            # A setup of a new predictor with the same name starts just as the old one's folder is about to go.
+            # Unless something keeps it waiting, it makes the new predictor first.
+            setup.append(threading.Thread(target=setting_up))
+            setup[0].start()
+            ready.wait(60)
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", rmtree)
+    assert main(["delete", "default", "--yes"]) == 0
+    setup[0].join(120)
+    assert not setup[0].is_alive() and codes == [0]
+    predictor = Predictor("default")
+    assert predictor.count_tasks() == 40 and (predictor.model_dir / "model.json").is_file()
+    assert predictor.prepared_path.is_file() and default_name() == "default"
+
+
 def test_a_broken_predictor_can_be_deleted(capsys):
     predictor = Predictor.create("default", [], EMBEDDING)
     predictor.add_tasks([])
@@ -486,7 +604,7 @@ def test_a_program_deletes_a_stored_feature_with_yes_and_reads_json(capsys, monk
     assert code == 2 and "Add --yes to delete it. Nothing was deleted." in out
     code, out = run(capsys, "features", "delete", answers, "--json")
     assert code == 2 and json.loads(out)["error"]["code"] == "needs_yes"
-    with locks.held(store.predictor_folder("default") / "refresh.lock"):  # a refresh may be saving to it
+    with feature_store.writing():  # as a refresh, which may be saving to it, holds it
         code, out = run(capsys, "features", "delete", answers, "--yes", "--json")
         assert code == 1 and json.loads(out)["error"]["code"] == "busy"
     assert answers in feature_store.index()
@@ -501,6 +619,84 @@ def test_a_program_deletes_a_stored_feature_with_yes_and_reads_json(capsys, monk
     for flags, error in (((), "invalid_request"), ((answers,), "unknown_feature"), (("nope",), "unknown_feature")):
         code, out = run(capsys, "features", "delete", *flags, "--yes", "--json")
         assert code == 1 and json.loads(out)["error"]["code"] == error
+
+
+def test_a_setup_that_starts_as_a_stored_feature_is_deleted_keeps_what_it_saves(capsys, monkeypatch, quickly):
+    monkeypatch.setattr(llm, "analyze", fake_analysis([]))
+    assert main(["create", "--yes", *quickly, "--features", "llm:kind", "--llm-provider", "codex"]) == 0
+    answers = "llm.codex.codex-default"
+    # The new predictor asks the same AI model for a description, which nothing asked for before.
+    flags = [*quickly, "--features", "llm:description", "--llm-provider", "codex"]
+    setup: list[threading.Thread] = []
+    codes: list[int] = []
+    ready = threading.Event()
+    asks_for_lock(monkeypatch, setup, lambda path, shared: shared and path.parent == feature_store.folder(), ready)
+    real_save, real_delete = feature_store.save_answers, feature_store.delete
+
+    def save_answers(*args, **kwargs):
+        found = real_save(*args, **kwargs)
+        if setup and threading.current_thread() is setup[0]:
+            ready.set()  # the setup saved what LLM analysis said
+        return found
+
+    def setting_up() -> None:
+        try:
+            codes.append(main(["create", "work", "--yes", *flags]))
+        finally:
+            ready.set()
+
+    def delete(feature_id: str) -> bool:
+        # A new predictor's setup starts just as the feature is deleted. Unless something keeps it waiting, it
+        # pays for LLM analysis and saves the answers first.
+        setup.append(threading.Thread(target=setting_up))
+        setup[0].start()
+        ready.wait(60)
+        return real_delete(feature_id)
+
+    monkeypatch.setattr(feature_store, "save_answers", save_answers)
+    monkeypatch.setattr(feature_store, "delete", delete)
+    assert main(["features", "delete", answers, "--yes"]) == 0
+    setup[0].join(120)
+    assert not setup[0].is_alive() and codes == [0]
+    labels = Predictor("work").llm_labels()
+    assert len(labels) == 40 and all(answer.get("description") for answer in labels.values())
+
+
+def test_a_stored_feature_isnt_deleted_while_a_command_that_saves_to_the_store_runs(capsys, monkeypatch, quickly):
+    monkeypatch.setattr(llm, "analyze", fake_analysis([]))
+    assert main(["create", "--yes", *quickly, "--features", "llm:kind", "--llm-provider", "codex"]) == 0
+    capsys.readouterr()
+    answers = "llm.codex.codex-default"
+    real_refresh = command._refresh
+    seen: list[tuple[int, str]] = []
+
+    def refresh(args, predictor):
+        # While the refresh runs, a program tries to delete a stored feature it may be saving to.
+        seen.append(run(capsys, "features", "delete", answers, "--yes", "--json"))
+        return real_refresh(args, predictor)
+
+    monkeypatch.setattr(command, "_refresh", refresh)
+    assert main(["refresh", "--yes"]) == 0
+    code, out = seen[0]
+    error = json.loads(out)["error"]
+    assert code == 1 and error["code"] == "busy" and "Try again when it's done." in error["message"]
+    assert answers in feature_store.index() and len(Predictor("default").llm_labels()) == 40
+
+
+def test_an_older_predictor_moves_into_the_store_only_while_no_stored_feature_is_deleted(capsys):
+    old_predictor("older")  # an older version made it, so its vectors and LLM answers move into the store first
+    with feature_store.deleting() as alone:  # a features delete is running
+        assert alone
+        code, out = run(capsys, "check", "older", "--json")
+        error = json.loads(out)["error"]
+        assert code == 1 and error == {"code": "busy", "message": command.STORE_BUSY}
+        code, out = run(capsys, "features", "--json")
+        assert code == 1 and json.loads(out)["predictors"][0]["error"] == command.STORE_BUSY
+        code, out = run(capsys, "status")
+        assert "Its coverage can't be counted while another command is using the feature store." in out
+        assert not Predictor("older").config.get("feature_store")  # nothing moved in meanwhile
+    code, out = run(capsys, "features", "--json")
+    assert code == 0 and Predictor("older").config.get("feature_store")
 
 
 def test_making_llm_answers_again_counts_an_analysis_for_each_set_of_parts_asked_for(capsys, monkeypatch):
