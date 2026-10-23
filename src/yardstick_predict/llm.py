@@ -456,6 +456,28 @@ def merge(before: dict | None, labels: dict) -> dict:
     return _counted(merged, counts)
 
 
+def combine(stored: dict | None, other: dict) -> dict:
+    """Two saved answers about one task as one, as when an older version's answer moves into the feature store.
+
+    Answers by the same AI model keep the fields of both. For a field both have, the stored answer's stays, and an
+    answer is kept over a refusal. Each set of fields keeps the higher of its two counts of tries, so combining
+    the same answers again changes nothing. Answers by different AI models aren't mixed: the stored one stays,
+    unless it's a refusal and the other isn't.
+    """
+    if not stored:
+        return other
+    if stored.get("by") != other.get("by"):
+        return other if stored.get("failed") and not other.get("failed") else stored
+    combined = {name: value for name, value in {**other, **stored}.items() if name not in _COUNTS}
+    fields = list(dict.fromkeys([*(stored.get("fields") or []), *(other.get("fields") or [])]))
+    if fields or "fields" in stored or "fields" in other:
+        combined["fields"] = fields
+    counts = unanswered(stored)
+    for name, count in unanswered(other).items():
+        counts[name] = max(counts.get(name, 0), count)
+    return _counted(combined, counts)
+
+
 def only(labels: dict, fields: list[str]) -> dict:
     """What the AI model said about a task, with only the fields a predictor asks for, and who said it."""
     return {name: value for name, value in labels.items() if name in fields or name not in FIELDS}

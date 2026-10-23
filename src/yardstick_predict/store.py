@@ -641,15 +641,17 @@ class Predictor:
     def move_in(self) -> None:
         """Copy the vectors and LLM answers an older version kept in the dataset into the feature store, once.
 
-        It runs the first time this version reads or saves them, and never for a forecast. Only rows the store
-        lacks are copied, and rows are keyed, so a move stopped halfway runs again safely, and two predictors
-        can move in at once: the store's lock keeps their saves apart. A vector without its text's hash was
-        never used, so it stays behind. The old tables stay in the dataset, unread: a later release can drop
-        them. Then the settings say the move is done.
+        It runs the first time this version reads or saves them, and never for a forecast. Only vectors the store
+        lacks are copied, and each answer is combined with the one the store holds for its task, as llm.combine
+        does, so another predictor's answers about the same tasks keep every field either has. Rows are keyed and
+        combining again changes nothing, so a move stopped halfway runs again safely, and two predictors can move
+        in at once: the store's lock keeps their saves apart. A vector without its text's hash was never used, so
+        it stays behind. The old tables stay in the dataset, unread: a later release can drop them. Then the
+        settings say the move is done.
         """
         if self.config.get("feature_store"):
             return
-        from . import feature_store
+        from . import feature_store, llm
 
         size = self.embedding_dimensions
         vectors: dict[str, list] = {}
@@ -678,7 +680,7 @@ class Predictor:
             if feature is not None:
                 answers.setdefault(feature.id, (feature, {}))[1][str(task_id)] = labels
         for feature, found in answers.values():
-            feature_store.save_answers(feature, found, only_new=True)
+            feature_store.save_answers(feature, found, merge=llm.combine)
             moved.append(feature)
         for feature in moved:
             feature_store.compact(feature)

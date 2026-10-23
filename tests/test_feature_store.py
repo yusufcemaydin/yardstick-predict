@@ -483,6 +483,80 @@ def test_two_predictors_move_in_at_once():
         assert len(predictor.embedded("prompt")) == 20 and len(predictor.llm_labels()) == 21  # with "unsigned"
 
 
+BY = "codex:codex-default"
+KIND = llm.parts(["kind"])
+WORDS = llm.parts(["description"])
+SIZED = {"kind": "feature", "files": 2.0, "steps": 2.0, "runs_code": True, "looks_up": False, "continues": False,
+         "clarity": "clear", "minutes": 5.0, "by": BY, "fields": KIND}  # fmt: skip
+"""An answer about a task's kind and size."""
+DESCRIBED = {"description": "Add the page.", "by": BY, "fields": WORDS}
+
+
+def refused(fields: list[str], tries: int) -> dict:
+    """A note, as an older version saved it, that the AI model didn't answer, with how many times it was asked."""
+    return {"by": BY, "fields": fields, "failed": True, "tries": tries}
+
+
+def older_with(name: str, answers: dict[str, dict], context: str) -> Predictor:
+    """An older version's predictor over tasks t0 to t3, with these LLM answers, and its tasks' context as it read
+    them: with another text, a context has another vector."""
+    predictor = old_predictor(name)
+    db = sqlite3.connect(predictor.dir / "dataset.sqlite")
+    db.execute("DELETE FROM llm_labels")
+    db.executemany("INSERT INTO llm_labels VALUES (?, ?)", [(task, json.dumps(said)) for task, said in answers.items()])
+    db.execute("UPDATE tasks SET context = ? WHERE context != ''", (context,))
+    vector = np.array(fake_vector(context), dtype=np.float32).tobytes()
+    made = embeddings.text_hash(context)
+    db.execute("UPDATE embeddings SET vector = ?, text_hash = ? WHERE field = 'context'", (vector, made))
+    db.commit()
+    db.close()
+    return Predictor(name)
+
+
+@pytest.mark.parametrize("first", ["kinds", "words"])
+def test_two_older_predictors_moving_in_keep_every_part_of_their_answers_in_either_order(first):
+    # One asked the AI model for the kind and size, the other for a description, of the same tasks. Each was refused
+    # some of them. The other read t3 when it asked for both.
+    kinds = {"t0": SIZED, "t1": refused(KIND, 2), "t2": SIZED, "t3": refused(KIND, 1)}
+    both = {**SIZED, **DESCRIBED, "fields": KIND + WORDS}
+    words = {"t0": DESCRIBED, "t1": DESCRIBED, "t2": refused(WORDS, 1), "t3": both}
+    older = {"kinds": older_with("kinds", kinds, "we talked"), "words": older_with("words", words, "we talked more")}
+    for name in (first, "words" if first == "kinds" else "kinds"):
+        older[name].move_in()
+    found = feature_store.answers_of(ANSWERS)
+    how = {"provider": "codex", "model": "codex-default"}
+    for task in ("t0", "t3"):  # each part from either, and an answer kept over a refusal
+        assert found[task]["kind"] == "feature" and found[task]["description"] == "Add the page.", task
+        assert set(found[task]["fields"]) == set(KIND + WORDS) and not found[task].get("failed"), task
+    assert found["t1"]["description"] == "Add the page." and "kind" not in found["t1"]
+    assert not llm.needs(found["t1"], how, KIND)  # refused twice: not asked again
+    assert found["t2"]["kind"] == "feature" and "description" not in found["t2"]
+    assert llm.needs(found["t2"], how, WORDS) and not llm.needs(found["t2"], how, KIND)  # refused once: once more
+    # Each reads the fields it asks for, and its own context's vectors. The other's stay in the store too.
+    for name, text in (("kinds", "we talked"), ("words", "we talked more")):
+        predictor = Predictor(name)
+        assert predictor.llm_labels(every_field=True) == found
+        assert sorted(predictor.embedded("prompt")) == ["t0", "t1", "t2", "t3"]
+        assert all(predictor.embedded("context").made_from(task, text) for task in ("t1", "t2", "t3"))
+    context = feature_store.vector_hashes(Predictor("kinds").embedding_feature("context"))
+    assert all(len(context[task]) == 2 for task in ("t1", "t2", "t3"))
+    # Moving in again changes nothing.
+    changed = {path: path.stat().st_mtime_ns for path in feature_store.folder().rglob("*.parquet")}
+    for name in older:
+        saved_by_an_older_version(Predictor(name))
+        Predictor(name).move_in()
+    assert {path: path.stat().st_mtime_ns for path in feature_store.folder().rglob("*.parquet")} == changed
+
+
+def test_answers_by_different_ai_models_moving_in_are_never_mixed():
+    unsigned = {"kind": "design"}  # an answer saved before answers said who gave them
+    assert llm.combine(SIZED, unsigned) == SIZED and llm.combine(None, unsigned) == unsigned
+    assert llm.combine(refused(KIND, 1), unsigned) == unsigned  # an answer over a refusal
+    assert llm.combine(unsigned, refused(KIND, 1)) == unsigned
+    both = llm.combine(refused(WORDS, 1), refused(WORDS, 2))
+    assert both["unanswered"] == {"description": 2} and llm.combine(both, refused(WORDS, 2)) == both
+
+
 def test_training_reads_the_same_rows_from_the_store_as_it_did_from_the_dataset(saved_by_0_3):
     # What the version before the feature store read: each task's one vector for each feature, from the
     # dataset, and what LLM analysis said about it.
