@@ -12,7 +12,7 @@ import pytest
 from builders import history
 from conftest import KEY
 from test_cli import fake_analysis, quick_train
-from test_model import ONE_WINDOW, kinds, rows_for, synthetic
+from test_model import ONE_WINDOW, kinds, rows_for, synthetic, task
 
 from yardstick_predict import (
     benchmarks,
@@ -160,51 +160,63 @@ def results(**scores: float) -> dict:
 
 def test_a_feature_helped_when_the_test_scored_more_than_1_percent_worse_without_it():
     with_all = results(seconds=1.0)
-    assert check.verdict(with_all, results(seconds=1.02), 0.9) == {
+    assert check.verdict(with_all, results(seconds=1.02), 0.9, 0.8) == {
         "verdict": "helped",
         "worse_without": 0.02,
         "share": 0.9,
+        "training_share": 0.8,
     }
-    assert check.verdict(with_all, results(seconds=1.01), 0.9)["verdict"] == "no_help"  # 1% isn't more than 1%
-    assert check.verdict(with_all, results(seconds=0.95), 0.9) == {
+    assert check.verdict(with_all, results(seconds=1.01), 0.9, 0.8)["verdict"] == "no_help"  # 1% isn't over 1%
+    assert check.verdict(with_all, results(seconds=0.95), 0.9, 0.8) == {
         "verdict": "no_help",
         "worse_without": -0.05,
         "share": 0.9,
+        "training_share": 0.8,
     }
     # Each head both tests scored counts alike: 3% worse time and 3% better cost is no change at all.
-    assert check.verdict(results(seconds=1.0, usd=2.0), results(seconds=1.03, usd=1.94), 1.0)["worse_without"] == 0
+    both, without = results(seconds=1.0, usd=2.0), results(seconds=1.03, usd=1.94)
+    assert check.verdict(both, without, 1.0, 1.0)["worse_without"] == 0
     # A head only one of the tests scored doesn't count.
-    assert check.verdict(results(seconds=1.0, usd=2.0), results(seconds=1.05), 1.0)["worse_without"] == 0.05
+    assert check.verdict(both, results(seconds=1.05), 1.0, 1.0)["worse_without"] == 0.05
 
 
 def test_without_enough_data_there_is_no_verdict():
     tested, untested = results(seconds=1.0), {"tasks_tested": 0, "heads": []}
-    assert check.verdict(untested, untested, 1.0) == {"verdict": "not_enough_data", "worse_without": None, "share": 1.0}
+    assert check.verdict(untested, untested, 1.0, 1.0) == {
+        "verdict": "not_enough_data",
+        "worse_without": None,
+        "share": 1.0,
+        "training_share": 1.0,
+    }
     # Under 20% of the AI model's test tasks have the feature: whatever the scores say, the test can't tell.
-    assert check.verdict(tested, results(seconds=1.5), 0.19)["verdict"] == "not_enough_data"
-    assert check.verdict(tested, results(seconds=1.5), 0.2)["verdict"] == "helped"
-    assert check.verdict(tested, results(seconds=1.5), None)["verdict"] == "not_enough_data"
-    assert check.verdict(tested, {}, 1.0)["verdict"] == "not_enough_data"
+    assert check.verdict(tested, results(seconds=1.5), 0.19, 1.0)["verdict"] == "not_enough_data"
+    assert check.verdict(tested, results(seconds=1.5), 0.2, 1.0)["verdict"] == "helped"
+    assert check.verdict(tested, results(seconds=1.5), None, 1.0)["verdict"] == "not_enough_data"
+    assert check.verdict(tested, {}, 1.0, 1.0)["verdict"] == "not_enough_data"
+    # Nor when under 20% of the tasks its trial models learned from have it: they couldn't learn what it does.
+    assert check.verdict(tested, results(seconds=1.0), 1.0, 0.19)["verdict"] == "not_enough_data"
+    assert check.verdict(tested, results(seconds=1.0), 1.0, 0.2)["verdict"] == "no_help"
+    assert check.verdict(tested, results(seconds=1.0), 1.0, None)["verdict"] == "not_enough_data"
 
 
 def test_each_feature_gets_a_verdict_for_each_ai_model_the_test_knows():
     untested = {"tasks_tested": 0, "heads": []}
     full = {"tested_on": 130, "models": {"a": results(seconds=1.0), "b": {**results(seconds=2.0), "tasks_tested": 80}}}
     full["models"]["c"] = untested
-    reports = {
-        "": full,
-        "context": {"models": {"a": results(seconds=1.1), "b": results(seconds=2.0), "c": untested}},
-        "time": full,
+    without_context = {"models": {"a": results(seconds=1.1), "b": results(seconds=2.0), "c": untested}}
+    compared = {
+        "context": M.Compared(full, without_context, {"a": 1.0, "b": 0.5}, {"a": 1.0, "b": 0.9}),
+        "time": M.Compared(full, full, {"a": 1.0, "b": 1.0}, {"a": 0.1, "b": 1.0}),
     }
-    shares = {"context": {"a": 1.0, "b": 0.5}, "time": {"a": 1.0, "b": 1.0}}
-    result = check.judge(reports, shares, ["context", "time"])
+    result = check.judge(full, compared, ["context", "time"])
     assert result.models == ["b", "a", "c"]  # the most tested first
     verdicts = {name: {model: v["verdict"] for model, v in found.items()} for name, found in result.verdicts.items()}
     assert verdicts == {
         "context": {"a": "helped", "b": "no_help", "c": "not_enough_data"},
-        "time": {"a": "no_help", "b": "no_help", "c": "not_enough_data"},
+        "time": {"a": "not_enough_data", "b": "no_help", "c": "not_enough_data"},
     }
     assert result.helped() == ["context"] and result.tasks_tested("b") == 80 and result.tasks_tested("z") == 0
+    assert result.verdicts["time"]["a"]["training_share"] == 0.1 and result.alone == []
 
 
 def test_the_check_tests_with_every_feature_then_without_each_and_fits_no_final_model(monkeypatch):
@@ -218,16 +230,85 @@ def test_the_check_tests_with_every_feature_then_without_each_and_fits_no_final_
     monkeypatch.setattr(M, "fit", lambda *args, **kwargs: fitted.append(len(args[0])) or real(*args, **kwargs))
     told: list[tuple[int, int]] = []
     names = ["context", "noise", "skills"]
-    reports, shares = M.compare(tasks, rows, ONE_WINDOW, names, lambda done, total: told.append((done, total)))
+    full, compared = M.compare(tasks, rows, ONE_WINDOW, names, lambda done, total: told.append((done, total)))
     # One trial for the one test window: with every feature, without the context and without the noise. No task
     # has skills, so the test without them would be the same as with every feature, and doesn't run again.
     assert len(fitted) == 3 and told[0] == (0, 3) and told[-1] == (3, 3)
-    assert reports["skills"] is reports[""] and set(reports) == {"", *names}
-    assert shares == {name: {"claude-opus-5-5": share} for name, share in zip(names, (1.0, 1.0, 0.0))}
-    result = check.judge(reports, shares, names)
+    assert compared["skills"].without is full and all(found.with_all is full for found in compared.values())
+    for name, share in zip(names, (1.0, 1.0, 0.0)):
+        assert compared[name].tested == compared[name].learned == {"claude-opus-5-5": share}, name
+    result = check.judge(full, compared, names)
     verdicts = {name: found["claude-opus-5-5"]["verdict"] for name, found in result.verdicts.items()}
     assert verdicts == {"context": "helped", "noise": "no_help", "skills": "not_enough_data"}
     assert result.verdicts["context"]["claude-opus-5-5"]["worse_without"] > 0.1
+
+
+def test_the_trial_models_learn_from_the_tasks_before_each_window():
+    # Skills that only the newest tasks name: most of the test tasks have them, few of the tasks before them.
+    tasks, prompt, _ = kinds(600)
+    skills = {task.id: prompt[task.id] for task in tasks[-150:]}
+    rows = rows_for(tasks, {"prompt": prompt, "skills": skills})
+    _, compared = M.compare(tasks, rows, ONE_WINDOW, ["skills"])
+    tested, learned = compared["skills"].tested["claude-opus-5-5"], compared["skills"].learned["claude-opus-5-5"]
+    assert tested == pytest.approx(150 / 180) and learned == 0.0
+    assert check.judge(compared["skills"].with_all, compared, ["skills"]).verdicts["skills"]["claude-opus-5-5"] == {
+        "verdict": "not_enough_data",
+        "worse_without": 0.0,
+        "share": round(tested, 4),
+        "training_share": 0.0,
+    }
+
+
+def read_by_llm_analysis(n: int, sample: int) -> tuple[list, list]:
+    """Tasks on one AI model whose time depends on the kind of work, which only LLM analysis tells: their prompts
+    all look alike. LLM analysis read only the newest `sample` of them, as it does before the check."""
+    rng = np.random.default_rng(11)
+    minutes = np.array([0.2, 1.0, 5.0, 25.0])
+    tasks, rows = [], []
+    for i in range(n):
+        kind = int(rng.integers(4))
+        seconds = float(np.exp(np.log(minutes[kind] * 60) + rng.normal(0, 0.3)))
+        found = task(i, "claude-opus-5-5", "same length prompt", seconds, int(seconds * 1000), False)
+        said = llm.numbers({"minutes": float(minutes[kind])}) if i >= n - sample else {}
+        prompt = rng.normal(0, 1, 16).astype(np.float32)
+        tasks.append(found)
+        rows.append(M.Features(found.model, found.effort, found.agent, found.origin, 18, {"prompt": prompt}, said))
+    return tasks, rows
+
+
+def test_llm_analysis_of_a_small_sample_is_never_said_not_to_help_when_it_does():
+    # Its sample is the newest tasks, which the test forecasts. The trial models learn from the tasks before them,
+    # which it never read. Without a check of what they learned from, it would seem not to help at all.
+    tasks, rows = read_by_llm_analysis(1_200, 200)
+    result = check.run(check.Inputs(tasks, rows, ONE_WINDOW, ["llm"]))
+    said = result.verdicts["llm"]["claude-opus-5-5"]
+    assert said["verdict"] in ("helped", "not_enough_data"), said
+    assert said["verdict"] == "helped" and result.alone == ["llm"]  # judged on the tasks it read, where it helps
+    assert said["share"] == said["training_share"] == 1.0
+    # With too few of the tasks it read to test, there's no verdict either way.
+    tasks, rows = read_by_llm_analysis(600, 5)
+    result = check.run(check.Inputs(tasks, rows, ONE_WINDOW, ["llm"]))
+    assert result.tasks_tested("claude-opus-5-5")  # the test with every feature tested it
+    assert result.verdicts["llm"]["claude-opus-5-5"]["verdict"] == "not_enough_data"
+
+
+def test_an_ai_model_with_too_few_tasks_llm_analysis_read_gets_not_enough_data(capsys, monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    full = {"tested_on": 100, "models": {"a": results(seconds=1.0), "b": results(seconds=2.0)}}
+    # On the tasks LLM analysis read, only a had enough to test.
+    read = M.Compared({"models": {"a": results(seconds=1.0)}}, {"models": {"a": results(seconds=1.1)}}, {"a": 1.0},
+                      {"a": 1.0}, alone=True)  # fmt: skip
+    result = check.judge(full, {"llm": read}, ["llm"])
+    assert {model: found["verdict"] for model, found in result.verdicts["llm"].items()} == {
+        "a": "helped",
+        "b": "not_enough_data",
+    }
+    assert result.alone == ["llm"] and check.sampled_too_little(result) == ["b"]
+    assert check.as_json(result, "work")["judged_on_tasks_with_it"] == ["llm"]
+    cli.show_check(result)
+    out = " ".join(capsys.readouterr().out.split())
+    assert "LLM analysis read only some of your tasks, so it was judged on those alone" in out
+    assert "too few to judge it for b." in out
 
 
 def test_llm_analysis_reads_a_sample_first_the_newest_30_percent_and_at_most_500():
@@ -364,16 +445,17 @@ def stand_in_check(helped: set[str]):
     """A stand-in for the model's comparison: the features in `helped` scored 5% worse without them, on every AI
     model, and every task had every feature."""
 
-    def compare(tasks, rows, settings=None, names=(), on_progress=None):
+    def compare(tasks, rows, settings=None, names=(), on_progress=None, alone=()):
         models = sorted({task.model for task in tasks})
 
         def report(worse: float = 0.0) -> dict:
             return {"tested_on": 60, "models": {model: results(seconds=1.0 + worse) for model in models}}
 
-        reports = {"": report(), **{name: report(0.05 if name in helped else 0.0) for name in names}}
+        every = {model: 1.0 for model in models}
+        full = report()
         if on_progress is not None:
             on_progress(1, 1)
-        return reports, {name: {model: 1.0 for model in models} for name in names}
+        return full, {name: M.Compared(full, report(0.05 if name in helped else 0.0), every, every) for name in names}
 
     return compare
 
@@ -441,10 +523,10 @@ def test_when_the_check_cant_test_any_ai_model_the_features_stay_as_chosen(capsy
     read: list[int] = []
     monkeypatch.setattr(llm, "analyze", fake_analysis(read))
 
-    def untested(tasks, rows, settings=None, names=(), on_progress=None):
+    def untested(tasks, rows, settings=None, names=(), on_progress=None, alone=()):
         models = {"claude-opus-5-5": {"tasks_tested": 0, "heads": []}}
         report = {"tested_on": 0, "min_tasks_to_test": 60, "models": models}
-        return {"": report, **{name: report for name in names}}, {name: {} for name in names}
+        return report, {name: M.Compared(report, report) for name in names}
 
     monkeypatch.setattr(M, "compare", untested)
     asked = person(monkeypatch, Turn_on_or_off=["9", ""], How_should_it_be_paid_for="4")
@@ -544,9 +626,14 @@ def test_check_answers_a_program_in_json(capsys, monkeypatch, made):
     assert found["version"] == 1 and found["predictor"] == "default" and found["features"] == ["context", "time"]
     assert found["tested_on"] == 60 and set(found["models"]) == {"claude-opus-5-5", "claude-sonnet-5-5"}
     assert found["models"]["claude-opus-5-5"]["tasks_tested"] == 50
-    assert found["verdicts"]["time"]["claude-opus-5-5"] == {"verdict": "helped", "worse_without": 0.05, "share": 1.0}
+    assert found["verdicts"]["time"]["claude-opus-5-5"] == {
+        "verdict": "helped",
+        "worse_without": 0.05,
+        "share": 1.0,
+        "training_share": 1.0,
+    }
     assert found["verdicts"]["context"]["claude-sonnet-5-5"]["verdict"] == "no_help"
-    assert isinstance(found["checked_at"], float)
+    assert isinstance(found["checked_at"], float) and found["judged_on_tasks_with_it"] == [] and found["notes"] == []
 
 
 def test_check_answers_a_program_in_json_even_when_a_stored_file_cant_be_read(capsys, monkeypatch, made):

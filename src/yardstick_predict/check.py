@@ -3,8 +3,11 @@
 It runs the test that training runs, on each AI model's newest tasks, once with every feature the predictor has,
 then once without each optional feature in turn. A feature helped an AI model when that model's test scored
 more than 1% worse without it. It didn't help when the test scored about the same, or better, without it. When
-the AI model had too few tasks to test, or too few of its test tasks had the feature, there isn't enough data to
-tell.
+the AI model had too few tasks to test, or too few of its test tasks or of the tasks its trial models learned
+from had the feature, there isn't enough data to tell.
+
+LLM analysis that read only some of the tasks, such as the sample it reads before the check, is judged on those
+tasks alone: the test runs on them with it and without it, so the trial models learn from tasks it read.
 
 It's advice only. Setup offers it, then suggests the features that helped. The check command runs it on a
 predictor you already have, and changes nothing about it. Each verdict is remembered in a file of its own in the
@@ -32,7 +35,11 @@ WORDS = {HELPED: "helped", NO_HELP: "didn't help", NOT_ENOUGH: "not enough data"
 WORSE_BY = 0.01
 """A feature helped an AI model when its test scored more than 1% worse without it. A lower score is better."""
 LEAST_SHARE = 0.2
-"""When under 20% of an AI model's test tasks have a feature, its test can't show what the feature does."""
+"""When under 20% of an AI model's test tasks have a feature, or under 20% of the tasks its trial models learned
+from, its test can't show what the feature does."""
+ALONE = ("llm",)
+"""The features judged on only the tasks that have them, when some tasks don't: LLM analysis, which reads only a
+sample before the check. A task it didn't read lacks it only because it wasn't asked."""
 SAMPLE_SHARE = 0.3
 SAMPLE_MOST = 500
 """Before the check, LLM analysis reads only each AI model's newest 30% of tasks, and at most 500 in all. Each AI
@@ -65,8 +72,10 @@ class Result:
     """The test with every feature, as model.test reports it."""
     verdicts: dict[str, dict[str, dict]]
     """By feature, then by AI model: the verdict, how much worse the test scored without the feature, and the share
-    of the AI model's test tasks that have it."""
+    of the AI model's test tasks, and of the tasks its trial models learned from, that have it."""
     checked_at: float = field(default_factory=time.time)
+    alone: list[str] = field(default_factory=list)
+    """The features judged on only the tasks that have them, as LLM analysis that read only some tasks."""
 
     @property
     def models(self) -> list[str]:
@@ -111,34 +120,42 @@ def run(given: Inputs, on_progress: Callable[[int, int], None] | None = None) ->
     """
     from . import model
 
-    reports, shares = model.compare(given.tasks, given.rows, given.settings, given.features, on_progress)
-    return judge(reports, shares, given.features)
+    full, compared = model.compare(given.tasks, given.rows, given.settings, given.features, on_progress, ALONE)
+    return judge(full, compared, given.features)
 
 
-def judge(reports: dict[str, dict], shares: dict[str, dict[str, float]], names: list[str]) -> Result:
+def judge(full: dict, compared: dict, names: list[str]) -> Result:
     """Each feature's verdict for each AI model, from the tests model.compare ran.
 
-    `reports` holds each test's report by the feature it left out, with "" for the test with every feature.
-    `shares` holds, by feature, the share of each AI model's test tasks that have it.
+    `full` is the test with every feature, on every task. `compared` holds, by feature, how it compared, as
+    model.Compared: the test with every feature and the test without it, on the same tasks, and the share of
+    each AI model's test tasks, and of the tasks its trial models learned from, that have it. An AI model the
+    full test knows that its comparison didn't test, as when it has too few of the tasks LLM analysis read,
+    gets not enough data.
     """
-    full = reports.get("") or {}
     verdicts = {}
     for name in names:
-        without = (reports.get(name) or {}).get("models") or {}
+        found = compared.get(name)
+        with_all = (found.with_all.get("models") if found else None) or {}
+        without = (found.without.get("models") if found else None) or {}
+        tested, learned = (found.tested, found.learned) if found else ({}, {})
         verdicts[name] = {
-            model: verdict(found, without.get(model) or {}, (shares.get(name) or {}).get(model))
-            for model, found in (full.get("models") or {}).items()
+            model: verdict(with_all.get(model) or {}, without.get(model) or {}, tested.get(model), learned.get(model))
+            for model in (full.get("models") or {})
         }
-    return Result(list(names), full, verdicts)
+    alone = [name for name in names if getattr(compared.get(name), "alone", False)]
+    return Result(list(names), full, verdicts, alone=alone)
 
 
-def verdict(with_all: dict, without: dict, share: float | None) -> dict:
+def verdict(with_all: dict, without: dict, share: float | None, learned: float | None) -> dict:
     """One feature's verdict for one AI model.
 
     `with_all` and `without` are the AI model's results in the test with every feature and in the test without
-    this one, as the reports give them. `share` is the share of its test tasks that have the feature. Each head
-    both tests scored, such as time or cost, counts alike: the change is the average of how much worse each
-    head's score was without the feature, as a share of its score with it. Below 0, it scored better without.
+    this one, as the reports give them. `share` is the share of its test tasks that have the feature, and
+    `learned` the share of the tasks its trial models learned from that have it: a model that never learned from
+    a feature can't show what it does. Each head both tests scored, such as time or cost, counts alike: the
+    change is the average of how much worse each head's score was without the feature, as a share of its score
+    with it. Below 0, it scored better without.
     """
     heads = [head for head in with_all.get("heads") or [] if head in (without.get("heads") or [])]
     change = None
@@ -148,11 +165,16 @@ def verdict(with_all: dict, without: dict, share: float | None) -> dict:
             score = with_all[head]["score"]
             worse.append((without[head]["score"] - score) / max(score, 1e-4))  # as the test's report divides
         change = round(sum(worse) / len(worse), 4)
-    if change is None or share is None or share < LEAST_SHARE:
+    if change is None or any(part is None or part < LEAST_SHARE for part in (share, learned)):
         found = NOT_ENOUGH
     else:
         found = HELPED if change > WORSE_BY else NO_HELP
-    return {"verdict": found, "worse_without": change, "share": None if share is None else round(share, 4)}
+    return {
+        "verdict": found,
+        "worse_without": change,
+        "share": None if share is None else round(share, 4),
+        "training_share": None if learned is None else round(learned, 4),
+    }
 
 
 def sample(asks: list, model_of: dict[str, str] | None = None) -> list:
@@ -174,9 +196,12 @@ def sample(asks: list, model_of: dict[str, str] | None = None) -> list:
 
 
 def sampled_too_little(result: Result) -> list[str]:
-    """The AI models whose test had LLM answers for some of its tasks, but too few to judge LLM analysis."""
+    """The AI models the test could judge, but whose tasks LLM analysis read too few of to judge it, as when it
+    read only a sample."""
+    if "llm" not in result.alone:
+        return []  # it read every task, or none
     found = (result.verdicts.get("llm") or {}).items()
-    return [model for model, said in found if said["verdict"] == NOT_ENOUGH and (said.get("share") or 0) > 0]
+    return [model for model, said in found if said["verdict"] == NOT_ENOUGH and result.tasks_tested(model)]
 
 
 def as_json(result: Result, predictor: str) -> dict:
@@ -193,6 +218,7 @@ def as_json(result: Result, predictor: str) -> dict:
             for name in result.models
         },
         "verdicts": result.verdicts,
+        "judged_on_tasks_with_it": result.alone,
     }
 
 

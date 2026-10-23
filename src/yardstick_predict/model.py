@@ -1900,25 +1900,55 @@ def test(
     return report
 
 
+@dataclass
+class Compared:
+    """How one feature did in compare: the test with every feature and the test without it, run on the same
+    tasks, and how many of each AI model's tasks have the feature."""
+
+    with_all: dict
+    """The test with every feature, as test reports it."""
+    without: dict
+    """The same test without the feature."""
+    tested: dict[str, float] = field(default_factory=dict)
+    """By AI model: the share of its test tasks that have the feature."""
+    learned: dict[str, float] = field(default_factory=dict)
+    """By AI model: the share of the tasks its trial models learned from that have the feature."""
+    alone: bool = False
+    """Whether both tests ran on only the tasks that have the feature, as for LLM analysis that read some tasks."""
+
+
 def compare(
     tasks: list[Task],
     rows: list[Features],
     settings: dict | None = None,
     names: list[str] | tuple[str, ...] = (),
     on_progress: Callable[[int, int], None] | None = None,
-) -> tuple[dict[str, dict], dict[str, dict[str, float]]]:
+    alone: list[str] | tuple[str, ...] = (),
+) -> tuple[dict, dict[str, Compared]]:
     """The test training runs, with every feature the rows have, then again without each feature in `names`.
 
-    It only tests: no final model is fitted. Returns each test's report by the feature it left out, with "" for
-    the test with every feature. Also, for each feature in `names`, the share of each AI model's test tasks that
-    have it. The similar-task numbers are worked out once for every test, since leaving a feature out only drops
-    its own. A feature no task has would test the same as every feature, so it isn't tested again.
-    `on_progress` is told how many trial models are fitted, and how many there are in all.
+    It only tests: no final model is fitted. Returns the test with every feature, and for each feature in
+    `names`, how it compared. The similar-task numbers are worked out once for every test, since leaving a
+    feature out only drops its own. A feature no task has would test the same as every feature, so it isn't
+    tested again. `on_progress` is told how many trial models are fitted, and how many there are in all.
+
+    A feature in `alone` that only some of the tasks have, such as LLM analysis that read only a sample, is
+    tested on those tasks alone: with every feature and without it, each AI model on its own newest tasks among
+    them, as the test always does, with similar-task numbers worked out among them. Both tests then learn from
+    and forecast the same smaller set of tasks, so the comparison is fair, and the trial models learn from tasks
+    that have the feature.
     """
     settings = settings_for(settings)
     tasks, rows = _eligible(tasks, rows, settings)
     present = [name for name in names if any(has_feature(r, name) for r in rows)]
-    total = (len(fit_sizes(tasks, settings)) - 1) * (1 + len(present))
+    apart: dict[str, list[int]] = {}
+    for name in present:
+        having = [i for i, r in enumerate(rows) if has_feature(r, name)]
+        if name in alone and len(having) < len(rows):
+            apart[name] = having
+    trials = len(fit_sizes(tasks, settings)) - 1
+    total = trials * (1 + len(present) - len(apart))
+    total += sum(2 * (len(fit_sizes([tasks[i] for i in having], settings)) - 1) for having in apart.values())
     done = 0
 
     def tried() -> None:
@@ -1930,20 +1960,38 @@ def compare(
     if on_progress is not None and total:
         on_progress(0, total)  # the bar starts with the step, so it can tell how fast it goes
     similar = _similar_features(tasks, _prepared(rows), settings["half_life_days"])
-    reports = {"": test(tasks, rows, settings, similar, on_trial=tried)}
-    for name in present:
-        reports[name] = test(tasks, without(rows, name), settings, similar, on_trial=tried)
+    full = test(tasks, rows, settings, similar, on_trial=tried)
+    found: dict[str, Compared] = {}
     for name in names:
-        reports.setdefault(name, reports[""])  # no task has it, so the test without it is the same
+        if name in apart:
+            some, some_rows = [tasks[i] for i in apart[name]], [rows[i] for i in apart[name]]
+            near = _similar_features(some, _prepared(some_rows), settings["half_life_days"])
+            with_all = test(some, some_rows, settings, near, on_trial=tried)
+            left_out = test(some, without(some_rows, name), settings, near, on_trial=tried)
+            found[name] = Compared(with_all, left_out, *_shares(some, some_rows, settings, name), alone=True)
+            continue
+        # A feature no task has would test the same as every feature.
+        left_out = test(tasks, without(rows, name), settings, similar, on_trial=tried) if name in present else full
+        found[name] = Compared(full, left_out, *_shares(tasks, rows, settings, name))
+    return full, found
+
+
+def _shares(
+    tasks: list[Task], rows: list[Features], settings: dict, name: str
+) -> tuple[dict[str, float], dict[str, float]]:
+    """By AI model, the share of its test tasks that have a feature, and the share of the tasks its trial models
+    learned from that have it, as test runs them. An AI model with no test window that runs has neither."""
+    has = np.array([has_feature(r, name) for r in rows], dtype=bool)
     tested: dict[str, list[int]] = {}
-    for part, _ in _runs(tasks, _test_windows(tasks, settings)):
-        for i in part:
-            tested.setdefault(tasks[i].model, []).append(i)
-    shares = {
-        name: {model: float(np.mean([has_feature(rows[i], name) for i in found])) for model, found in tested.items()}
-        for name in names
-    }
-    return reports, shares
+    learned: dict[str, list[int]] = {}
+    for part, known in _runs(tasks, _test_windows(tasks, settings)):
+        model = tasks[part[0]].model  # a window holds one AI model's tasks
+        tested.setdefault(model, []).extend(part)
+        learned.setdefault(model, []).extend(known)
+    return (
+        {model: float(has[found].mean()) for model, found in tested.items()},
+        {model: float(has[found].mean()) for model, found in learned.items()},
+    )
 
 
 def _score_window(trial: Model, train_tasks: list[Task], test_tasks: list[Task], test_rows: list[Features]) -> dict:

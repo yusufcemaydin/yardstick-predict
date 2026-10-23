@@ -1089,12 +1089,17 @@ def show_check(result) -> None:
     ui.note(f"A feature helped when an AI model's test scored more than {check.WORSE_BY:.0%} worse without it.")
     ui.note(
         f"Not enough data: the AI model had too few tasks to test, or under {check.LEAST_SHARE:.0%} of its test "
-        "tasks had the feature."
+        "tasks, or of the earlier tasks the test learned from, had the feature."
     )
+    short = check.sampled_too_little(result)
+    if "llm" in result.alone and len(short) < len(tested):
+        ui.note(
+            "LLM analysis read only some of your tasks, so it was judged on those alone: the test learned from "
+            "and forecast only tasks it read, with it and without it."
+        )
     untested = [model for model in result.models if not result.tasks_tested(model)]
     if untested:
         ui.note(f"Too few tasks to test: {', '.join(untested)}.")
-    short = check.sampled_too_little(result)
     if short:
         ui.note(
             f"LLM analysis read only a sample of your tasks, too few to judge it for {', '.join(short)}. To judge "
