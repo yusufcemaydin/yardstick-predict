@@ -100,6 +100,31 @@ def test_a_refusal_or_a_skipped_task_is_noted_and_tried_at_most_twice(monkeypatc
     assert llm.needs({**found["t0"], "tries": 2}, {**how, "model": "claude-haiku-5-5"}, FIELDS)
 
 
+def test_each_set_of_parts_asked_for_gets_its_own_tries():
+    how, by = {"provider": "codex", "model": llm.DEFAULT_CODEX}, f"codex:{llm.DEFAULT_CODEX}"
+    kind, words = llm.parts(["kind"]), llm.parts(["description"])
+
+    def refused(fields: list[str]) -> dict:
+        return {"by": by, "fields": fields, "failed": True}
+
+    # One predictor asked for the kind and size, another for the description. Each was refused once.
+    once_each = llm.merge(llm.merge(None, refused(kind)), refused(words))
+    assert llm.needs(once_each, how, kind) and llm.needs(once_each, how, words)  # so each gets one more try
+    twice = llm.merge(once_each, refused(words))
+    assert llm.needs(twice, how, kind) and not llm.needs(twice, how, words)
+    # An answer for one set of parts ends its count. The other set's stands.
+    answered = llm.merge(twice, {"kind": "feature", "files": 2.0, "steps": 1.0, "runs_code": False,
+                                 "looks_up": False, "continues": False, "clarity": "clear", "minutes": 3.0,
+                                 "by": by, "fields": kind})  # fmt: skip
+    assert not llm.needs(answered, how, kind) and not llm.needs(answered, how, words) and answered["failed"]
+    # An answer saved before tries were counted for each set of parts has one count, for the parts it names.
+    old = {**refused(kind), "tries": 2}
+    assert not llm.needs(old, how, kind) and llm.needs({**old, "tries": 1}, how, kind)
+    after = llm.merge(old, refused(words))
+    assert not llm.needs(after, how, kind) and llm.needs(after, how, words)
+    assert llm.needs({**refused(kind + words), "tries": 2}, how, kind)  # that set was never asked on its own
+
+
 def test_two_tasks_of_one_conversation_never_share_a_request():
     asks = [llm.Ask(f"t{i}", "x", conversation="long chat") for i in range(5)] + [
         llm.Ask("u", "y", conversation="other")

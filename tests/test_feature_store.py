@@ -564,13 +564,13 @@ def test_a_refusal_counts_its_tries_and_keeps_the_answers_before_it():
     how = {"provider": "codex", "model": "codex-default"}
     refused = {"by": "codex:codex-default", "fields": ["description"], "failed": True}
     first = llm.merge(None, dict(refused))
-    assert first["tries"] == 1 and llm.needs(first, how, ["description"])
+    assert first["unanswered"] == {"description": 1} and llm.needs(first, how, ["description"])
     second = llm.merge(first, dict(refused))
-    assert second["tries"] == 2 and not llm.needs(second, how, ["description"])  # tried MAX_TRIES times
+    assert second["unanswered"] == {"description": 2} and not llm.needs(second, how, ["description"])  # MAX_TRIES
     # A refusal of the description keeps the kind another predictor got, and that one isn't asked again.
     kind = {"kind": "feature", "by": "codex:codex-default", "fields": ["kind"]}
     both = llm.merge(kind, dict(refused))
-    assert both["kind"] == "feature" and both["failed"] and both["tries"] == 1
+    assert both["kind"] == "feature" and both["failed"] and both["unanswered"] == {"description": 1}
     assert not llm.needs(both, how, ["kind"]) and llm.needs(both, how, ["description"])
     # When the kind is asked again and answered, the refusal of the description still stands.
     again = llm.merge(both, {"kind": "bug_fix", "by": "codex:codex-default", "fields": ["kind"]})

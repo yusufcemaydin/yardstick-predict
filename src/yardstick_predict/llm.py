@@ -133,7 +133,8 @@ KIND_FIELDS = ("kind", "files", "steps", "runs_code", "looks_up", "continues", "
 
 
 MAX_TRIES = 2
-"""A task the AI model wouldn't answer this many times is skipped from then on, until another model reads it."""
+"""Fields the AI model wouldn't answer about a task this many times aren't asked for again, until another model
+reads it. Each set of fields asked for, such as the kind and size or the description, counts its own tries."""
 
 
 class LLMError(Exception):
@@ -384,14 +385,52 @@ def analyze(
 
 def needs(labels: dict | None, how: dict, fields: list[str]) -> bool:
     """Whether a task needs analyzing: no answer yet, one from another model or without every field, or a
-    refusal that hasn't been tried MAX_TRIES times. A refusal of other fields than these doesn't count."""
+    refusal of these fields that hasn't been tried MAX_TRIES times. A refusal of other fields doesn't count."""
     if not labels:
         return True
     if labels.get("by") != f"{how['provider']}:{how['model']}" or not set(fields) <= set(labels.get("fields") or []):
         return True
     if all(name in labels for name in fields):
         return False  # every field asked for is answered, as when it refused only another predictor's
-    return bool(labels.get("failed")) and labels.get("tries", 1) < MAX_TRIES
+    return bool(labels.get("failed")) and unanswered(labels).get(_parts(fields), 0) < MAX_TRIES
+
+
+_COUNTS = ("failed", "tries", "unanswered")
+"""What an answer keeps about the times the AI model didn't answer. The rest is what it said, and who said it."""
+
+
+def _parts(fields) -> str:
+    """The name a set of fields is counted under: their names in alphabetical order, joined by commas."""
+    return ",".join(sorted(fields))
+
+
+def unanswered(labels: dict) -> dict[str, int]:
+    """How many times the AI model didn't answer each set of fields asked about a task, by the set's name.
+
+    Each set of fields asked for, such as the kind and size or the description, has its own count, so a refusal
+    of one never uses up the tries of another. An answer saved before they were counted this way has one count,
+    `tries`, for the fields it names.
+    """
+    found = labels.get("unanswered")
+    if isinstance(found, dict):
+        return {
+            name: count
+            for name, count in found.items()
+            if isinstance(name, str) and isinstance(count, int) and not isinstance(count, bool) and count > 0
+        }
+    if not labels.get("failed"):
+        return {}
+    tries = labels.get("tries", 1)
+    tries = tries if isinstance(tries, int) and not isinstance(tries, bool) and tries > 0 else 1
+    return {_parts(labels.get("fields") or []): tries}
+
+
+def _counted(merged: dict, counts: dict[str, int]) -> dict:
+    """An answer with the counts of the sets of fields it still lacks. A set answered since needs none."""
+    left = {name: count for name, count in counts.items() if any(f not in merged for f in name.split(",") if f)}
+    if left:
+        merged.update(failed=True, unanswered=left)
+    return merged
 
 
 def merge(before: dict | None, labels: dict) -> dict:
@@ -400,21 +439,21 @@ def merge(before: dict | None, labels: dict) -> dict:
     Predictors that ask the same AI model share its answers, through the feature store, even when they ask for
     different fields. So one that asks for the description keeps the kind and size another one asked for, and
     neither asks again for what the other did. A refusal keeps the answers given before, and counts as one
-    more try when the one before was a refusal too.
+    more try of the fields it was asked for.
     """
     before = before or {}
-    same = before.get("by") == labels.get("by")
-    if not same:
-        return {**labels, "tries": 1} if labels.get("failed") else labels
+    if before.get("by") != labels.get("by"):
+        before = {}  # another AI model's answer is replaced whole
     kept = {name: value for name, value in before.items() if name in FIELDS}
-    fields = list(dict.fromkeys([*(before.get("fields") or []), *(labels.get("fields") or [])]))
+    asked = labels.get("fields") or []
+    fields = list(dict.fromkeys([*(before.get("fields") or []), *asked]))
+    counts = unanswered(before)
     if labels.get("failed"):
-        tries = before.get("tries", 1) + 1 if before.get("failed") else 1
-        return {**kept, **labels, "fields": fields, "tries": tries}
-    merged = {**kept, **labels, "fields": fields}
-    if before.get("failed") and any(name not in merged for name in fields):
-        merged.update(failed=True, tries=before.get("tries", 1))  # a refusal of the other fields still stands
-    return merged
+        counts[_parts(asked)] = counts.get(_parts(asked), 0) + 1
+    merged = {**kept, **{name: value for name, value in labels.items() if name not in _COUNTS}}
+    if fields or "fields" in labels:
+        merged["fields"] = fields
+    return _counted(merged, counts)
 
 
 def only(labels: dict, fields: list[str]) -> dict:
