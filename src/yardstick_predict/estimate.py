@@ -47,10 +47,11 @@ DISK_PER_TEXT_BYTE = 1.25
 """Bytes the dataset takes for each byte of a task's texts. Measured: 1.04 to 1.34 for prompts and
 conversations of real lengths, as the database leaves room between rows."""
 DISK_PER_VECTOR = 1_450
-"""Bytes the dataset takes for one embedding: 256 numbers of 4 bytes, with the hash of its text. Measured."""
+"""Bytes one embedding takes in the feature store: 256 numbers of 4 bytes, with the hash of its text. Measured:
+1,460 in a Parquet file, about what the dataset took for one before."""
 DISK_PER_ANSWER = 600
-"""Bytes the dataset takes for what LLM analysis said about a task. Measured: about 400, more with a
-description."""
+"""Bytes what LLM analysis said about a task takes. Measured in the dataset: about 400, more with a
+description. The feature store compresses them, so this is an upper bound."""
 
 MEMORY_BASE = 300_000_000
 MEMORY_PER_TASK = 100_000

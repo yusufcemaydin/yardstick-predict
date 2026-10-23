@@ -102,6 +102,8 @@ yardstick-predict create --yes --features conversation,context,skills:named,llm 
 
 A predictor keeps its embedding model for good. To change its features, create a new predictor.
 
+Embeddings and LLM answers cost money or time, so each is made once and kept in a feature store that all your predictors share. A second predictor over the same records pays for nothing it already has. `yardstick-predict features` lists every feature of every predictor: what's stored, and its coverage, the share of the predictor's tasks that have a value for it.
+
 ### LLM analysis
 
 It sends each task's prompt and the end of the conversation before it to the AI model you pick, and never what the task went on to do. Pay for it one of four ways:
@@ -238,6 +240,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each predictor, its features and how it did on its test. `--json` for programs. |
 | `yardstick-predict check [NAME]` | Checks which of a predictor's features help its forecasts: it tests the model with each feature and without it. It's advice only and changes nothing. `--json` for programs. |
+| `yardstick-predict features` | Lists every feature of every predictor: whether the feature store keeps it, with what made it, how big it is and when it changed, or training works it out for free. Shows the share of each predictor's tasks it covers. `--json` for programs. |
 | `yardstick-predict default [NAME]` | Shows or sets your default predictor: the one commands use when they name none. `--predictor NAME` picks another for one command. |
 | `yardstick-predict claude-code install` | Shows forecasts in Claude Code's status line. `--here` for one folder, `remove` to turn it off. |
 
@@ -267,7 +270,7 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 
 ## Privacy and safety
 
-- **Your records stay on your computer.** The dataset and the model live in `~/.yardstick`, or wherever `YARDSTICK_HOME` points. The folder is readable only by you, on Windows too.
+- **Your records stay on your computer.** The dataset, the feature store and the model live in `~/.yardstick`, or wherever `YARDSTICK_HOME` points. The folder is readable only by you, on Windows too.
 - **The cache of embeddings holds no text.** For each text it keeps a one-way hash and the text's vector, in the same private folder.
 - **Only the text you choose is sent,** over an encrypted connection: to Voyage to embed it, and with LLM analysis, each task's prompt and the end of its conversation to the AI model you pick.
 - **Your Voyage key** is read from `VOYAGE_API_KEY` or kept in your computer's password store. yardstick-predict never writes it to a file of its own.
@@ -293,6 +296,7 @@ An account without a payment method gets low limits, such as a few requests and 
 | [NumPy](https://numpy.org) | The numbers. |
 | [tokenizers](https://github.com/huggingface/tokenizers) | Counts tokens exactly with Voyage's own tokenizer, so you see the cost before paying it. |
 | [keyring](https://github.com/jaraco/keyring) | Keeps your Voyage key in your computer's password store. |
+| [PyArrow](https://arrow.apache.org/docs/python/) | Reads and writes the feature store's files, in Parquet, a compact file format for tables. |
 | [scikit-learn](https://scikit-learn.org), on macOS only | Brings the OpenMP library XGBoost needs on a Mac, so there's nothing else to install. |
 | [anthropic](https://github.com/anthropics/anthropic-sdk-python) and [openai](https://github.com/openai/openai-python), only with the `llm` extra | The providers' own libraries, for LLM analysis paid with an API key. Not installed unless you ask for them. |
 

@@ -344,13 +344,13 @@ def _texts(tasks: list[Task], chosen: list[str], limit: int | None, config: dict
 
 
 def _made_from(stored, task_id: str, text: str) -> bool:
-    """Whether the task's stored vector, when it has one, was made from this text."""
+    """Whether the task has a stored vector made from this text."""
     if stored is None or task_id not in stored:
         return False
-    hashes = getattr(stored, "hashes", None)
-    if hashes is None:
+    made_from = getattr(stored, "made_from", None)
+    if made_from is None:
         return True  # a plain set says only which tasks have a vector
-    return hashes.get(task_id) is not None and hashes[task_id] == embeddings.text_hash(text)
+    return made_from(task_id, text)
 
 
 def embedding_items(
@@ -404,25 +404,23 @@ def run_analysis(
     from . import llm
 
     fields = llm.parts(features.options(predictor.config, "llm"))
-    before = predictor.llm_labels()
+    # Every field, so a new answer keeps what the same AI model told another predictor about the task.
+    before = predictor.llm_labels(every_field=True)
     answered = 0
 
     def save(found: dict, done: int) -> None:
         nonlocal answered
-        for task_id, labels in found.items():
-            if not labels.get("failed"):
-                answered += 1
-                continue
-            last = before.get(task_id) or {}
-            again = last.get("failed") and last.get("by") == labels["by"]
-            labels["tries"] = last.get("tries", 1) + 1 if again else 1
-        predictor.put_llm_labels(found)
+        answered += sum(1 for labels in found.values() if not labels.get("failed"))
+        predictor.put_llm_labels({task_id: llm.merge(before.get(task_id), labels) for task_id, labels in found.items()})
         if on_progress:
             on_progress(done, len(asks))
 
     if on_progress and asks:
         on_progress(0, len(asks))  # the bar starts with the step, so it can tell how fast it goes
-    problem = llm.analyze(asks, predictor.config["llm"], fields, on_batch=save).problem
+    try:
+        problem = llm.analyze(asks, predictor.config["llm"], fields, on_batch=save).problem
+    finally:
+        predictor.compact_features(answers=True)  # each batch was saved on its own
     return answered, problem  # counted only once every answer is in
 
 
@@ -444,18 +442,13 @@ def price(items: list[tuple[str, str, str]], model: str, key: str | None) -> Emb
 def plan_embeddings(predictor: Predictor, key: str | None) -> EmbedPlan:
     """What the predictor still has to embed, and what it costs.
 
-    A vector whose task no longer has a text for its feature is deleted here, so training doesn't use it.
+    A task's vector counts only when it was made from the task's text as it is now. One made from another text,
+    or for a text the task no longer has, stays in the feature store unused.
     """
     chosen = chosen_features(predictor)
     have = {name: predictor.embedded(name) for name in chosen if features.is_text(name)}
     tasks, limit = predictor.tasks(), predictor.config.get("max_tasks")
     labels = predictor.llm_labels() if "llm" in chosen else None
-    emptied: dict[str, list[str]] = {}
-    for task_id, name, text in _texts(tasks, chosen, limit, predictor.config, labels):
-        if not text.strip() and task_id in have.get(name, ()):
-            emptied.setdefault(name, []).append(task_id)
-    for name, task_ids in emptied.items():
-        predictor.forget_embeddings(name, task_ids)
     items = embedding_items(tasks, chosen, have, limit, predictor.config, labels)
     return price(items, predictor.embedding_model, key)
 
@@ -497,8 +490,17 @@ def run_embeddings(
     """Give each task in the plan its vectors. Each request's results are saved at once, so a stopped run resumes.
 
     A text goes to Voyage once, however many tasks share it, and not at all when the cache holds it. Each
-    vector is saved with the hash of its text, so a task whose text changes later gets a new one.
+    vector is saved with the hash of its text, so a task whose text changes later gets a new one. The feature
+    store keeps them for every predictor.
     """
+    try:
+        _embed_plan(predictor, plan, key, on_progress, on_wait)
+    finally:
+        predictor.compact_features(fields=[name for _, name, _ in plan.items])  # each request was saved on its own
+
+
+def _embed_plan(predictor: Predictor, plan: EmbedPlan, key: str, on_progress, on_wait) -> None:
+    """Embed the plan's texts and save each task's vectors, as run_embeddings says."""
     model = predictor.embedding_model
     users: dict[str, list[tuple[str, str]]] = {}
     for task_id, name, text in plan.items:
@@ -570,8 +572,8 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
     chosen = chosen_features(predictor)
     conversation = features.built_in("conversation", chosen)
     names = [name for name in chosen if features.is_text(name)]
-    stored = {name: predictor.get_embeddings(name) for name in names}
-    hashes = {name: predictor.embedded(name).hashes for name in names}
+    ids = {task.id for task in tasks}
+    stored = {name: predictor.get_embeddings(name, ids) for name in names}
     labels = predictor.llm_labels() if "llm" in chosen else None
     table = benchmark_table(predictor)
     past = Past(predictor.tasks() if known is None else known)
@@ -580,8 +582,9 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
         info = task_info(task, predictor.config, labels)
         vectors = {}
         for name in names:
-            vector, made_from = stored[name].get(task.id), hashes[name].get(task.id)
-            if vector is not None and made_from == embeddings.text_hash(features.text(name, info)):
+            made = stored[name].get(task.id)  # by the hash of each text the task had
+            vector = made.get(embeddings.text_hash(features.text(name, info))) if made else None
+            if vector is not None:
                 vectors[name] = vector
         before = past.numbers(
             task.project,
@@ -606,6 +609,128 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
             )
         )
     return rows
+
+
+@dataclass
+class FeatureUse:
+    """One of a predictor's features, as the features command lists it."""
+
+    name: str
+    """The feature's name, such as context, or prompt, task, similar or history for the ones always used."""
+    title: str
+    says: str
+    stored: list = field(default_factory=list)
+    """The feature store's features it reads, as feature_store.Feature. Empty when training works it out."""
+    covered: int | None = None
+    """How many of the tasks the predictor learns from have a value for it. None when it wasn't counted."""
+    known: bool = True
+    """False for a feature the settings list that this version doesn't know. It's skipped."""
+
+
+_CONVERSATION_NUMBERS = frozenset(
+    {
+        "session_tasks_before",
+        "previous_seconds",
+        "previous_tokens",
+        "previous_direct",
+        "previous_usd",
+        "minutes_since_previous",
+        "conversation_tokens",
+        "conversation_tokens_program",
+    }
+)
+"""The numbers history.Past adds with the conversation feature."""
+
+
+def _owner(number: str, own: set[str]) -> str:
+    """The feature a number belongs to: one of yours in `own`, or the built-in feature that adds it."""
+    if number in own:
+        return number
+    if number in features.shape("") or number == "effort_level":
+        return "task"
+    if number.startswith("project_"):
+        return "history"
+    if number in _CONVERSATION_NUMBERS:
+        return "conversation"
+    if number in benchmarks.FACTS:
+        return "benchmarks"
+    if number in features.time_numbers(features.TREND_FROM, ["trend", "clock"]):
+        return "time"
+    if number.startswith("llm_"):
+        return "llm"
+    return number
+
+
+def feature_uses(predictor: Predictor, count: bool = True) -> tuple[int | None, list[FeatureUse]]:
+    """Each of the predictor's features, and how many of the tasks it learns from have a value for it.
+
+    It counts from the rows training reads, so it says what training sees: a text feature has a value when
+    the task has its vector, made from its text as it is now, and a number feature when any of its numbers
+    does. The first value is how many tasks it learns from. Without `count`, nothing is counted, and both are
+    None. Load the predictor's plugins first, or its own features count as unknown.
+    """
+    chosen = chosen_features(predictor)
+    menu = {group.key: group for group in features.MENU}
+    total = rows = None
+    if count:
+        tasks = learnable(predictor.tasks(), predictor.config.get("max_tasks"))
+        rows = feature_rows(predictor, tasks)
+        total = len(rows)
+    own = {name for name in features.available() if name not in features.BUILT_IN and not features.is_text(name)}
+    owners: dict[str, str] = {}
+    with_vectors: dict[str, int] = {}
+    with_numbers: dict[str, int] = {}
+    any_vector = read = 0
+    for row in rows or []:
+        for name in row.vectors:
+            with_vectors[name] = with_vectors.get(name, 0) + 1
+        found = set()
+        for number in row.numbers:
+            if number not in owners:
+                owners[number] = _owner(number, own)
+            found.add(owners[number])
+        for owner in found:
+            with_numbers[owner] = with_numbers.get(owner, 0) + 1
+        any_vector += bool(row.vectors)
+        # LLM analysis has a value for a task when its answer gave a number or its description has a vector.
+        read += "llm" in found or "llm" in row.vectors
+
+    def counted(found: int) -> int | None:
+        return found if count else None
+
+    prompt_says = "what the prompt means, read by Voyage"
+    task_says = "how the prompt is laid out, the AI model, the effort level and who started it"
+    uses = [
+        FeatureUse("prompt", "Prompt", prompt_says, [predictor.embedding_feature("prompt")]),
+        FeatureUse("task", "Task", task_says),
+        FeatureUse("similar", menu["similar"].title, menu["similar"].says),
+        FeatureUse("history", menu["history"].title, menu["history"].says),
+    ]
+    uses[0].covered = counted(with_vectors.get("prompt", 0))
+    uses[1].covered = counted(with_numbers.get("task", 0))
+    uses[2].covered = counted(any_vector)
+    uses[3].covered = counted(with_numbers.get("history", 0))
+    for name in chosen:
+        if name == features.REQUIRED:
+            continue
+        group = menu.get(name)
+        title, says = (group.title, group.says) if group else (name, features.available()[name])
+        use = FeatureUse(name, title, says)
+        if name == "llm":
+            answers = predictor.llm_feature()
+            use.stored = [answers] if answers is not None else []
+            if "description" in features.options(predictor.config, "llm"):
+                use.stored.append(predictor.embedding_feature("llm"))
+            use.covered = counted(read)
+        elif features.is_text(name):
+            use.stored = [predictor.embedding_feature(name)]
+            use.covered = counted(with_vectors.get(name, 0))
+        else:
+            use.covered = counted(with_numbers.get(name, 0))
+        uses.append(use)
+    for name in unknown_features(predictor):
+        uses.append(FeatureUse(name, name, "a feature this version doesn't know, so it's skipped", known=False))
+    return total, uses
 
 
 def features_without_values(predictor: Predictor, rows: list) -> list[str]:

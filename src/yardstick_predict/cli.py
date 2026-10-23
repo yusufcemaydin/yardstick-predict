@@ -6,6 +6,7 @@
     yardstick-predict predict      Forecast a task: a table in a terminal, JSON for programs.
     yardstick-predict status       Show your predictors and how well they forecast.
     yardstick-predict check        Check which of a predictor's features help its forecasts. Changes nothing.
+    yardstick-predict features     List each predictor's features: what's stored, and how many tasks each covers.
     yardstick-predict default      Show or choose the predictor used when a command names none.
 
 It only asks questions when a person runs it in a terminal. When a program runs it, it never asks.
@@ -30,6 +31,7 @@ from .store import (
     BrokenPredictor,
     Predictor,
     default_name,
+    llm_answers,
     name_problem,
     predictor_folder,
     predictor_names,
@@ -776,10 +778,13 @@ def cmd_create(args) -> int:
         )
     picked = choose_features(can_ask, args)
     chosen, settings = picked.features, picked.config()
+    # What the same AI model said about these tasks for another predictor is in the feature store already,
+    # descriptions included, so they're embedded with the rest.
+    answers = llm_answers(settings)
     # The check is advice for a person setting up step by step. A program, or a person who named the features
     # with flags, gets the features they named.
     checking = can_ask and args.features is None and built_in and offer_check(chosen, found.new_tasks, args.max_tasks)
-    items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks, config=settings)
+    items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks, config=settings, labels=answers)
 
     model_name = args.embedding or (None if can_ask else "voyage-4")
     plans: dict = {}
@@ -832,7 +837,7 @@ def cmd_create(args) -> int:
         plan = newest_only(plan, found.new_tasks, limit, model_name, key)
         for text in cost_lines(plan.cost, model_name, plan.tasks):
             ui.line(text)
-    asks = analysis_plan(found.new_tasks, settings, {}, limit)
+    asks = analysis_plan(found.new_tasks, settings, answers, limit)
     if checking:
         from . import check
 
@@ -1254,10 +1259,12 @@ def _refresh(args, predictor: Predictor) -> int:
     from .pipeline import embedding_items, price
 
     chosen = chosen_features(predictor)
-    have = {name: predictor.embedded(name) for name in chosen if features.is_text(name)}
     # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished.
     updated = {task.id: task for task in found.updated_tasks}
     everything = [updated.get(task.id, task) for task in predictor.tasks()] + found.new_tasks
+    # The new tasks count too: the feature store may have their vectors already, from another predictor.
+    ids = {task.id for task in everything}
+    have = {name: predictor.embedded(name, ids) for name in chosen if features.is_text(name)}
     labels = predictor.llm_labels() if "llm" in chosen else None
     pending = embedding_items(everything, chosen, have, predictor.config.get("max_tasks"), predictor.config, labels)
     plan = price(pending, model_name, key)
@@ -1305,9 +1312,8 @@ def _refresh(args, predictor: Predictor) -> int:
     # The plan priced above is what's left to embed now that the tasks are saved, so its counts are reused.
     if plan.items and not embed_with_progress(predictor, plan, key):
         return 1
-    # Planning again deletes the vectors of tasks whose text became empty, so training doesn't use them. It
-    # runs every time. Each text the plan above needed has its vector now, so this one pays only for the
-    # descriptions LLM analysis just wrote.
+    # Each text the plan above needed has its vector now, so this one pays only for the descriptions LLM
+    # analysis just wrote.
     rest = plan_embeddings(predictor, key)
     if rest.items:
         key = key or get_key(model_name, can_ask)
@@ -1654,6 +1660,205 @@ def cmd_check(args) -> int:
     return 0
 
 
+def stored_title(feature) -> str:
+    """What a stored feature is and what made it, in plain words: prompt embeddings by voyage-4, 256 numbers."""
+    from . import llm
+
+    made = feature.made_with
+    if feature.kind == "embedding":
+        field = {"llm": "LLM description"}.get(made.get("field"), made.get("field"))
+        return f"{field} embeddings by {made.get('model')}, {made.get('dimensions')} numbers"
+    provider = llm.PROVIDERS.get(made.get("provider"))
+    how = f", through your {provider.title}" if provider else f", through {made.get('provider')}"
+    return f"LLM answers by {llm.title(str(made.get('model')))}{how}"
+
+
+def stored_facts(found) -> list[str]:
+    """How many tasks a stored feature covers, its size on disk and when it last changed, or what's wrong with it."""
+    if found.missing:
+        return ["missing: its folder is gone, and the next refresh that uses it makes it again"]
+    tasks = f"{found.tasks:,} task{'s' if found.tasks != 1 else ''}"
+    facts = [tasks, ui.size(found.size), f"changed {ago(found.changed_at)}"]
+    if found.unreadable:
+        files = len(found.unreadable)
+        facts.append(f"skips {files} file{'s' if files != 1 else ''} it can't read: {', '.join(found.unreadable)}")
+    return facts
+
+
+def feature_uses_of(predictor: Predictor, count: bool):
+    """The predictor's features and how many of its tasks each covers, as pipeline.feature_uses gives them.
+
+    A predictor an older version made has its vectors and LLM answers moved to the feature store first, once. A
+    refresh or setup does that too, so while one runs, this waits for none: it raises BlockingIOError.
+    """
+    from .pipeline import feature_uses
+
+    if predictor.config.get("feature_store"):
+        return feature_uses(predictor, count)
+    with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
+        if not mine:
+            raise BlockingIOError
+        predictor.move_in()
+        return feature_uses(predictor, count)
+
+
+def cmd_features(args) -> int:
+    """Every feature of every predictor, in plain words: what it is, whether the feature store keeps it or
+    training works it out, and how many of the tasks the predictor learns from have a value for it.
+
+    It reads and changes nothing, except that a predictor an older version made has its vectors and LLM
+    answers moved into the feature store, once, as a refresh would.
+    """
+    from . import feature_store, model_types
+    from .pipeline import load_plugins
+
+    names = predictor_names()
+    if args.predictor and args.predictor not in names:
+        message = f"There's no predictor called {args.predictor!r}."
+        if args.json:
+            print(json.dumps({"version": 1, "error": {"code": "unknown_predictor", "message": message}}, indent=2))
+            return 1
+        raise SystemExit(message)
+    without = getattr(args, "xgboost", None)  # coverage needs XGBoost. Without it, the rest is still listed.
+    notes: list[str] = []
+    if args.json:
+        feature_store.tell = notes.append  # a program reads them in the answer, not between its lines
+    default = default_name()
+    predictors = []
+    try:
+        for name in [args.predictor] if args.predictor else names:
+            entry: dict = {"name": name, "default": name == default}
+            predictors.append(entry)
+            try:
+                predictor = Predictor(name)
+                load_plugins(predictor)
+                entry["tasks"], entry["uses"] = feature_uses_of(predictor, count=not without)
+            except BrokenPredictor as error:
+                entry["error"] = str(error)
+            except model_types.PluginError as error:
+                entry["error"] = f"{error} Its features can't be listed until the plugin loads."
+            except BlockingIOError:
+                entry["error"] = f"{name} is being set up or refreshed by another command. Try again when it's done."
+        found = feature_store.stored()
+    finally:
+        feature_store.tell = None
+    used_by: dict[str, list[str]] = {}
+    for entry in predictors:
+        for use in entry.get("uses", []):
+            for feature in use.stored:
+                used_by.setdefault(feature.id, []).append(entry["name"])
+    code = 1 if any("error" in entry for entry in predictors) else 0  # a predictor it shows can't be used
+    if args.json:
+        listing = {
+            "version": 1,
+            "folder": str(feature_store.folder()),
+            "stored": [stored_json(stored, used_by) for stored in found],
+            "predictors": [predictor_json(entry) for entry in predictors],
+            "notes": notes,
+        }
+        print(json.dumps(listing, indent=2))
+        return code
+    show_stored(found, used_by)
+    for entry in predictors:
+        show_uses(entry, {stored.feature.id: stored for stored in found})
+    if not predictors:
+        ui.out()
+        ui.out("There's no predictor yet. Run yardstick-predict to create one.")
+    if without:
+        ui.out()
+        ui.note("Coverage isn't shown: it's counted from what training reads, and training needs XGBoost.")
+        ui.note(without)
+    return code
+
+
+def stored_json(found, used_by: dict[str, list[str]]) -> dict:
+    """A stored feature, as features --json shows it."""
+    return {
+        "id": found.feature.id,
+        "kind": found.feature.kind,
+        "made_with": found.feature.made_with,
+        "missing": found.missing,
+        "tasks": found.tasks,
+        "rows": found.rows,
+        "bytes": found.size,
+        "changed_at": found.changed_at,
+        "unreadable": found.unreadable,
+        "used_by": used_by.get(found.feature.id, []),
+    }
+
+
+def predictor_json(entry: dict) -> dict:
+    """A predictor's features, as features --json shows them. `tasks` is how many it learns from."""
+    if "error" in entry:
+        return {"name": entry["name"], "default": entry["default"], "error": entry["error"]}
+    total = entry["tasks"]
+    found = []
+    for use in entry["uses"]:
+        kept = "stored" if use.stored else "training" if use.known else "unknown"
+        coverage = round(use.covered / total, 4) if use.covered is not None and total else None
+        found.append(
+            {
+                "name": use.name,
+                "title": use.title,
+                "says": use.says,
+                "kept": kept,
+                "stored": [feature.id for feature in use.stored],
+                "tasks_with_value": use.covered,
+                "coverage": coverage,
+            }
+        )
+    return {"name": entry["name"], "default": entry["default"], "tasks": total, "features": found}
+
+
+def show_stored(found: list, used_by: dict[str, list[str]]) -> None:
+    """The feature store's features, each with what made it, what it covers and which predictors use it."""
+    from . import feature_store
+
+    ui.out(ui.bold("Stored features"))
+    ui.line(f"Embeddings and LLM answers are made once and kept in {feature_store.folder()}.")
+    ui.line("Every predictor that uses one shares it. Features that cost nothing are worked out at training.")
+    if not found:
+        ui.out()
+        ui.line("Nothing is stored yet.")
+        return
+    ui.out()
+    rows = []
+    for stored in found:
+        users = used_by.get(stored.feature.id)
+        who = f"used by {', '.join(users)}" if users else "used by no predictor"
+        rows.append((stored_title(stored.feature), ui.dim(ui.join([*stored_facts(stored), who]))))
+    ui.table(rows)
+
+
+def show_uses(entry: dict, stored: dict) -> None:
+    """One predictor's features, each with its coverage and whether it's stored or worked out at training."""
+    ui.out()
+    ui.out(ui.join([ui.bold(entry["name"])] + ([ui.dim("default predictor")] if entry["default"] else [])))
+    if "error" in entry:
+        ui.line(entry["error"])
+        return
+    total = entry["tasks"]
+    if total:
+        ui.line(f"It learns from {total:,} tasks. Coverage is the share of them with a value for each feature.")
+    elif total == 0:
+        ui.line("It has no tasks to learn from yet.")
+    ui.out()
+    rows = []
+    for use in entry["uses"]:
+        if not use.known:
+            rows.append((use.title, "", ui.dim("this version doesn't know it, so it's skipped")))
+            continue
+        share = f"{use.covered / total:.0%}" if use.covered is not None and total else ui.dim("-")
+        if use.stored:
+            made = " and ".join(stored_title(feature) for feature in use.stored)
+            missing = [feature for feature in use.stored if feature.id not in stored]
+            how = f"stored: {made}" + (", not made yet" if missing and len(missing) == len(use.stored) else "")
+        else:
+            how = "worked out at training, free"
+        rows.append((use.title, share, ui.dim(how)))
+    ui.table(rows, align="lrl")
+
+
 def cmd_claude_code(args) -> int:
     """Add the status line and its hooks to Claude Code's settings, or take them out again."""
     from . import claude_code
@@ -1902,6 +2107,11 @@ def make_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("name", nargs="?", help="The predictor to check. Default: your default predictor.")
     check.add_argument("--json", action="store_true", help="Print JSON.")
+    listing = commands.add_parser(
+        "features", help="List each predictor's features: what's stored, and how many of its tasks each covers."
+    )
+    listing.add_argument("--predictor", help="Show only this predictor.")
+    listing.add_argument("--json", action="store_true", help="Print JSON.")
 
     default = commands.add_parser("default", help="Show or choose the predictor used when a command names none.")
     default.add_argument("name", nargs="?", help="The predictor to make the default.")
@@ -1935,9 +2145,12 @@ def main(argv: list[str] | None = None) -> int:
         "predict": cmd_predict,
         "status": cmd_status,
         "check": cmd_check,
+        "features": cmd_features,
         "default": cmd_default,
         "claude-code": cmd_claude_code,
     }
+    if args.command == "features":
+        args.xgboost = xgboost_problem(argv)  # its coverage needs XGBoost, and lists everything else without it
     problem = xgboost_problem(argv) if needs_xgboost(args) else None
     if problem:
         forecasting = args.command == "predict"

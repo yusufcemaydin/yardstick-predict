@@ -505,6 +505,15 @@ def _predictor(features: list[str]) -> Predictor:
     return predictor
 
 
+def saved_by_an_older_version(predictor: Predictor) -> None:
+    """Make the predictor's settings as a version before the feature store saved them: without the mark that its
+    vectors and LLM answers moved there."""
+    path = predictor.dir / "predictor.json"
+    config = json.loads(path.read_text())
+    config.pop("feature_store", None)
+    path.write_text(json.dumps(config, indent=2) + "\n")
+
+
 def test_the_cost_counts_each_text_once_and_none_that_the_cache_holds(voyage):
     tasks = [_task(n, prompt) for n, prompt in enumerate(["continue", "fix it", "continue", "continue"])]
     items = pipeline.embedding_items(tasks, ["prompt"])
@@ -533,9 +542,10 @@ def test_every_task_gets_its_vector_though_each_text_is_sent_once(voyage):
     pipeline.run_embeddings(predictor, plan, KEY)
     assert sorted(text for r in voyage.requests for text in r["input"]) == ["continue", "fix it", "we talked"]
     assert predictor.embedded("prompt") == {"t0", "t1", "t2", "t3"} and len(predictor.embedded("context")) == 4
-    vectors = predictor.get_embeddings("prompt")
-    assert np.array_equal(vectors["t0"], vectors["t3"])
-    assert predictor.embedded("prompt").hashes["t1"] == embeddings.text_hash("fix it")
+    vectors = predictor.get_embeddings("prompt")  # by task, then by the hash of the text
+    continued = embeddings.text_hash("continue")
+    assert np.array_equal(vectors["t0"][continued], vectors["t3"][continued])
+    assert predictor.embedded("prompt").hashes["t1"] == {embeddings.text_hash("fix it")}
 
 
 def test_a_prompt_a_forecast_embedded_costs_nothing_at_the_next_refresh(voyage, monkeypatch):
@@ -572,18 +582,26 @@ def test_a_task_whose_text_changed_gets_a_new_vector_and_the_others_keep_theirs(
     assert [(task_id, name) for task_id, name, _ in plan.items] == [("t1", "context")]
     pipeline.run_embeddings(predictor, plan, KEY)
     expected = np.array(fake_vector("we talked, then planned the page"), dtype=np.float32)
-    assert np.allclose(predictor.get_embeddings("context")["t1"], expected)
+    found = predictor.get_embeddings("context")["t1"]
+    assert np.allclose(found[embeddings.text_hash("we talked, then planned the page")], expected)
+    assert len(found) == 2  # the vector of the text it had before stays in the feature store, unused
     assert pipeline.plan_embeddings(predictor, KEY).items == []
+    row = pipeline.feature_rows(predictor, [task for task in predictor.tasks() if task.id == "t1"])[0]
+    assert np.allclose(row.vectors["context"], expected)
 
 
-def test_a_vector_whose_task_no_longer_has_a_text_for_it_is_deleted(voyage):
+def test_a_vector_whose_task_no_longer_has_a_text_for_it_is_no_longer_used(voyage):
     predictor = _predictor(["prompt", "context"])
     tasks = [_task(n, f"task {n}", context="we talked") for n in range(2)]
     predictor.add_tasks(tasks)
     pipeline.run_embeddings(predictor, pipeline.plan_embeddings(predictor, KEY), KEY)
     predictor.replace_tasks([replace(tasks[0], context="")])
-    pipeline.plan_embeddings(predictor, KEY)
-    assert predictor.embedded("context") == {"t1"} and predictor.embedded("prompt") == {"t0", "t1"}
+    assert pipeline.plan_embeddings(predictor, KEY).items == []
+    # The vector stays in the feature store, for any predictor whose task still has that text. Training here
+    # finds it made from another text, so it leaves it out.
+    assert predictor.embedded("context") == {"t0", "t1"}
+    rows = pipeline.feature_rows(predictor, predictor.tasks())
+    assert [sorted(row.vectors) for row in rows] == [["prompt"], ["context", "prompt"]]
 
 
 def test_vectors_saved_before_hashes_were_kept_are_trusted_for_the_prompt_and_context(voyage, tmp_path, monkeypatch):
@@ -593,9 +611,9 @@ def test_vectors_saved_before_hashes_were_kept_are_trusted_for_the_prompt_and_co
     tasks = [_task(n, f"task {n}", context="we talked", skills="tdd") for n in range(3)]
     predictor.add_tasks(tasks)
     predictor.close()
-    # A dataset an older version made: its vectors have no hash of their text.
+    # A dataset an older version made: its vectors are in it, with no hash of their text.
+    saved_by_an_older_version(predictor)
     db = sqlite3.connect(predictor.dir / "dataset.sqlite")
-    db.execute("DROP TABLE embeddings")
     db.execute("CREATE TABLE embeddings (task_id, field, vector, PRIMARY KEY (task_id, field))")
     vector = np.zeros(256, dtype=np.float32).tobytes()
     db.executemany(
@@ -605,7 +623,7 @@ def test_vectors_saved_before_hashes_were_kept_are_trusted_for_the_prompt_and_co
     db.commit()
     db.close()
     upgraded = Predictor("default")
-    assert upgraded.embedded("prompt").hashes["t0"] == embeddings.text_hash("task 0")
+    assert upgraded.embedded("prompt").hashes["t0"] == {embeddings.text_hash("task 0")}
     plan = pipeline.plan_embeddings(upgraded, KEY)
     # The skills feature changes what it embeds, so its old vectors are made again. Its text is shared, so once.
     assert sorted({name for _, name, _ in plan.items}) == ["skills"] and plan.texts == ["tdd"]

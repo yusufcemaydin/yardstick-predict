@@ -363,12 +363,42 @@ def analyze(
 
 def needs(labels: dict | None, how: dict, fields: list[str]) -> bool:
     """Whether a task needs analyzing: no answer yet, one from another model or without every field, or a
-    refusal that hasn't been tried MAX_TRIES times."""
+    refusal that hasn't been tried MAX_TRIES times. A refusal of other fields than these doesn't count."""
     if not labels:
         return True
     if labels.get("by") != f"{how['provider']}:{how['model']}" or not set(fields) <= set(labels.get("fields") or []):
         return True
+    if all(name in labels for name in fields):
+        return False  # every field asked for is answered, as when it refused only another predictor's
     return bool(labels.get("failed")) and labels.get("tries", 1) < MAX_TRIES
+
+
+def merge(before: dict | None, labels: dict) -> dict:
+    """A task's new answer, with what the same AI model said about the task before, in fields not asked again.
+
+    Predictors that ask the same AI model share its answers, through the feature store, even when they ask for
+    different fields. So one that asks for the description keeps the kind and size another one asked for, and
+    neither asks again for what the other did. A refusal keeps the answers given before, and counts as one
+    more try when the one before was a refusal too.
+    """
+    before = before or {}
+    same = before.get("by") == labels.get("by")
+    if not same:
+        return {**labels, "tries": 1} if labels.get("failed") else labels
+    kept = {name: value for name, value in before.items() if name in FIELDS}
+    fields = list(dict.fromkeys([*(before.get("fields") or []), *(labels.get("fields") or [])]))
+    if labels.get("failed"):
+        tries = before.get("tries", 1) + 1 if before.get("failed") else 1
+        return {**kept, **labels, "fields": fields, "tries": tries}
+    merged = {**kept, **labels, "fields": fields}
+    if before.get("failed") and any(name not in merged for name in fields):
+        merged.update(failed=True, tries=before.get("tries", 1))  # a refusal of the other fields still stands
+    return merged
+
+
+def only(labels: dict, fields: list[str]) -> dict:
+    """What the AI model said about a task, with only the fields a predictor asks for, and who said it."""
+    return {name: value for name, value in labels.items() if name in fields or name not in FIELDS}
 
 
 def numbers(labels: dict) -> dict[str, float]:

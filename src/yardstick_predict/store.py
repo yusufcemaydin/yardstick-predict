@@ -1,7 +1,8 @@
 """Where each predictor keeps its settings, its dataset and its model.
 
 Everything lives in one folder per predictor, under ~/.yardstick/predictors by default.
-Set YARDSTICK_HOME to keep it somewhere else.
+Set YARDSTICK_HOME to keep it somewhere else. The features that cost money or time to make, the embeddings
+and LLM answers, live in the feature store next to it, shared by every predictor: see feature_store.py.
 """
 
 from __future__ import annotations
@@ -208,6 +209,8 @@ class Predictor:
         if (folder / "predictor.json").exists():
             raise ValueError(f"A predictor called {name!r} already exists.")
         folder.mkdir(parents=True, exist_ok=True)
+        from . import feature_store
+
         config = {
             "format": FORMAT,
             "name": name,
@@ -215,6 +218,7 @@ class Predictor:
             "embedding": embedding,
             "archives": archives,
             "refreshed_at": None,
+            "feature_store": feature_store.FORMAT,  # its vectors and LLM answers are kept there from the start
             **settings,
         }
         files.write_text(folder / "predictor.json", json.dumps(config, indent=2) + "\n")
@@ -237,6 +241,14 @@ class Predictor:
         return self.config["embedding"]["model"]
 
     @property
+    def embedding_dimensions(self) -> int:
+        """How many numbers each of the predictor's vectors has."""
+        from .embeddings import DIMENSIONS
+
+        size = self.config["embedding"].get("dimensions")
+        return size if isinstance(size, int) and not isinstance(size, bool) and size > 0 else DIMENSIONS
+
+    @property
     def model_dir(self) -> Path:
         return self.dir / "model"
 
@@ -252,9 +264,8 @@ class Predictor:
             for column in _COLUMNS:
                 if column not in existing:
                     self._db.execute(f"ALTER TABLE tasks ADD COLUMN {column} DEFAULT ''")
-            self._embeddings_table()
+            self._old_vectors_table()
             self._db.execute("CREATE TABLE IF NOT EXISTS files (path PRIMARY KEY, size, mtime)")
-            self._db.execute("CREATE TABLE IF NOT EXISTS llm_labels (task_id PRIMARY KEY, labels)")
         return self._db
 
     def close(self) -> None:
@@ -333,22 +344,108 @@ class Predictor:
         self.db.executemany("INSERT OR REPLACE INTO files VALUES (?, ?, ?)", [(p, s, m) for p, (s, m) in files.items()])
         self.db.commit()
 
-    # Embeddings -------------------------------------------------------------------------------------
+    def remove_tasks(self, task_ids) -> None:
+        """Delete tasks, as when a re-read of their records no longer finds them.
 
-    def _embeddings_table(self) -> None:
-        """Make the embeddings table, or bring one made by an older version up to date.
+        Their vectors and LLM answers stay in the feature store, where another predictor may use them. This one
+        no longer has the tasks, so it never reads them.
+        """
+        task_ids = list(task_ids)
+        if not task_ids:
+            return
+        self.db.executemany("DELETE FROM tasks WHERE id = ?", [(t,) for t in task_ids])
+        self.db.commit()
 
-        Each vector is kept with the hash of the text it was made from, so a vector whose text changed is
-        made again. An older version kept no hash. For the prompt and the context, whose texts are built as
-        that version built them, the hash of each task's text as stored now is filled in, in one step and
-        before this process replaces any task. Another feature's old vectors have no hash, so they are made
-        again once. A text the cache of vectors holds costs nothing.
+    # Embeddings and LLM answers, in the feature store ------------------------------------------------------
+
+    def embedding_feature(self, field: str):
+        """Where the feature store keeps the vectors of one text feature: by the predictor's Voyage model and size."""
+        from . import feature_store
+
+        return feature_store.embedding(field, self.embedding_model, self.embedding_dimensions)
+
+    def llm_feature(self):
+        """Where the feature store keeps what the predictor's LLM analysis says. None without LLM analysis."""
+        return _llm_feature(self.config)
+
+    def embedded(self, field: str, task_ids=None) -> Embedded:
+        """The tasks that have a vector for a feature, with the hashes of the texts their vectors were made from.
+
+        Only the predictor's own tasks count, or the tasks `task_ids` names, such as ones a refresh is about to
+        add. The feature store may hold vectors of other tasks, for other predictors.
+        """
+        from . import feature_store
+
+        self.move_in()
+        wanted = self.task_ids() if task_ids is None else set(task_ids)
+        return Embedded(feature_store.vector_hashes(self.embedding_feature(field), wanted))
+
+    def get_embeddings(self, field: str, task_ids=None) -> dict[str, dict[str, np.ndarray]]:
+        """The vectors of a feature, by task and then by the hash of the text each was made from.
+
+        A task can have several: one for each text it had, such as the skills texts of two predictors with
+        different skills options. Only the predictor's own tasks count, or the tasks `task_ids` names.
+        """
+        from . import feature_store
+
+        self.move_in()
+        wanted = self.task_ids() if task_ids is None else set(task_ids)
+        return feature_store.vectors(self.embedding_feature(field), wanted)
+
+    def put_embeddings(self, field: str, vectors: dict[str, np.ndarray], hashes: dict[str, str] | None = None) -> None:
+        """Save each task's vector for a feature, with the hash of the text it was made from, in the feature
+        store. A vector saved without its text's hash is never used: no text matches it."""
+        from . import feature_store
+
+        self.move_in()
+        hashes = hashes or {}
+        rows = [(task_id, hashes.get(task_id) or "", vector) for task_id, vector in vectors.items()]
+        feature_store.save_vectors(self.embedding_feature(field), rows)
+
+    def llm_labels(self, every_field: bool = False) -> dict[str, dict]:
+        """What LLM analysis said about each task, by the predictor's LLM provider and model.
+
+        Each answer keeps only the fields the predictor's options ask for, unless `every_field`: another
+        predictor may have asked the same AI model for more about the same task.
+        """
+        self.move_in()
+        return llm_answers(self.config, every_field)
+
+    def put_llm_labels(self, labels: dict[str, dict]) -> None:
+        """Save what LLM analysis said about tasks, in the feature store."""
+        from . import feature_store
+
+        feature = self.llm_feature()
+        if feature is None or not labels:
+            return
+        self.move_in()
+        feature_store.save_answers(feature, labels)
+
+    def compact_features(self, fields=(), answers: bool = False) -> None:
+        """Merge the rows saved one batch at a time into one file for each feature, as at the end of a run that
+        embedded or analyzed tasks. `fields` names the text features, and `answers` adds the LLM answers."""
+        from . import feature_store
+
+        found = [self.embedding_feature(field) for field in dict.fromkeys(fields)]
+        if answers and self.llm_feature() is not None:
+            found.append(self.llm_feature())
+        for feature in found:
+            feature_store.compact(feature)
+
+    # Moving an older version's vectors and LLM answers into the feature store ---------------------------------
+
+    def _old_vectors_table(self) -> None:
+        """Bring the vectors an older version kept in the dataset up to date, before they move to the feature store.
+
+        Each vector is kept with the hash of the text it was made from, so a vector whose text changed is made
+        again. An older version kept no hash. For the prompt and the context, whose texts are built as that
+        version built them, the hash of each task's text as stored now is filled in, in one step and before
+        this process replaces any task. Another feature's old vectors have no hash, so they are made again once.
+        A text the cache of vectors holds costs nothing. A dataset this version made has no such table.
         """
         db = self._db
-        db.execute(
-            "CREATE TABLE IF NOT EXISTS embeddings (task_id, field, vector, text_hash, PRIMARY KEY (task_id, field))"
-        )
-        if "text_hash" in {row[1] for row in db.execute("PRAGMA table_info(embeddings)")}:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(embeddings)")}
+        if not columns or "text_hash" in columns:
             return
         hashes = self._old_text_hashes()
         db.execute("SAVEPOINT text_hashes")  # the new column and its hashes arrive together, or not at all
@@ -377,73 +474,123 @@ class Predictor:
             return []  # then the old vectors keep no hash, and are made again
         return rows
 
-    def embedded(self, field: str) -> Embedded:
-        """The tasks that have a vector for a feature, with the hash of the text each was made from."""
-        rows = self.db.execute("SELECT task_id, text_hash FROM embeddings WHERE field = ?", (field,))
-        return Embedded(dict(rows))
+    def _old_rows(self, query: str) -> list[tuple]:
+        """The rows of a table an older version kept in the dataset. Empty when the dataset never had the table."""
+        # A dataset this version made never has the embeddings and llm_labels tables. One an older version made
+        # keeps them, unread once their rows moved to the feature store. A later release can drop them.
+        try:
+            return list(self.db.execute(query))
+        except sqlite3.OperationalError:
+            return []
 
-    def put_embeddings(self, field: str, vectors: dict[str, np.ndarray], hashes: dict[str, str] | None = None) -> None:
-        """Save each task's vector for a feature, with the hash of the text it was made from."""
-        hashes = hashes or {}
-        self.db.executemany(
-            "INSERT OR REPLACE INTO embeddings (task_id, field, vector, text_hash) VALUES (?, ?, ?, ?)",
-            [
-                (task_id, field, np.asarray(v, dtype=np.float32).tobytes(), hashes.get(task_id))
-                for task_id, v in vectors.items()
-            ],
-        )
-        self.db.commit()
+    def move_in(self) -> None:
+        """Copy the vectors and LLM answers an older version kept in the dataset into the feature store, once.
 
-    def forget_embeddings(self, field: str, task_ids) -> None:
-        """Delete these tasks' vectors for a feature, as when a task no longer has a text for it."""
-        self.db.executemany("DELETE FROM embeddings WHERE task_id = ? AND field = ?", [(t, field) for t in task_ids])
-        self.db.commit()
-
-    def forget_task_vectors(self, task_ids) -> None:
-        """Delete every vector of these tasks, as when the tasks themselves are deleted."""
-        self.db.executemany("DELETE FROM embeddings WHERE task_id = ?", [(t,) for t in task_ids])
-        self.db.commit()
-
-    def remove_tasks(self, task_ids) -> None:
-        """Delete tasks and their vectors, as when a re-read of their records no longer finds them."""
-        task_ids = list(task_ids)
-        if not task_ids:
+        It runs the first time this version reads or saves them, and never for a forecast. Only rows the store
+        lacks are copied, and rows are keyed, so a move stopped halfway runs again safely, and two predictors
+        can move in at once: the store's lock keeps their saves apart. A vector without its text's hash was
+        never used, so it stays behind. The old tables stay in the dataset, unread: a later release can drop
+        them. Then the settings say the move is done.
+        """
+        if self.config.get("feature_store"):
             return
-        self.db.executemany("DELETE FROM tasks WHERE id = ?", [(t,) for t in task_ids])
-        self.db.commit()
-        self.forget_task_vectors(task_ids)
+        from . import feature_store
 
-    def get_embeddings(self, field: str) -> dict[str, np.ndarray]:
-        rows = self.db.execute("SELECT task_id, vector FROM embeddings WHERE field = ?", (field,))
-        return {task_id: np.frombuffer(blob, dtype=np.float32) for task_id, blob in rows}
-
-    # What LLM analysis said about each task -------------------------------------------------------------
-
-    def llm_labels(self) -> dict[str, dict]:
-        found = {}
-        for task_id, text in self.db.execute("SELECT task_id, labels FROM llm_labels"):
+        size = self.embedding_dimensions
+        vectors: dict[str, list] = {}
+        old = self._old_rows("SELECT task_id, field, vector, text_hash FROM embeddings")
+        for task_id, field, blob, text_hash in old:
+            if isinstance(field, str) and field and text_hash and isinstance(blob, bytes) and len(blob) == 4 * size:
+                vectors.setdefault(field, []).append((str(task_id), str(text_hash), np.frombuffer(blob, np.float32)))
+        moved = []
+        for field, rows in vectors.items():
+            feature = self.embedding_feature(field)
+            feature_store.save_vectors(feature, rows, only_new=True)
+            moved.append(feature)
+        # Each answer goes with the AI model that gave it. One that doesn't say goes with the predictor's own.
+        answers: dict[str, tuple] = {}
+        own = self.llm_feature()
+        for task_id, text in self._old_rows("SELECT task_id, labels FROM llm_labels"):
             try:
                 labels = json.loads(text)
             except (TypeError, ValueError):
                 continue
-            if isinstance(labels, dict):
-                found[task_id] = labels
-        return found
+            if not isinstance(labels, dict):
+                continue
+            by = labels.get("by")
+            provider, _, model = by.partition(":") if isinstance(by, str) else ("", "", "")
+            feature = feature_store.answers(provider, model) if provider and model else own
+            if feature is not None:
+                answers.setdefault(feature.id, (feature, {}))[1][str(task_id)] = labels
+        for feature, found in answers.values():
+            feature_store.save_answers(feature, found, only_new=True)
+            moved.append(feature)
+        for feature in moved:
+            feature_store.compact(feature)
+        self.config["feature_store"] = feature_store.FORMAT
+        self._mark_moved_in()
 
-    def put_llm_labels(self, labels: dict[str, dict]) -> None:
-        self.db.executemany(
-            "INSERT OR REPLACE INTO llm_labels VALUES (?, ?)", [(i, json.dumps(found)) for i, found in labels.items()]
-        )
-        self.db.commit()
+    def _mark_moved_in(self) -> None:
+        """Say in the saved settings that the vectors and LLM answers moved to the feature store.
+
+        The settings are read again first, so a change another command saved meanwhile stays. Settings a newer
+        version saved stay as they are: this version never saves them.
+        """
+        from . import feature_store
+
+        path = self.dir / "predictor.json"
+        try:
+            saved = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return
+        if not isinstance(saved, dict) or _newer(saved):
+            return
+        saved["feature_store"] = feature_store.FORMAT
+        files.write_text(path, json.dumps(saved, indent=2) + "\n")
+
+
+def _llm_feature(config: dict):
+    """Where the feature store keeps the answers of the LLM provider and model a predictor's settings name."""
+    from . import feature_store
+
+    how = config.get("llm")
+    if not isinstance(how, dict) or not isinstance(how.get("provider"), str) or not isinstance(how.get("model"), str):
+        return None
+    return feature_store.answers(how["provider"], how["model"])
+
+
+def llm_answers(config: dict, every_field: bool = False) -> dict[str, dict]:
+    """What LLM analysis said about each task, as the feature store keeps it, by the LLM provider and model a
+    predictor's settings name. Empty for settings without LLM analysis.
+
+    Each answer keeps only the fields the settings' options ask for, unless `every_field`. So a predictor that
+    didn't ask for the description never reads one that another predictor asked the same AI model for.
+    """
+    from . import feature_store, features, llm
+
+    feature = _llm_feature(config)
+    if feature is None:
+        return {}
+    found = feature_store.answers_of(feature)
+    if every_field:
+        return found
+    fields = llm.parts(features.options(config, "llm"))
+    return {task_id: llm.only(labels, fields) for task_id, labels in found.items()}
 
 
 class Embedded(set):
-    """The tasks that have a vector for one feature. `hashes` says which text each task's vector was made from.
+    """The tasks that have a vector for one feature. `hashes` holds, for each, the hashes of the texts its vectors
+    were made from: one for each text it had, as when two predictors build its skills text differently.
 
-    It is a set of task ids, so code that only asks whether a task has a vector works as before. A vector
-    an older version saved has no hash: its value is None.
+    It is a set of task ids, so code that only asks whether a task has a vector works as before.
     """
 
-    def __init__(self, hashes: dict[str, str | None]) -> None:
+    def __init__(self, hashes: dict[str, set[str]]) -> None:
         super().__init__(hashes)
         self.hashes = hashes
+
+    def made_from(self, task_id: str, text: str) -> bool:
+        """Whether the task has a vector made from this text."""
+        from .embeddings import text_hash
+
+        return text_hash(text) in self.hashes.get(task_id, ())

@@ -20,6 +20,9 @@ Training uses exactly the features you choose. It trains one model, not one for 
 - Releases are published on PyPI, the Python package index. From this release on, `uv tool install yardstick-predict` installs it, and `uv tool upgrade yardstick-predict` updates it. If you installed an earlier version from GitHub, run that install command once to switch. If you use the `llm` extra, install `'yardstick-predict[llm]'` instead.
 - A feature check, which finds out which of your features really help your forecasts. It tests the model with every feature, then without each one in turn. For each feature and AI model, it says whether the feature helped, didn't help, or whether there wasn't enough data to tell. Setup offers it when you pick features beyond the three that are always on. Then the Features screen comes back with the features that helped turned on, for you to keep or change. LLM analysis reads only a sample of your newest tasks before the check, and the rest only if you keep it and agree to the cost. The estimate before setup counts the check's time too.
 - `yardstick-predict check NAME` runs the feature check on a predictor you already have. It's advice only: it embeds nothing, asks no AI model and changes nothing about the predictor. `--json` answers programs. The Features screen shows each feature's latest verdicts.
+- A feature store, shared by all your predictors, keeps the features that cost money or time to make: embeddings, and what LLM analysis said about each task. Each is made once. A second predictor over the same records pays Voyage for nothing it already has, and LLM analysis asks the same AI model nothing it answered before, even when the two predictors ask for different parts of the answer. The store is in the `features` folder of the yardstick folder.
+- `yardstick-predict features` lists every feature of every predictor. A stored one shows what made it, how many tasks have it, its size on disk and when it last changed. The others are worked out at training, for free. Each shows its coverage: the share of the tasks the predictor learns from that have a value for it. `--json` gives the same to programs.
+- Files deleted or broken by hand in the feature store never break a command. A missing index is rebuilt from the files, and a file that can't be read is skipped, each with a note. The next refresh makes again what's missing: an embedding comes back from the cache for free, and an LLM answer is asked for again, with the cost shown first.
 
 ### Changed
 
@@ -30,6 +33,9 @@ Training uses exactly the features you choose. It trains one model, not one for 
 - On the Features screen, the end of the conversation is now called Context, after its `context` flag, and History is called Project history.
 - Once this version saves a predictor's settings, an older version can't use that predictor: it doesn't know the `conversation` feature.
 - A feature this version doesn't know, such as one a newer version added or one from a plugin that no longer adds it, is skipped with a one-line note. Before, forecasts and refreshes stopped with an error. The model still forecasts, without that feature's values. A feature you name with `--features` must still exist.
+- A predictor's embeddings and LLM answers move from its dataset into the feature store, once, the first time this version refreshes it or lists its features. The old copies stay in the dataset, unread. Training reads exactly what it read before. Forecasts never read the store, so they're as quick as before.
+- An embedding is no longer deleted when its task's text changes or the task is taken out. It stays in the store, for any predictor whose task still has that text. Training uses a task's embedding only when it was made from the task's text as it is now, as before.
+- yardstick-predict needs one more library, PyArrow, to read and write the feature store's files.
 
 ## [0.3.0] - 2026-10-22
 

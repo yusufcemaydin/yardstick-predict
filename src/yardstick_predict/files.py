@@ -17,6 +17,15 @@ from pathlib import Path
 
 def write_text(path: Path | str, text: str) -> None:
     """Replace a file's text in one step. A file that exists keeps its permissions. A new one is yours alone."""
+    _write(path, text, "w")
+
+
+def write_bytes(path: Path | str, data: bytes) -> None:
+    """Replace a file's contents in one step, as write_text does for text."""
+    _write(path, data, "wb")
+
+
+def _write(path: Path | str, contents: str | bytes, how: str) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -25,8 +34,8 @@ def write_text(path: Path | str, text: str) -> None:
         mode = 0o600
     handle, partial = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".partial", dir=path.parent)
     try:
-        with os.fdopen(handle, "w", encoding="utf-8") as file:
-            file.write(text)
+        with os.fdopen(handle, how, encoding="utf-8" if how == "w" else None) as file:
+            file.write(contents)
             file.flush()
             os.fsync(file.fileno())
         if os.name == "posix":

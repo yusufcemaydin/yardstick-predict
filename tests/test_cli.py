@@ -1122,7 +1122,7 @@ def test_a_rate_limit_shows_its_reason_with_the_advice():
     assert cli.explain(embeddings.VoyageError(429, "")) == plain
 
 
-def test_a_refresh_deletes_the_vector_of_a_text_that_became_empty_and_pays_nothing(capsys, few, ready, quick):
+def test_a_refresh_stops_using_the_vector_of_a_text_that_became_empty_and_pays_nothing(capsys, few, ready, quick):
     assert main(["create", "--yes", *quick, "--archive", f"claude-code={few}"]) == 0
     predictor = Predictor("default")
     emptied = sorted(predictor.embedded("context"))[0]
@@ -1133,8 +1133,12 @@ def test_a_refresh_deletes_the_vector_of_a_text_that_became_empty_and_pays_nothi
     capsys.readouterr()
     sent = len(ready.requests)
     assert main(["refresh", "--yes"]) == 0
-    assert emptied not in Predictor("default").embedded("context")
     assert len(ready.requests) == sent and " uses " not in capsys.readouterr().out  # no cost line, nothing paid
+    # Its vector stays in the feature store, for a predictor whose task still has that text. Training here
+    # finds it made from another text, so it leaves it out.
+    predictor = Predictor("default")
+    task = next(task for task in predictor.tasks() if task.id == emptied)
+    assert "context" not in pipeline.feature_rows(predictor, [task])[0].vectors
 
 
 def test_a_refresh_takes_out_tasks_their_records_no_longer_hold(capsys, tmp_path, ready, quick):
