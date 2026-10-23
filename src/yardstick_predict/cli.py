@@ -1861,14 +1861,18 @@ def say_default_after(name: str, before: str | None, after: str | None) -> None:
 def cmd_check(args) -> int:
     """Check which of a predictor's features help its forecasts, and show the verdicts. It's advice only: it reads
     the predictor's tasks and features, embeds nothing, asks no AI model and keeps none of the models it tests.
-    It remembers the verdicts, so the Features screen can show them."""
-    from . import check, model_types
+    It remembers the verdicts, so the Features screen can show them. With --json, the feature store's notes, such
+    as about a file it can't read, come in the answer, so nothing is printed before it."""
+    from . import check, feature_store, model_types
     from .model import NotEnoughData
     from .pipeline import load_plugins, settings
 
+    notes: list[str] = []
+
     def stop(code: str, message: str) -> int:
         if args.json:
-            print(json.dumps({"version": 1, "error": {"code": code, "message": message}}, indent=2))
+            answer = {"version": 1, "error": {"code": code, "message": message}}
+            print(json.dumps({**answer, "notes": notes} if notes else answer, indent=2))
             return 1
         raise SystemExit(message)
 
@@ -1913,10 +1917,16 @@ def cmd_check(args) -> int:
             return stop("busy", f"{name} is being set up or refreshed by another command. Try again when it's done.")
         if gone(predictor):
             return stop("unknown_predictor", f"There's no predictor called {name!r} anymore: it was deleted.")
-        given = check.inputs(predictor)
+        told = feature_store.tell
+        if args.json:
+            feature_store.tell = notes.append  # a program reads them in the answer, not before it
+        try:
+            given = check.inputs(predictor)
+        finally:
+            feature_store.tell = told
     if not given.features:
         if args.json:
-            print(json.dumps(check.as_json(check.judge({"": {}}, {}, []), name), indent=2))
+            print(json.dumps({**check.as_json(check.judge({"": {}}, {}, []), name), "notes": notes}, indent=2))
             return 0
         ui.line("There's nothing to check: it uses only the features that are always on.")
         return 0
@@ -1928,7 +1938,7 @@ def cmd_check(args) -> int:
         return stop("not_enough_data", f"The check can't run. {error}")
     check.remember(result, name)
     if args.json:
-        print(json.dumps(check.as_json(result, name), indent=2))
+        print(json.dumps({**check.as_json(result, name), "notes": notes}, indent=2))
         return 0
     say_checked(result)
     show_check(result)

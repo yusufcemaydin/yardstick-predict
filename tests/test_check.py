@@ -14,7 +14,19 @@ from conftest import KEY
 from test_cli import fake_analysis, quick_train
 from test_model import ONE_WINDOW, kinds, rows_for, synthetic
 
-from yardstick_predict import benchmarks, check, cli, estimate, features, llm, locks, menu, model_types, store
+from yardstick_predict import (
+    benchmarks,
+    check,
+    cli,
+    estimate,
+    feature_store,
+    features,
+    llm,
+    locks,
+    menu,
+    model_types,
+    store,
+)
 from yardstick_predict import model as M
 from yardstick_predict.cli import main
 from yardstick_predict.history import Past
@@ -535,6 +547,17 @@ def test_check_answers_a_program_in_json(capsys, monkeypatch, made):
     assert found["verdicts"]["time"]["claude-opus-5-5"] == {"verdict": "helped", "worse_without": 0.05, "share": 1.0}
     assert found["verdicts"]["context"]["claude-sonnet-5-5"]["verdict"] == "no_help"
     assert isinstance(found["checked_at"], float)
+
+
+def test_check_answers_a_program_in_json_even_when_a_stored_file_cant_be_read(capsys, monkeypatch, made):
+    monkeypatch.setattr(M, "compare", stand_in_check({"time"}))
+    broken = feature_store.folder() / made.embedding_feature("context").id / "data.parquet"
+    broken.write_bytes(b"not a parquet file")
+    assert main(["check", "--json"]) == 0
+    found = json.loads(capsys.readouterr().out)  # the note about the file is in the answer, not before it
+    assert [note for note in found["notes"] if f"Skipped {broken}" in note] and found["features"] == ["context", "time"]
+    assert main(["check", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["notes"] == []  # each note is said once
 
 
 def test_check_errors_reach_a_program_as_json(capsys):
