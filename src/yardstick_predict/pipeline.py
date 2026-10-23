@@ -404,14 +404,13 @@ def run_analysis(
     from . import llm
 
     fields = llm.parts(features.options(predictor.config, "llm"))
-    # Every field, so a new answer keeps what the same AI model told another predictor about the task.
-    before = predictor.llm_labels(every_field=True)
     answered = 0
 
     def save(found: dict, done: int) -> None:
         nonlocal answered
         answered += sum(1 for labels in found.values() if not labels.get("failed"))
-        predictor.put_llm_labels({task_id: llm.merge(before.get(task_id), labels) for task_id, labels in found.items()})
+        # Merged with what the same AI model told any predictor about the task, as the store holds it then.
+        predictor.put_llm_labels(found)
         if on_progress:
             on_progress(done, len(asks))
 

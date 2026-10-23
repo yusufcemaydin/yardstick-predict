@@ -287,6 +287,25 @@ def test_two_writers_at_once_lose_nothing():
     assert len(feature_store.answers_of(ANSWERS)) == 90
 
 
+def test_writers_merging_answers_about_the_same_tasks_at_once_keep_every_part():
+    by = "codex:codex-default"
+    parts = {"kind": {"kind": "feature"}, "description": {"description": "Add the page."}}
+
+    def write(name: str) -> None:
+        for n in range(25):  # enough saves for compactions to run in between
+            answer = {**parts[name], "by": by, "fields": [name]}
+            feature_store.save_answers(ANSWERS, {f"t{n}": answer}, merge=llm.merge)
+
+    threads = [threading.Thread(target=write, args=(name,)) for name in parts]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    found = feature_store.answers_of(ANSWERS)
+    assert len(found) == 25
+    assert all(found[task]["kind"] == "feature" and found[task]["description"] == "Add the page." for task in found)
+
+
 def test_writers_in_separate_processes_lose_nothing():
     script = textwrap.dedent(
         """
@@ -544,6 +563,43 @@ def test_predictors_asking_one_ai_model_for_other_fields_share_its_answers(capsy
     assert not any("llm" in row.vectors for row in kind_rows) and all("llm" in row.vectors for row in words_rows)
     assert any("llm_kind_feature" in row.numbers for row in kind_rows)
     assert not any(name.startswith("llm_") for row in words_rows for name in row.numbers)
+
+
+def asking(name: str, option: str) -> Predictor:
+    """A predictor over three tasks whose LLM analysis asks Codex's own model for one of its options."""
+    predictor = Predictor.create(
+        name,
+        [],
+        {"model": "voyage-4", "dimensions": 256},
+        features=["prompt", "llm"],
+        options={"llm": [option]},
+        llm={"provider": "codex", "model": "codex-default"},
+    )
+    predictor.add_tasks([_task(n, f"task {n}") for n in range(3)])
+    return predictor
+
+
+def test_two_predictors_analyzing_the_same_tasks_at_once_keep_each_others_answers(monkeypatch):
+    kinds, words = asking("kinds", "kind"), asking("words", "description")
+    said = {"kind": "feature", "files": 2.0, "steps": 2.0, "runs_code": True, "looks_up": False, "continues": False,
+            "clarity": "clear", "minutes": 5.0, "description": "Add the page."}  # fmt: skip
+
+    def analyze(asks, how, fields, on_batch=None):
+        if "kind" in fields:
+            # The other predictor reads the same tasks and saves its answers while this one waits for the AI model.
+            pipeline.run_analysis(words, pipeline.analysis_plan(words.tasks(), words.config, words.llm_labels()))
+        found = {ask.id: {**{name: said[name] for name in fields}, "by": "codex:codex-default", "fields": fields}
+                 for ask in asks}  # fmt: skip
+        on_batch(found, len(asks))
+        return llm.Analysis(found)
+
+    monkeypatch.setattr(llm, "analyze", analyze)
+    assert pipeline.run_analysis(kinds, pipeline.analysis_plan(kinds.tasks(), kinds.config, kinds.llm_labels()))[0] == 3
+    stored = feature_store.answers_of(ANSWERS)
+    assert sorted(stored) == ["t0", "t1", "t2"]
+    assert all(stored[task]["kind"] == "feature" and stored[task]["description"] == "Add the page." for task in stored)
+    assert all(set(stored[task]["fields"]) == set(llm.parts(["kind", "description"])) for task in stored)
+    assert pipeline.analysis_plan(words.tasks(), words.config, words.llm_labels()) == []  # nothing to ask again
 
 
 def test_an_answer_keeps_what_the_same_ai_model_said_before_in_other_fields():

@@ -343,24 +343,35 @@ def save_vectors(feature: Feature, rows: list[tuple[str, str, object]], only_new
     return len(kept)
 
 
-def save_answers(feature: Feature, found: dict[str, dict], only_new: bool = False) -> int:
-    """Save what an AI model said about tasks, by task id. Returns how many were saved.
+def save_answers(
+    feature: Feature,
+    found: dict[str, dict],
+    only_new: bool = False,
+    merge: Callable[[dict | None, dict], dict] | None = None,
+) -> int:
+    """Save what an AI model said about tasks, by task id. Returns how many tasks' answers changed.
 
-    An answer replaces one saved before for the same task. With `only_new`, it's saved only when the store has
-    no answer for the task yet, or only a note that the AI model didn't answer, as when an older version's
-    answers move in.
+    An answer replaces one saved before for the same task. With `merge`, it's merged with the one the store holds
+    for the task: `merge` gets that one, or None, and the new one, and gives what to keep. The store's answers are
+    read, merged and saved while its lock is held, so two predictors that save answers about the same tasks at
+    once, such as one that asked for the kind of task and one that asked for a description, keep each other's.
+    With `only_new`, an answer is saved only when the store has none for the task yet, or only a note that the AI
+    model didn't answer. An answer the same as the stored one isn't saved again.
     """
     rows = {str(task_id): labels for task_id, labels in found.items() if isinstance(labels, dict)}
     if not rows:
         return 0
     with _held():
+        have = answers_of(feature, set(rows))
         if only_new:
-            have = answers_of(feature, set(rows))
             rows = {
                 task_id: labels
                 for task_id, labels in rows.items()
                 if task_id not in have or (have[task_id].get("failed") and not labels.get("failed"))
             }
+        if merge is not None:
+            rows = {task_id: merge(have.get(task_id), labels) for task_id, labels in rows.items()}
+        rows = {task_id: labels for task_id, labels in rows.items() if labels != have.get(task_id)}
         if not rows:
             return 0
         table = pa.table(

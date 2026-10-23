@@ -565,14 +565,16 @@ class Predictor:
         return llm_answers(self.config, every_field)
 
     def put_llm_labels(self, labels: dict[str, dict]) -> None:
-        """Save what LLM analysis said about tasks, in the feature store."""
-        from . import feature_store
+        """Save what LLM analysis said about tasks, in the feature store, each merged with what the same AI model
+        said about the task before, as llm.merge does. The store merges with what it holds as it saves, so
+        another predictor's answers saved meanwhile stay."""
+        from . import feature_store, llm
 
         feature = self.llm_feature()
         if feature is None or not labels:
             return
         self.move_in()
-        feature_store.save_answers(feature, labels)
+        feature_store.save_answers(feature, labels, merge=llm.merge)
 
     def compact_features(self, fields=(), answers: bool = False) -> None:
         """Merge the rows saved one batch at a time into one file for each feature, as at the end of a run that
