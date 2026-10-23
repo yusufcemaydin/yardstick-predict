@@ -37,6 +37,11 @@ Training uses exactly the features you choose. It trains one model, not one for 
 - An embedding is no longer deleted when its task's text changes or the task is taken out. It stays in the store, for any predictor whose task still has that text. Training uses a task's embedding only when it was made from the task's text as it is now, as before.
 - yardstick-predict needs one more library, PyArrow, to read and write the feature store's files.
 
+### Fixed
+
+- LLM analysis through a Claude or ChatGPT subscription that isn't signed in, or whose sign-in expired, says once how to sign in: run `claude` in a terminal and type `/login`, or run `codex login`. It sends no more requests, training goes on without LLM analysis, and the next refresh asks about every task again. Before, every request was sent and failed, and the error showed Claude Code's raw JSON.
+- Any other error from Claude Code shows its own words, not its raw JSON.
+
 ## [0.3.0] - 2026-10-22
 
 Forecasts learn from much more of what's known before a task starts, and records are read more accurately again. Your predictors catch up by themselves: the next refresh reads all your records again, once, embeds only the texts that changed, and trains the model again. Until then, a predictor made with an older version gives no forecasts. Training tests more versions of the model, so it takes longer: about a minute for a few thousand tasks, and two or three with LLM analysis.

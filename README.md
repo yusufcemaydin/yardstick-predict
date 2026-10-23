@@ -115,7 +115,7 @@ It sends each task's prompt and the end of the conversation before it to the AI 
 | `claude` | Your Claude subscription, through the Claude Code command. No extra bill, but it counts toward your plan's usage limits. | Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 |
 | `codex` | Your ChatGPT subscription, through the Codex command. No extra bill, but it counts toward your plan's usage limits. | Codex's own model |
 
-With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price; with Claude Haiku 5.5, about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session, so these calls never show up in the records your predictor learns from. An API key needs the providers' own libraries:
+With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price; with Claude Haiku 5.5, about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session, so these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in, stop asking, and train without LLM analysis for now. The next refresh asks again. An API key needs the providers' own libraries:
 
 ```bash
 uv tool install --reinstall 'yardstick-predict[llm] @ git+https://github.com/yusufcemaydin/yardstick-predict@v0.3.0'

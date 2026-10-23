@@ -140,12 +140,28 @@ class LLMError(Exception):
     """LLM analysis couldn't run, with the reason in plain words.
 
     `lasting` marks a problem with the tasks themselves, such as a refusal, which trying again may not fix.
-    The others, such as no key or no network, go away once fixed.
+    `stops` marks one that every request would meet the same way, such as a command that isn't signed in: no more
+    requests are tried, and the tasks are left for a later run, as for the others. The others, such as no key or
+    no network, go away once fixed.
     """
 
-    def __init__(self, message: str, lasting: bool = False) -> None:
+    def __init__(self, message: str, lasting: bool = False, stops: bool = False) -> None:
         super().__init__(message)
         self.lasting = lasting
+        self.stops = stops
+
+
+SIGNED_OUT = {
+    "Claude Code": (
+        "Claude Code isn't signed in here. Run claude in a terminal and type /login, then try again. If you "
+        "started this from inside a Claude Code session, run it from your own terminal instead."
+    ),
+    "Codex": "Codex isn't signed in. Run codex login in a terminal, then try again.",
+}
+"""What to do when the command a subscription runs through isn't signed in, as when its sign-in expired."""
+SIGN_IN_WORDS = ("authenticat", "oauth", "log in", "login", "not logged in", "expired")
+"""Words in a Claude Code or Codex error that mean it isn't signed in, such as "Failed to authenticate: OAuth
+session expired"."""
 
 
 @dataclass(frozen=True)
@@ -298,9 +314,11 @@ def analyze(
     """Ask the AI model about each task, with every answer saying who gave it.
 
     A task it refused, skipped or answered with something that makes no sense gets a note saying so. A request
-    that failed for another reason, such as no network, leaves its tasks out, so a later run tries again.
-    `on_batch` gets each request's answers as they arrive, and how many tasks are done, so a long run can save
-    as it goes. Only a few requests run or wait at a time, so stopping, such as with Ctrl+C, stops it quickly.
+    that failed for another reason, such as no network, leaves its tasks out, so a later run tries again. One that
+    every request would meet, such as Claude Code or Codex not signed in, stops it: the requests already sent
+    finish, and no more are sent. `on_batch` gets each request's answers as they arrive, and how many tasks are
+    done, so a long run can save as it goes. Only a few requests run or wait at a time, so stopping, such as with
+    Ctrl+C, stops it quickly.
     """
     provider = PROVIDERS[how["provider"]]
     call = {"anthropic": _anthropic, "openai": _openai, "claude": _claude_code, "codex": _codex}[provider.key]
@@ -310,6 +328,7 @@ def analyze(
     waiting = iter(batches(asks, provider.batch))
     answers: dict[str, dict] = {}
     problems: list[str] = []
+    stopped: list[str] = []  # why it sends no more requests, once a problem every request would meet came
     done = 0
 
     def run(batch: list[Ask]) -> tuple[dict[str, dict], str | None]:
@@ -334,7 +353,7 @@ def analyze(
     running: dict = {}
 
     def start_next() -> None:
-        batch = next(waiting, None)
+        batch = None if stopped else next(waiting, None)
         if batch is not None:
             running[pool.submit(run, batch)] = batch
 
@@ -349,6 +368,8 @@ def analyze(
                     found, problem = future.result()
                 except LLMError as error:
                     found, problem = {}, str(error)
+                    if error.stops:
+                        stopped.append(problem)
                 if problem:
                     problems.append(problem)
                 done += len(batch)
@@ -358,7 +379,7 @@ def analyze(
                 start_next()
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
-    return Analysis(answers, problems[0] if problems else None)
+    return Analysis(answers, (stopped or problems or [None])[0])
 
 
 def needs(labels: dict | None, how: dict, fields: list[str]) -> bool:
@@ -539,7 +560,10 @@ def _claude_code(model: str, system: str, text: str, shape: dict) -> dict:
     except ValueError:
         raise LLMError("Claude Code's answer wasn't JSON.") from None
     if isinstance(result, dict) and result.get("is_error"):
-        raise LLMError(f"Claude Code said: {str(result.get('result') or 'an error')[:200]}")
+        said = str(result.get("result") or "an error")
+        if _signed_out([said]):
+            raise LLMError(SIGNED_OUT["Claude Code"], stops=True)
+        raise LLMError(f"Claude Code said: {' '.join(said.split())[:200]}")
     structured = result.get("structured_output") if isinstance(result, dict) else None
     if isinstance(structured, dict):
         return structured
@@ -583,9 +607,46 @@ def _run(arguments: list[str], text: str, name: str, cwd: str | None = None) -> 
     except OSError as error:
         raise LLMError(f"Couldn't start {name}: {error}") from None
     if done.returncode != 0:
-        detail = (done.stderr or done.stdout or "").strip().splitlines()
-        raise LLMError(f"{name} stopped with an error: {detail[-1][:200] if detail else 'no details'}")
+        raise _failed(name, done.stdout or "", done.stderr or "", text)
     return done.stdout
+
+
+def _failed(name: str, stdout: str, stderr: str, sent: str) -> LLMError:
+    """Why Claude Code or Codex stopped with an error, in plain words.
+
+    Claude Code prints a JSON object even then, and its "result" says why. Otherwise the reason is in the last
+    line the command printed. A line of the text it was sent, which a command may print back, never counts. When
+    the command isn't signed in, as when its sign-in expired, the error says how to sign in and stops LLM
+    analysis: every other request would fail the same way.
+    """
+    said = _result(stdout)
+    lines = [line.strip() for line in f"{said or stdout}\n{stderr}".splitlines()]
+    theirs = [line for line in lines if line and line not in sent]
+    if _signed_out(theirs):
+        return LLMError(SIGNED_OUT[name], stops=True)
+    if said:
+        detail = " ".join(said.split())
+    else:
+        detail = (theirs or [line for line in lines if line] or [""])[-1]
+    return LLMError(f"{name} stopped with an error: {detail[:200] or 'no details'}")
+
+
+def _result(stdout: str) -> str:
+    """What the JSON object Claude Code prints says, as its "result". Empty when it printed none."""
+    for text in (stdout, *reversed(stdout.strip().splitlines())):
+        try:
+            found = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(found, dict) and isinstance(found.get("result"), str):
+            return found["result"]
+    return ""
+
+
+def _signed_out(lines: list[str]) -> bool:
+    """Whether a command's error says it isn't signed in."""
+    said = "\n".join(lines).lower()
+    return any(word in said for word in SIGN_IN_WORDS)
 
 
 def _json(text: str) -> dict:

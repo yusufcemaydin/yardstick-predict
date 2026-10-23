@@ -255,3 +255,84 @@ def test_yardstick_hooks_stay_out_of_the_commands_llm_analysis_starts(monkeypatc
     monkeypatch.setenv(llm.INSIDE, "1")
     monkeypatch.setattr(claude_code.sys, "stdin", None)  # reading the event would fail
     assert claude_code.hook() == 0
+
+
+# Claude Code or Codex not signed in -----------------------------------------------------------------------
+
+
+def commands_that_fail(monkeypatch, code: int, stdout: str = "", stderr: str = "") -> list[str]:
+    """Stand-ins for the claude and codex commands that each stop with this error. Returns what each was sent."""
+    sent: list[str] = []
+
+    def run(arguments, **kwargs):
+        sent.append(kwargs["input"])
+        return subprocess.CompletedProcess(arguments, code, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr(llm.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(llm.subprocess, "run", run)
+    return sent
+
+
+EXPIRED = {
+    "type": "result",
+    "subtype": "success",
+    "is_error": True,
+    "result": "Failed to authenticate: OAuth session expired and could not be refreshed",
+}
+"""What claude -p --output-format json prints when its sign-in expired, as it exits with an error."""
+
+
+def test_claude_code_not_signed_in_says_how_to_sign_in_and_tries_no_more(monkeypatch):
+    how = {"provider": "claude", "model": "claude-opus-5-5"}
+    asks = [llm.Ask(f"t{i}", "Add a login page") for i in range(100)]  # five requests' worth
+    for code in (1, 0):  # it exits with an error, or says so in its answer
+        sent = commands_that_fail(monkeypatch, code, stdout=json.dumps(EXPIRED))
+        found = llm.analyze(asks, how, FIELDS)
+        assert found.problem == llm.SIGNED_OUT["Claude Code"]
+        assert found.problem.startswith("Claude Code isn't signed in here. Run claude in a terminal and type /login")
+        # Only the requests sent at once ran. No task is noted as refused, so a later run asks about each again.
+        assert len(sent) == llm.PROVIDERS["claude"].parallel and found.answers == {}
+
+
+def test_codex_not_signed_in_says_how_to_sign_in_and_tries_no_more(monkeypatch):
+    sent = commands_that_fail(monkeypatch, 1, stderr="Error: you are not logged in. Run codex login first.")
+    asks = [llm.Ask(f"t{i}", "x") for i in range(100)]
+    found = llm.analyze(asks, {"provider": "codex", "model": llm.DEFAULT_CODEX}, FIELDS)
+    assert found.problem == "Codex isn't signed in. Run codex login in a terminal, then try again."
+    assert len(sent) == llm.PROVIDERS["codex"].parallel and found.answers == {}
+
+
+def test_another_error_shows_its_reason_not_raw_json_and_the_rest_are_tried(monkeypatch):
+    overloaded = {"type": "result", "is_error": True, "result": "API Error: 529\nThe service is overloaded."}
+    sent = commands_that_fail(monkeypatch, 1, stdout=json.dumps(overloaded))
+    asks = [llm.Ask(f"t{i}", "Add a login page") for i in range(100)]
+    found = llm.analyze(asks, {"provider": "claude", "model": "claude-opus-5-5"}, FIELDS)
+    assert found.problem == "Claude Code stopped with an error: API Error: 529 The service is overloaded."
+    assert len(sent) == 5  # each request was tried: the problem may pass
+
+    # Words a command prints back from the prompts it was sent never count as its own.
+    echo = "Task t0\nPrompt:\n<<<\nAdd a login page\n>>>\nERROR: stream disconnected before completion"
+    sent = commands_that_fail(monkeypatch, 1, stderr=echo)
+    found = llm.analyze(asks, {"provider": "codex", "model": llm.DEFAULT_CODEX}, FIELDS)
+    assert found.problem == "Codex stopped with an error: ERROR: stream disconnected before completion"
+    assert len(sent) == 5
+
+
+def test_setup_says_once_that_claude_code_isnt_signed_in_and_trains_without_it(capsys, monkeypatch):
+    from yardstick_predict import cli
+    from yardstick_predict.store import Predictor
+
+    predictor = Predictor.create(
+        "default",
+        [],
+        {"model": "voyage-4", "dimensions": 256},
+        features=["prompt", "llm"],
+        llm={"provider": "claude", "model": "claude-opus-5-5"},
+    )
+    commands_that_fail(monkeypatch, 1, stdout=json.dumps(EXPIRED))
+    monkeypatch.setenv("NO_COLOR", "1")
+    cli.analyze_with_progress(predictor, [llm.Ask(f"t{i}", "x") for i in range(60)])
+    out = capsys.readouterr().out
+    assert out.count("Claude Code isn't signed in here.") == 1
+    assert "Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again." in out
+    assert predictor.llm_labels() == {}  # nothing noted, so the next refresh asks about every task
