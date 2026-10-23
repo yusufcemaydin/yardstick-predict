@@ -254,7 +254,13 @@ def load(predictor: Predictor):
     """The predictor's trained model, with its problems as RequestErrors in the answer format."""
     from .model import NewerFormat, OutdatedModel
 
-    if not pipeline.model_ready(predictor):
+    try:
+        ready = pipeline.model_ready(predictor)
+    except FileNotFoundError:  # its folder is gone
+        raise deleted(predictor) from None
+    if not ready:
+        if not (predictor.dir / "predictor.json").is_file():
+            raise deleted(predictor)
         raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
     try:
         return pipeline.load_model(predictor)
@@ -264,6 +270,15 @@ def load(predictor: Predictor):
         raise RequestError("model_too_new", str(error)) from None
     except OutdatedModel as error:  # trained by a version before the previous release, which read other features
         raise RequestError("not_trained", str(error)) from None
+    except FileNotFoundError:
+        if (predictor.dir / "predictor.json").is_file():
+            raise  # a model with a file missing, which a refresh makes again
+        raise deleted(predictor) from None
+
+
+def deleted(predictor: Predictor) -> RequestError:
+    """The error for a predictor that was deleted after the request found it, as while it was being forecast."""
+    return RequestError("unknown_predictor", f"Predictor {predictor.name!r} was deleted.")
 
 
 RATES = ("input", "output", "cache_write_5m", "cache_write_1h", "cache_read")

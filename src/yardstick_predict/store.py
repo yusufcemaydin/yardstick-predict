@@ -10,15 +10,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
-from dataclasses import astuple, fields
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from dataclasses import astuple, dataclass, fields
 from pathlib import Path
 
 import numpy as np
 
-from . import files
+from . import files, locks
 from .archives import Task
 
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
@@ -33,6 +36,11 @@ _TEXTS = ("prompt", "context", "skills", "prior_skills")
 FORMAT = 2
 """The format a predictor's settings are saved in. Settings in an older format are brought up to date when read.
 Settings in a newer format are read as far as they can be, and never saved."""
+PREPARED = "prepared.parquet"
+"""The prepared dataset's file, in the predictor's folder."""
+LOCKS = ("refresh.lock", "model.lock")
+"""The lock files in a predictor's folder. A setup or refresh holds the first, and a model being saved or read
+holds the second."""
 
 
 def home() -> Path:
@@ -130,6 +138,145 @@ def set_default(name: str) -> None:
     save_setting("default", name)
 
 
+def forget_setting(name: str) -> None:
+    """Take one setting out, and keep the others. The file is saved in one step."""
+    found = settings()
+    if name in found:
+        del found[name]
+        files.write_text(private_home() / "settings.json", json.dumps(found, indent=2) + "\n")
+
+
+# Deleting a predictor -------------------------------------------------------------------------------------
+
+
+class Busy(Exception):
+    """Another command is setting up or refreshing the predictor, so it can't be deleted now."""
+
+
+@dataclass
+class Contents:
+    """What a predictor's folder holds: how many tasks its dataset has, and the bytes each part takes."""
+
+    folder: Path
+    settings: bool
+    """Whether its settings file is there. It may still be broken."""
+    tasks: int | None
+    """How many tasks its dataset holds: 0 without one, and None when it can't be read."""
+    dataset: int
+    prepared: int
+    model: int
+    other: int
+    """Everything else, such as its settings and the model facts it downloaded."""
+
+    @property
+    def size(self) -> int:
+        return self.dataset + self.prepared + self.model + self.other
+
+
+def contents(name: str) -> Contents:
+    """What a predictor's folder holds, read without changing anything, even when its settings are broken."""
+    folder = predictor_folder(name)
+    sizes = {"dataset": 0, "prepared": 0, "model": 0, "other": 0}
+    named = {PREPARED: "prepared", "model": "model"}
+    for path in _entries(folder):
+        # The dataset comes with the files SQLite keeps beside it while it writes.
+        part = "dataset" if path.name.startswith("dataset.sqlite") else named.get(path.name, "other")
+        sizes[part] += _bytes(path)
+    return Contents(folder, (folder / "predictor.json").is_file(), _count_tasks(folder / "dataset.sqlite"), **sizes)
+
+
+def delete_predictor(name: str) -> bool:
+    """Delete a predictor's folder: its settings, its dataset of tasks, its prepared dataset and its model. False
+    when the folder was gone already.
+
+    Nothing outside the folder changes, except that a default setting naming the predictor is forgotten: your
+    records, the feature store and the other predictors stay as they are. It raises Busy while a setup or refresh
+    of the predictor runs, and waits for a forecast that is reading its model. The settings go last, so a delete
+    that stops halfway, as on a file another program has open, leaves the predictor listed, to delete again.
+    """
+    folder = predictor_folder(name)
+    if not folder.is_dir():
+        return False
+    refresh_lock, model_lock = (folder / lock for lock in LOCKS)
+    with locks.held(refresh_lock, wait=False) as mine:
+        if not mine:
+            raise Busy(f"{name} is being set up or refreshed by another command. Try again when it's done.")
+        with locks.held(model_lock):  # a forecast holds it, shared, while it reads the model
+            for path in sorted(_entries(folder), key=lambda path: path.name == "predictor.json"):
+                if path.name not in LOCKS:
+                    _remove(path)
+    # The lock files go once no command holds them. On Windows one that another command opened meanwhile stays,
+    # with the folder: no predictor shows without its settings.
+    shutil.rmtree(folder, ignore_errors=True)
+    if settings().get("default") == name:
+        forget_setting("default")
+    return True
+
+
+@contextmanager
+def all_refresh_locks() -> Iterator[str | None]:
+    """Hold the refresh lock of every predictor's folder, without waiting, so no setup or refresh starts meanwhile.
+
+    It yields None while it holds them all. When another command is setting up or refreshing a predictor, it
+    yields that predictor's name, and holds none.
+    """
+    with ExitStack() as held:
+        busy = None
+        for folder in sorted(_entries(home() / "predictors")):
+            if folder.name.startswith(".") or not folder.is_dir():
+                continue
+            try:
+                mine = held.enter_context(locks.held(folder / LOCKS[0], wait=False))
+            except FileNotFoundError:  # the folder was deleted meanwhile
+                continue
+            if not mine:
+                busy = folder.name
+                held.close()
+                break
+        yield busy
+
+
+def _entries(folder: Path) -> list[Path]:
+    try:
+        return list(folder.iterdir())
+    except OSError:
+        return []
+
+
+def _bytes(path: Path) -> int:
+    """The bytes a file takes, or all the files in a folder. A link counts as itself: it's never followed."""
+    try:
+        if path.is_dir() and not path.is_symlink():
+            return sum(found.lstat().st_size for found in path.rglob("*") if not found.is_dir())
+        return path.lstat().st_size
+    except OSError:
+        return 0
+
+
+def _remove(path: Path) -> None:
+    """Delete a file or a folder with what's in it. A link is deleted itself, and what it links to stays."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _count_tasks(dataset: Path) -> int | None:
+    """How many tasks a dataset holds, read only. 0 without a dataset, None when it can't be read."""
+    if not dataset.is_file():
+        return 0
+    try:
+        db = sqlite3.connect(f"{dataset.resolve().as_uri()}?mode=ro", uri=True)
+    except (sqlite3.Error, ValueError):
+        return None
+    try:
+        return int(db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0])
+    except sqlite3.Error:
+        return None
+    finally:
+        db.close()
+
+
 class BrokenPredictor(Exception):
     """A predictor whose settings file can't be read, or is empty or broken, so it can't be used."""
 
@@ -159,7 +306,7 @@ def _read_config(name: str, path: Path) -> dict:
         why = "are empty or broken"
     raise BrokenPredictor(
         f"Predictor {name!r} can't be used: its settings in {path} {why}. Fix that file, "
-        f"or delete the folder {path.parent} and create the predictor again."
+        f"or delete the predictor with yardstick-predict delete {name} and create it again."
     )
 
 
@@ -251,6 +398,12 @@ class Predictor:
     @property
     def model_dir(self) -> Path:
         return self.dir / "model"
+
+    @property
+    def prepared_path(self) -> Path:
+        """The prepared dataset: what went into the last training, one row for each task the model learned from.
+        It holds no prompt or other text. pipeline.train writes it."""
+        return self.dir / PREPARED
 
     # The dataset ------------------------------------------------------------------------------------
 

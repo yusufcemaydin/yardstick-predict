@@ -1332,6 +1332,12 @@ def _eligible(tasks: list[Task], rows: list[Features], settings: dict) -> tuple[
     return eligible, [r for _, r in pairs]
 
 
+def learned_from(tasks: list[Task], rows: list[Features], settings: dict | None = None) -> list[Task]:
+    """The tasks train learns from, oldest first: the ones its model's "tasks" counts. Raises NotEnoughData, as
+    train does, when there are too few."""
+    return _eligible(tasks, rows, settings_for(settings))[0]
+
+
 def _tested(
     tasks: list[Task],
     rows: list[Features],

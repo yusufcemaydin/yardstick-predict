@@ -4,9 +4,12 @@
     yardstick-predict create       Create a predictor from your past runs.
     yardstick-predict refresh      Add new runs, embed them and retrain.
     yardstick-predict predict      Forecast a task: a table in a terminal, JSON for programs.
-    yardstick-predict status       Show your predictors and how well they forecast.
+    yardstick-predict status       Show your predictors, their features and how well they forecast.
+    yardstick-predict list         List your predictors, one line each.
+    yardstick-predict delete       Delete a predictor. Your records and the feature store stay.
     yardstick-predict check        Check which of a predictor's features help its forecasts. Changes nothing.
     yardstick-predict features     List each predictor's features: what's stored, and how many tasks each covers.
+                                   features delete ID deletes a stored feature.
     yardstick-predict default      Show or choose the predictor used when a command names none.
 
 It only asks questions when a person runs it in a terminal. When a program runs it, it never asks.
@@ -1186,13 +1189,24 @@ def cmd_refresh(args) -> int:
             f"{predictor.name} was saved by a newer version of yardstick-predict, so this version leaves it as it "
             "is. Upgrade with: uv tool upgrade yardstick-predict"
         )
+    # A predictor deleted just as this command found it isn't saved again, with none of its tasks.
+    deleted = f"There's no predictor called {predictor.name!r} anymore: it was deleted."
+    if gone(predictor):
+        raise SystemExit(deleted)
     # Two refreshes at once could each train, and the slower one could save an older model over a newer one.
     with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
         if not mine:
             raise SystemExit(
                 f"{predictor.name} is being set up or refreshed by another command. Try again when it's done."
             )
+        if gone(predictor):
+            raise SystemExit(deleted)
         return _refresh(args, predictor)
+
+
+def gone(predictor: Predictor) -> bool:
+    """Whether the predictor was deleted after this command found it. Its settings go last."""
+    return not (predictor.dir / "predictor.json").is_file()
 
 
 def _refresh(args, predictor: Predictor) -> int:
@@ -1505,9 +1519,76 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     unknown_features_note(predictor)
 
 
+def trained_facts(predictor: Predictor, meta: dict | None) -> dict:
+    """What list and status say about a predictor's model: how many tasks it learned from, when it was last trained
+    and the AI models it gives forecasts for, from what the saved model says about itself. A model that has to be
+    trained again first gives none. Without a model, it learned from none and was never trained."""
+    from .pipeline import outdated
+
+    if not meta:
+        return {"learned_from": None, "trained_at": None, "forecasts_for": []}
+    learned = meta.get("tasks")
+    report = meta.get("report") if isinstance(meta.get("report"), dict) else {}
+    try:
+        forecasts = [] if outdated(predictor, meta) else served_models(report)
+    except (KeyError, TypeError, ValueError, AttributeError):  # a report this version can't read
+        forecasts = []
+    return {
+        "learned_from": learned if isinstance(learned, int) and not isinstance(learned, bool) else None,
+        "trained_at": predictor.config.get("refreshed_at") or meta.get("trained_at"),
+        "forecasts_for": forecasts,
+    }
+
+
+def prepared_bytes(predictor: Predictor) -> int | None:
+    """How big the prepared dataset is, what went into the last training. None before the first training."""
+    try:
+        return predictor.prepared_path.stat().st_size
+    except OSError:
+        return None
+
+
+def coverage_of(predictor: Predictor) -> tuple[dict | None, str | None]:
+    """The share of the tasks a predictor can learn from that have a value for each of its features, counted as
+    the features listing counts it, for status. None, with the reason, when it can't be counted now.
+
+    It loads the predictor's plugins, and needs XGBoost, as training does. Like the listing, it moves the vectors
+    and LLM answers of a predictor an older version made into the feature store, once.
+    """
+    from . import model_types
+    from .pipeline import load_plugins
+
+    try:
+        load_plugins(predictor)
+        total, uses = feature_uses_of(predictor, count=True)
+    except model_types.PluginError as error:
+        return None, f"Its coverage can't be counted until its plugin loads. {error}"
+    except BlockingIOError:
+        return None, "Its coverage can't be counted while another command sets it up or refreshes it."
+    except Exception as error:  # such as a plugin's feature that fails on a task: the rest of status still shows
+        first = (str(error).strip().splitlines() or [""])[0]
+        return None, f"Its coverage can't be counted: {type(error).__name__}: {first}".rstrip(": ")
+    listed = predictor_json({"name": predictor.name, "default": False, "tasks": total, "uses": uses})
+    return {"tasks": total, "features": [use for use in listed["features"] if use["kept"] != "unknown"]}, None
+
+
+def show_coverage(coverage: dict | None, problem: str | None) -> None:
+    """One line: the share of the tasks a predictor can learn from that have a value for each of its features."""
+    if coverage is None:
+        if problem:
+            ui.note(problem)
+        return
+    if not coverage["tasks"]:
+        ui.line("Coverage: it has no tasks to learn from yet.")
+        return
+    shares = [f"{use['title']} {use['coverage']:.0%}" for use in coverage["features"] if use["coverage"] is not None]
+    ui.line(f"Coverage of the {coverage['tasks']:,} tasks it can learn from: {ui.join(shares)}")
+
+
 def cmd_status(args) -> int:
-    """Each predictor and how its test went. It reads only what the saved model says about itself, so it
-    needs neither XGBoost nor the predictor's plugins."""
+    """Each predictor, its features with their coverage, and how its test went. The test is what the saved model
+    says about itself, so it shows without XGBoost and without the predictor's plugins. Coverage is counted from
+    what training reads, so it needs both: without them, the rest still shows."""
     from .pipeline import model_meta
 
     names = predictor_names()
@@ -1517,18 +1598,25 @@ def cmd_status(args) -> int:
             print(json.dumps({"version": 1, "error": {"code": "unknown_predictor", "message": message}}, indent=2))
             return 1
         raise SystemExit(message)
+    without = getattr(args, "xgboost", None)  # coverage needs XGBoost. Without it, the rest still shows.
     default = default_name()
-    found, metas, predictors = [], {}, {}
-    for name in [args.predictor] if args.predictor else names:
-        try:
-            predictor = Predictor(name)
-        except BrokenPredictor as error:
-            found.append({"name": name, "default": name == default, "error": str(error)})
-            continue
-        metas[name] = meta = model_meta(predictor)
-        predictors[name] = predictor
-        found.append(
-            {
+    found, metas, predictors, problems = [], {}, {}, {}
+    notes: list[str] = []
+    quiet = args.json and not without
+    if quiet:
+        from . import feature_store
+
+        feature_store.tell = notes.append  # a program reads them in the answer, not between its lines
+    try:
+        for name in [args.predictor] if args.predictor else names:
+            try:
+                predictor = Predictor(name)
+            except BrokenPredictor as error:
+                found.append({"name": name, "default": name == default, "error": str(error)})
+                continue
+            metas[name] = meta = model_meta(predictor)
+            predictors[name] = predictor
+            entry = {
                 "name": name,
                 "default": name == default,
                 "embedding_model": predictor.embedding_model,
@@ -1540,11 +1628,19 @@ def cmd_status(args) -> int:
                 "tasks": predictor.count_tasks(),
                 "refreshed_at": predictor.config.get("refreshed_at"),
                 "report": (meta or {}).get("report"),
+                **trained_facts(predictor, meta),
+                "prepared_bytes": prepared_bytes(predictor),
+                "coverage": None,
             }
-        )
+            if not without:
+                entry["coverage"], problems[name] = coverage_of(predictor)
+            found.append(entry)
+    finally:
+        if quiet:
+            feature_store.tell = None
     code = 1 if any("error" in entry for entry in found) else 0  # a predictor it shows can't be used
     if args.json:
-        print(json.dumps({"version": 1, "predictors": found}, indent=2))
+        print(json.dumps({"version": 1, "predictors": found, "notes": notes}, indent=2))
         return code
     if not found:
         ui.out("There's no predictor yet. Run yardstick-predict to create one.")
@@ -1563,12 +1659,16 @@ def cmd_status(args) -> int:
             f"{entry['tasks']:,} tasks",
             f"updated {ago(entry['refreshed_at'])}",
         ]
+        if entry["prepared_bytes"] is not None:
+            facts.append(f"prepared dataset {ui.size(entry['prepared_bytes'])}")
         predictor = predictors[entry["name"]]
         ui.line(ui.join(facts))
         ui.line(f"Features: {feature_summary(predictor.config)}")
+        show_coverage(entry["coverage"], problems.get(entry["name"]))
         newer_settings_note(predictor)
-        if not predictor.config.get("plugins"):
-            unknown_features_note(predictor)  # without plugins, every feature this version knows is built in
+        if not predictor.config.get("plugins") or entry["coverage"] is not None:
+            # Without plugins, every feature this version knows is built in. With them, they're loaded by now.
+            unknown_features_note(predictor)
         meta = metas.get(entry["name"])
         if meta and outdated(predictor, meta):
             ui.note("Its model was made by an older version, and gives no forecasts until it's trained again.")
@@ -1582,7 +1682,180 @@ def cmd_status(args) -> int:
                 print_report(meta)
             except (KeyError, TypeError, ValueError, AttributeError):  # a report this version can't read
                 ui.note("Its test report can't be shown. A newer version of yardstick-predict may have saved it.")
+    if without and predictors:
+        ui.out()
+        ui.note("Coverage isn't shown: it's counted from what training reads, and training needs XGBoost.")
+        ui.note(without)
     return code
+
+
+def short_features(config: dict) -> str:
+    """A predictor's optional features, as the Features screen names them, or that it uses only the ones always on.
+    A feature this version doesn't know keeps its own name."""
+    from . import features
+
+    titles = {group.key: group.title for group in features.MENU}
+    listed = config.get("features") or []
+    chosen = [str(name) for name in listed if name != features.REQUIRED] if isinstance(listed, list) else []
+    return ", ".join(titles.get(name, name) for name in chosen) or "only the ones always on"
+
+
+def cmd_list(args) -> int:
+    """One line for each predictor: its features, how many tasks it learned from, when it was last trained and the
+    AI models it gives forecasts for. Like status, it reads only what each saved model says about itself, so it
+    needs neither XGBoost nor the predictors' plugins. Status shows the same, in detail."""
+    from .pipeline import model_meta, outdated
+
+    default = default_name()
+    found, retrain = [], set()
+    for name in predictor_names():
+        entry: dict = {"name": name, "default": name == default}
+        try:
+            predictor = Predictor(name)
+        except BrokenPredictor as error:
+            entry["error"] = str(error)
+        else:
+            meta = model_meta(predictor)
+            entry["features"] = predictor.config.get("features") or ["prompt"]
+            entry.update(trained_facts(predictor, meta))
+            if meta and outdated(predictor, meta):
+                retrain.add(name)
+        found.append(entry)
+    code = 1 if any("error" in entry for entry in found) else 0  # a predictor it shows can't be used
+    if args.json:
+        print(json.dumps({"version": 1, "predictors": found}, indent=2))
+        return code
+    if not found:
+        ui.out("There's no predictor yet. Run yardstick-predict to create one.")
+        return 0
+    rows = [("", *(ui.dim(words) for words in ("features", "learned from", "trained", "forecasts for")))]
+    for entry in found:
+        name = ui.bold(entry["name"]) + (f" {ui.dim('(default)')}" if entry["default"] else "")
+        if "error" in entry:
+            rows.append((name, ui.dim("can't be used, see below")))
+            continue
+        learned, trained = entry["learned_from"], entry["trained_at"]
+        if entry["name"] in retrain:
+            forecasts = ui.dim("none until it's trained again")
+        else:
+            forecasts = ", ".join(entry["forecasts_for"]) or ui.dim("none yet")
+        rows.append(
+            (
+                name,
+                short_features({"features": entry["features"]}),
+                f"{learned:,} tasks" if learned is not None else ui.dim("-"),
+                ago(trained) if trained else ui.dim("not yet"),
+                forecasts,
+            )
+        )
+    ui.table(rows)
+    for entry in found:
+        if "error" in entry:
+            ui.out()
+            ui.line(entry["error"])
+    return code
+
+
+def in_words(names: list[str]) -> str:
+    """Names as a person lists them: a, b and c."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def answer_error(args, code: str, message: str, exit_code: int = 1) -> int:
+    """Stop a command that answers programs in JSON with --json: an error in that format, or the message."""
+    if args.json:
+        print(json.dumps({"version": 1, "error": {"code": code, "message": message}}, indent=2))
+        return exit_code
+    if exit_code == 2:  # it needs --yes: not an error, but a step only you can take
+        ui.line(message)
+        return exit_code
+    raise SystemExit(message)
+
+
+def cmd_delete(args) -> int:
+    """Delete a predictor: its folder, with its settings, its dataset of tasks, its prepared dataset and its model.
+    Your records, the feature store and your other predictors stay. In a terminal it says what goes and asks
+    first. A program adds --yes, and --json for an answer in JSON."""
+    from .store import Busy, contents, delete_predictor
+
+    names = predictor_names()
+    name = args.name
+    if name not in names:
+        message = f"There's no predictor called {name!r}. Your predictors: {', '.join(names) or 'none'}."
+        return answer_error(args, "unknown_predictor", message)
+    # A setup or refresh of it would make it again, so it's refused before anything is asked.
+    with locks.held(predictor_folder(name) / "refresh.lock", wait=False) as free:
+        pass
+    if not free:
+        busy = f"{name} is being set up or refreshed by another command. Try again when it's done."
+        return answer_error(args, "busy", busy)
+    found = contents(name)
+    default = default_name()
+    if not args.json:
+        say_what_goes(name, found, default == name)
+    if interactive() and not args.yes and not args.json:
+        if not ui.ask(f"Delete {name} for good?", False):
+            ui.note("Nothing was deleted.")
+            return 0
+    elif not args.yes:
+        return answer_error(args, "needs_yes", "Add --yes to delete it. Nothing was deleted.", exit_code=2)
+    try:
+        delete_predictor(name)
+    except Busy as error:
+        return answer_error(args, "busy", str(error))
+    except OSError as error:
+        return answer_error(
+            args,
+            "delete_failed",
+            f"Couldn't delete all of {name}: {error.strerror or error}. It's still listed, so you can try again "
+            f"when no other program is using its files: yardstick-predict delete {name}",
+        )
+    now = default_name()
+    if args.json:
+        deleted = {"name": name, "folder": str(found.folder), "tasks": found.tasks, "bytes": found.size}
+        print(json.dumps({"version": 1, "deleted": deleted, "default": now}, indent=2))
+        return 0
+    ui.ok(f"Deleted {name}.")
+    say_default_after(name, default, now)
+    return 0
+
+
+def say_what_goes(name: str, found, is_default: bool) -> None:
+    """Exactly what deleting a predictor removes, and what stays."""
+    ui.heading(f"Delete {name}")
+    ui.line(f"This deletes its folder, {found.folder}, and everything in it:")
+    goes = ["its settings"] if found.settings else []
+    if found.dataset:
+        tasks = "" if found.tasks is None else f" of {found.tasks:,} task{'' if found.tasks == 1 else 's'}"
+        goes.append(f"its dataset{tasks}, with their prompts ({ui.size(found.dataset)})")
+    if found.prepared:
+        goes.append(f"its prepared dataset, what went into its last training ({ui.size(found.prepared)})")
+    if found.model:
+        goes.append(f"its trained model ({ui.size(found.model)})")
+    for part in goes:
+        ui.line(f"  {part}")
+    ui.line("Your records and the feature store stay, and so do your other predictors.")
+    ui.note("The embeddings and LLM answers it made stay in the feature store, for any predictor that uses them.")
+    if is_default:
+        ui.note("It's your default predictor.")
+
+
+def say_default_after(name: str, before: str | None, after: str | None) -> None:
+    """Say which predictor commands use now that one is deleted, when that changed. When one predictor is left,
+    commands use it without a default."""
+    left = predictor_names()
+    if not left:
+        ui.note("There's no predictor now. Run yardstick-predict to create one.")
+    elif after is None and before == name:
+        ui.note("It was your default predictor, so there's no default now.")
+        ui.note("Choose one with: yardstick-predict default NAME")
+    elif after is not None and after != before:
+        if len(left) == 1:
+            ui.note(f"{after} is your only predictor now, so commands use it when they name none.")
+        else:
+            ui.note(
+                f"Commands now use {after} when they name none. Choose another with: yardstick-predict default NAME"
+            )
 
 
 def cmd_check(args) -> int:
@@ -1633,9 +1906,13 @@ def cmd_check(args) -> int:
         ui.working("Reading its tasks")
     # No setup or refresh changes the tasks while they're read. The tests then run on what was read, so one can
     # start meanwhile.
+    if gone(predictor):
+        return stop("unknown_predictor", f"There's no predictor called {name!r} anymore: it was deleted.")
     with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
         if not mine:
             return stop("busy", f"{name} is being set up or refreshed by another command. Try again when it's done.")
+        if gone(predictor):
+            return stop("unknown_predictor", f"There's no predictor called {name!r} anymore: it was deleted.")
         given = check.inputs(predictor)
     if not given.features:
         if args.json:
@@ -1707,10 +1984,19 @@ def cmd_features(args) -> int:
     training works it out, and how many of the tasks the predictor learns from have a value for it.
 
     It reads and changes nothing, except that a predictor an older version made has its vectors and LLM
-    answers moved into the feature store, once, as a refresh would.
+    answers moved into the feature store, once, as a refresh would. `features delete ID` deletes a stored feature.
     """
     from . import feature_store, model_types
     from .pipeline import load_plugins
+
+    if getattr(args, "action", None) == "delete":
+        said: list[str] = []
+        if args.json:
+            feature_store.tell = said.append  # a program reads them in the answer, not between its lines
+        try:
+            return delete_feature(args, said)
+        finally:
+            feature_store.tell = None
 
     names = predictor_names()
     if args.predictor and args.predictor not in names:
@@ -1771,6 +2057,144 @@ def cmd_features(args) -> int:
     return code
 
 
+def delete_feature(args, notes: list[str]) -> int:
+    """Delete a stored feature: its folder in the feature store and its line in the index. It says which
+    predictors use it and what making it again costs, and in a terminal it asks first. A program adds --yes. It's
+    refused while any predictor is set up or refreshed, since that may be saving to it. `notes` collects what the
+    store says, for an answer in JSON."""
+    from . import feature_store
+    from .store import all_refresh_locks
+
+    if not args.id:
+        return answer_error(
+            args,
+            "invalid_request",
+            "Name the stored feature to delete, such as: yardstick-predict features delete "
+            "embedding.context.voyage-4.256. yardstick-predict features lists each one with its id.",
+        )
+    found = next((stored for stored in feature_store.stored() if stored.feature.id == args.id), None)
+    if found is None:
+        message = f"There's no stored feature {args.id!r}. yardstick-predict features lists each one with its id."
+        return answer_error(args, "unknown_feature", message)
+
+    def refused(busy: str) -> int:
+        message = f"{busy} is being set up or refreshed by another command, which may be using it. Try again later."
+        return answer_error(args, "busy", message)
+
+    with all_refresh_locks() as busy:
+        pass
+    if busy is not None:
+        return refused(busy)
+    users, unsure = users_of(found.feature.id)
+    remade = None
+    if not args.xgboost:  # which tasks get it again is worked out as training picks them, with XGBoost
+        from .pipeline import remake
+
+        remade = remake(found.feature, users)
+    if not args.json:
+        say_what_feature_goes(found, users, unsure, remade)
+    if interactive() and not args.yes and not args.json:
+        if not ui.ask("Delete it for good?", False):
+            ui.note("Nothing was deleted.")
+            return 0
+    elif not args.yes:
+        return answer_error(args, "needs_yes", "Add --yes to delete it. Nothing was deleted.", exit_code=2)
+    with all_refresh_locks() as busy:
+        if busy is None:
+            try:
+                feature_store.delete(found.feature.id)
+            except OSError as error:
+                message = f"Couldn't delete all of it: {error.strerror or error}. Try again when no other program "
+                return answer_error(args, "delete_failed", message + "is using its files.")
+    if busy is not None:
+        return refused(busy)
+    if args.json:
+        deleted = stored_json(found, {found.feature.id: [predictor.name for predictor in users]})
+        remaking = dataclasses.asdict(remade) if remade is not None else None
+        print(json.dumps({"version": 1, "deleted": deleted, "remake": remaking, "notes": notes}, indent=2))
+        return 0
+    ui.ok(f"Deleted {stored_title(found.feature)}.")
+    return 0
+
+
+def users_of(feature_id: str) -> tuple[list[Predictor], list[str]]:
+    """The predictors that use a stored feature, with their plugins loaded, and a note on each that can't tell.
+    A predictor whose settings can't be read uses nothing."""
+    from . import model_types
+    from .pipeline import feature_uses, load_plugins
+
+    users, unsure = [], []
+    for name in predictor_names():
+        try:
+            predictor = Predictor(name)
+            load_plugins(predictor)
+        except BrokenPredictor:
+            continue
+        except model_types.PluginError as error:
+            unsure.append(f"Whether {name} uses it can't be told until its plugin loads. {error}")
+            continue
+        _, uses = feature_uses(predictor, count=False)
+        if any(feature.id == feature_id for use in uses for feature in use.stored):
+            users.append(predictor)
+    return users, unsure
+
+
+def say_what_feature_goes(found, users: list[Predictor], unsure: list[str], remade) -> None:
+    """Exactly what deleting a stored feature removes, who makes it again and what that costs, and what stays."""
+    ui.heading("Delete a stored feature")
+    ui.line(stored_title(found.feature))
+    ui.line(ui.dim(ui.join(stored_facts(found))))
+    for text in remake_lines(found.feature, users, remade):
+        ui.line(text)
+    for text in unsure:
+        ui.note(text)
+    if users:
+        now = "their models forecast as they do" if len(users) > 1 else "its model forecasts as it does"
+        ui.note(f"Until then, {now} now: a forecast never reads the feature store.")
+    ui.line("Your records and your predictors stay, and so does the rest of the feature store.")
+
+
+def remake_lines(feature, users: list[Predictor], remade) -> list[str]:
+    """Who makes a deleted stored feature again, and what that costs, in plain words. `remade` is what pipeline.remake
+    found, or None when it couldn't be worked out."""
+    from . import features, llm
+
+    if not users:
+        return ["No predictor uses it, so nothing makes it again."]
+    names = in_words([predictor.name for predictor in users])
+    who = f"Used by {names}. " + (
+        "The next refresh of each makes it again" if len(users) > 1 else "Its next refresh makes it again"
+    )
+    if remade is None:
+        return [f"{who}.", ui.dim("What that costs can't be worked out without XGBoost, which training needs too.")]
+    asks = "A refresh shows what it costs and asks before it spends anything, unless you give it --yes."
+    if feature.kind == "llm":
+        how = {"provider": feature.made_with.get("provider"), "model": str(feature.made_with.get("model"))}
+        found = [f"{who}, for {remade.tasks:,} task{'' if remade.tasks == 1 else 's'}."]
+        if how["provider"] in llm.PROVIDERS and remade.tasks:
+            found += analysis_lines(remade.tasks, how)
+        if any("description" in features.options(predictor.config, "llm") for predictor in users):
+            found.append("It describes the tasks anew, and embedding the new descriptions costs Voyage tokens.")
+        return [*found, asks]
+    texts, cached = remade.texts, remade.cached
+    found = [f"{who}, for {remade.tasks:,} task{'' if remade.tasks == 1 else 's'}."]
+    paid = f"{'' if remade.exact else 'about '}{remade.tokens:,} tokens"
+    if remade.usd is not None:
+        paid += f", {money(remade.usd)} at Voyage's list price"
+    if not texts:
+        found.append("None of their tasks has its text now, so nothing is embedded.")
+    elif cached == texts:
+        held = "that text" if texts == 1 else f"all {texts:,} of their texts"
+        found.append(f"The cache of vectors holds {held}, so it costs nothing.")
+    elif cached:
+        found.append(f"The cache of vectors holds {cached:,} of their {texts:,} texts, which cost nothing.")
+        found.append(f"The other {texts - cached:,} go to Voyage: {paid}. {asks}")
+    else:
+        found.append(f"The cache of vectors holds none of their {texts:,} texts, so they go to Voyage: {paid}.")
+        found.append(asks)
+    return found
+
+
 def stored_json(found, used_by: dict[str, list[str]]) -> dict:
     """A stored feature, as features --json shows it."""
     return {
@@ -1827,7 +2251,10 @@ def show_stored(found: list, used_by: dict[str, list[str]]) -> None:
         users = used_by.get(stored.feature.id)
         who = f"used by {', '.join(users)}" if users else "used by no predictor"
         rows.append((stored_title(stored.feature), ui.dim(ui.join([*stored_facts(stored), who]))))
+        rows.append((ui.dim(f"  id {stored.feature.id}"),))
     ui.table(rows)
+    ui.out()
+    ui.note("Delete one with: yardstick-predict features delete ID")
 
 
 def show_uses(entry: dict, stored: dict) -> None:
@@ -2098,9 +2525,19 @@ def make_parser() -> argparse.ArgumentParser:
     predict.add_argument("--distribution", action="store_true", help="Also give each forecast's full curve, in JSON.")
     predict.add_argument("--json", action="store_true", help="Print the JSON answer that programs get.")
 
-    status = commands.add_parser("status", help="Show your predictors and how well they forecast.")
+    status = commands.add_parser("status", help="Show your predictors, their features and how well they forecast.")
     status.add_argument("--predictor", help="Show only this predictor.")
     status.add_argument("--json", action="store_true", help="Print JSON.")
+
+    every = commands.add_parser("list", help="List your predictors, one line each.")
+    every.add_argument("--json", action="store_true", help="Print JSON.")
+
+    delete = commands.add_parser(
+        "delete", help="Delete a predictor: its settings, dataset and model. Your records and the feature store stay."
+    )
+    delete.add_argument("name", help="The predictor to delete.")
+    delete.add_argument("--yes", action="store_true", help="Delete it without asking.")
+    delete.add_argument("--json", action="store_true", help="Print JSON. Add --yes too: it never asks.")
 
     check = commands.add_parser(
         "check", help="Check which of a predictor's features help its forecasts. Advice only: it changes nothing."
@@ -2108,9 +2545,14 @@ def make_parser() -> argparse.ArgumentParser:
     check.add_argument("name", nargs="?", help="The predictor to check. Default: your default predictor.")
     check.add_argument("--json", action="store_true", help="Print JSON.")
     listing = commands.add_parser(
-        "features", help="List each predictor's features: what's stored, and how many of its tasks each covers."
+        "features",
+        help="List each predictor's features: what's stored, and how many of its tasks each covers. "
+        "features delete ID deletes a stored feature.",
     )
+    listing.add_argument("action", nargs="?", choices=["delete"], help="delete: delete the stored feature ID.")
+    listing.add_argument("id", nargs="?", help="With delete: the stored feature's id, as the listing shows it.")
     listing.add_argument("--predictor", help="Show only this predictor.")
+    listing.add_argument("--yes", action="store_true", help="With delete: delete it without asking.")
     listing.add_argument("--json", action="store_true", help="Print JSON.")
 
     default = commands.add_parser("default", help="Show or choose the predictor used when a command names none.")
@@ -2144,13 +2586,16 @@ def main(argv: list[str] | None = None) -> int:
         "refresh": cmd_refresh,
         "predict": cmd_predict,
         "status": cmd_status,
+        "list": cmd_list,
+        "delete": cmd_delete,
         "check": cmd_check,
         "features": cmd_features,
         "default": cmd_default,
         "claude-code": cmd_claude_code,
     }
-    if args.command == "features":
-        args.xgboost = xgboost_problem(argv)  # its coverage needs XGBoost, and lists everything else without it
+    if args.command in ("features", "status"):
+        # Coverage, and what making a deleted feature again costs, need XGBoost. The rest shows without it.
+        args.xgboost = xgboost_problem(argv)
     problem = xgboost_problem(argv) if needs_xgboost(args) else None
     if problem:
         forecasting = args.command == "predict"

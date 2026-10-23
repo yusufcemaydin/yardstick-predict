@@ -23,6 +23,12 @@ Training uses exactly the features you choose. It trains one model, not one for 
 - A feature store, shared by all your predictors, keeps the features that cost money or time to make: embeddings, and what LLM analysis said about each task. Each is made once. A second predictor over the same records pays Voyage for nothing it already has, and LLM analysis asks the same AI model nothing it answered before, even when the two predictors ask for different parts of the answer. The store is in the `features` folder of the yardstick folder.
 - `yardstick-predict features` lists every feature of every predictor. A stored one shows what made it, how many tasks have it, its size on disk and when it last changed. The others are worked out at training, for free. Each shows its coverage: the share of the tasks the predictor learns from that have a value for it. `--json` gives the same to programs.
 - Files deleted or broken by hand in the feature store never break a command. A missing index is rebuilt from the files, and a file that can't be read is skipped, each with a note. The next refresh makes again what's missing: an embedding comes back from the cache for free, and an LLM answer is asked for again, with the cost shown first.
+- `yardstick-predict list` lists your predictors, one line each: its features, how many tasks it learned from, when it was last trained and which AI models get forecasts. `--json` gives the same to programs. `status` stays the detailed view, and says the same.
+- `yardstick-predict status` shows each feature's coverage: the share of the tasks the predictor can learn from that have a value for it, counted as `yardstick-predict features` counts it. Coverage needs XGBoost, as training does. Without it, status shows the rest.
+- Each training saves the prepared dataset, `prepared.parquet` in the predictor's folder: one row for each task the model learned from, with when it started, its AI model, its number features, the hash of each text whose embedding the model read, and what the task took. It never holds a prompt or any other text. `status` shows its size.
+- `yardstick-predict delete NAME` deletes a predictor: its settings, its dataset of tasks, its prepared dataset and its model. Your records, the feature store and your other predictors stay. In a terminal it says exactly what goes and asks first. `--yes` skips the question for programs, and `--json` answers in JSON. It refuses while a setup or refresh of that predictor runs, and waits for a forecast that is reading its model. When it was your default predictor, it says how to choose another. A predictor whose settings are broken can be deleted too.
+- `yardstick-predict features delete ID` deletes a stored feature. First it says which predictors use it and what making it again costs: an embedding usually comes back from the cache for free, and LLM answers have to be asked for again. It asks before it deletes anything, and `--yes` skips the question for programs. The listing shows each stored feature's id.
+- When the Claude Code status line's predictor is deleted, the status line says so in plain words, such as that there's no default predictor now and how to choose one.
 
 ### Changed
 
@@ -36,6 +42,7 @@ Training uses exactly the features you choose. It trains one model, not one for 
 - A predictor's embeddings and LLM answers move from its dataset into the feature store, once, the first time this version refreshes it or lists its features. The old copies stay in the dataset, unread. Training reads exactly what it read before. Forecasts never read the store, so they're as quick as before.
 - An embedding is no longer deleted when its task's text changes or the task is taken out. It stays in the store, for any predictor whose task still has that text. Training uses a task's embedding only when it was made from the task's text as it is now, as before.
 - yardstick-predict needs one more library, PyArrow, to read and write the feature store's files.
+- A predictor whose settings can't be read says to delete it with `yardstick-predict delete NAME`, in place of deleting its folder by hand.
 
 ### Fixed
 

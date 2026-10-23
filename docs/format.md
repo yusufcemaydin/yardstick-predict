@@ -98,7 +98,7 @@ When the whole request can't be answered, the answer has an `error` instead of `
 | `invalid_request` | The request breaks a rule above. The message says which. A program gets it too when it runs `predict` with a command line it can't read, such as a flag it doesn't know. |
 | `no_predictor` | No predictor exists yet. |
 | `no_default_predictor` | There are several predictors, none is the default, and the request names none. Name one in `predictor`, or choose a default with `yardstick-predict default NAME`. |
-| `unknown_predictor` | The request names a predictor that doesn't exist. |
+| `unknown_predictor` | The request names a predictor that doesn't exist, or the predictor was deleted while the request was answered. |
 | `broken_predictor` | The predictor's settings file can't be read, or is empty or broken. The message says which file. |
 | `plugin_failed` | A plugin the predictor uses couldn't be loaded. The message says which, and why. |
 | `not_trained` | The predictor has no model yet, or its model was made by a version before the previous release and has to be trained again. `yardstick-predict refresh` trains it. |

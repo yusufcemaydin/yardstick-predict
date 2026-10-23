@@ -600,6 +600,7 @@ def _forecast(
     and `start` the byte it starts at, when the line was found.
     """
     found: dict = {"prompt_at": prompt_at}
+    predictor = None
     try:
         from . import cli
         from .forecast import answer, load, parse
@@ -643,9 +644,23 @@ def _forecast(
         answered = answer(predictor, parsed, model=model, recent=recent)
         found.update(predictor=predictor.name, forecasts=answered["forecasts"])
     except Exception as error:
-        found["error"] = (getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
+        found["error"] = _no_forecast(error, predictor)
     _write(_forecast_path(session, prompt_at), found)
     _forget_old_forecasts(session)
+
+
+def _no_forecast(error: Exception, predictor) -> str:
+    """Why a prompt got no forecast, in a few plain words for the status line.
+
+    A predictor deleted while it was forecast says so, whatever broke as its files went. With several predictors
+    and none the default, as after the default one was deleted, it says how to choose one.
+    """
+    if getattr(error, "code", None) == "no_default_predictor":
+        return "no default predictor. Choose one with: yardstick-predict default NAME"
+    folder = getattr(predictor, "dir", None)
+    if isinstance(folder, Path) and not (folder / "predictor.json").is_file():
+        return f"{predictor.name} was deleted"
+    return (getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
 
 
 def _forget_old_forecasts(session: str) -> None:

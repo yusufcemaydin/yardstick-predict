@@ -567,6 +567,14 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
     the task's text as it is now. One made from an older text, such as before a fuller copy of the task
     replaced it, describes another task, so it's left out.
     """
+    return _rows_and_texts(predictor, tasks, known)[0]
+
+
+def _rows_and_texts(
+    predictor: Predictor, tasks: list[Task], known: list[Task] | None = None
+) -> tuple[list, list[dict[str, str]]]:
+    """Each task's features, as feature_rows gives them, and for each task, the hash of the text that each of its
+    vectors was made from, by text feature."""
     from .model import Features
 
     chosen = chosen_features(predictor)
@@ -577,15 +585,18 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
     labels = predictor.llm_labels() if "llm" in chosen else None
     table = benchmark_table(predictor)
     past = Past(predictor.tasks() if known is None else known)
-    rows = []
+    rows, texts = [], []
     for task in tasks:
         info = task_info(task, predictor.config, labels)
-        vectors = {}
+        vectors, made_from = {}, {}
         for name in names:
             made = stored[name].get(task.id)  # by the hash of each text the task had
-            vector = made.get(embeddings.text_hash(features.text(name, info))) if made else None
+            digest = embeddings.text_hash(features.text(name, info)) if made else ""
+            vector = made.get(digest) if made else None
             if vector is not None:
                 vectors[name] = vector
+                made_from[name] = digest
+        texts.append(made_from)
         before = past.numbers(
             task.project,
             task.session,
@@ -608,7 +619,7 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
                 started_at=task.started_at,
             )
         )
-    return rows
+    return rows, texts
 
 
 @dataclass
@@ -733,6 +744,54 @@ def feature_uses(predictor: Predictor, count: bool = True) -> tuple[int | None, 
     return total, uses
 
 
+@dataclass
+class Remake:
+    """What making a deleted stored feature again takes. The next refresh of each predictor that uses it makes it."""
+
+    tasks: int = 0
+    """How many tasks get it again: the ones each predictor learns from that have its text, or that LLM analysis
+    reads. A task several predictors share counts once."""
+    texts: int = 0
+    """For embeddings: how many different texts are embedded again."""
+    cached: int = 0
+    """For embeddings: how many of those texts the cache of vectors holds. They come back for free."""
+    tokens: int = 0
+    """For embeddings: the tokens of the other texts, which go to Voyage again."""
+    usd: float | None = 0.0
+    """What it costs at list price: Voyage's for embeddings, the AI model's for LLM answers. None when the price
+    isn't known, and for LLM answers through a subscription, which has no extra bill."""
+    exact: bool = True
+    """Whether the tokens were counted with Voyage's own tokenizer. Otherwise they're an estimate."""
+
+
+def remake(feature, predictors: list[Predictor]) -> Remake:
+    """What making a stored feature again takes, as the next refresh of each of `predictors` would make it. They
+    are the predictors that use it, with their plugins loaded. It reads and changes nothing in the feature store."""
+    from . import feature_store, llm
+    from .store import llm_answers
+
+    if feature.kind == feature_store.LLM:
+        asked: set[str] = set()
+        for predictor in predictors:
+            asks = analysis_plan(predictor.tasks(), predictor.config, {}, predictor.config.get("max_tasks"))
+            asked |= {ask.id for ask in asks}
+        provider, model = feature.made_with.get("provider"), str(feature.made_with.get("model"))
+        billed = provider in llm.PROVIDERS and llm.PROVIDERS[provider].billed
+        return Remake(tasks=len(asked), usd=llm.cost(len(asked), model) if billed else None)
+    field, model = feature.made_with.get("field"), str(feature.made_with.get("model"))
+    items: list[tuple[str, str, str]] = []
+    for predictor in predictors:
+        # The descriptions LLM analysis wrote, as the store keeps them. It's only read, so nothing moves in.
+        labels = llm_answers(predictor.config) if field == "llm" else None
+        limit = predictor.config.get("max_tasks")
+        items += embedding_items(predictor.tasks(), [field], None, limit, predictor.config, labels)
+    plan = price(items, model, None)
+    texts = len({text for _, _, text in items})
+    usd = plan.cost.list_usd if model in embeddings.MODELS else None
+    tasks = len({task_id for task_id, _, _ in items})
+    return Remake(tasks, texts, texts - len(plan.texts), plan.cost.tokens, usd, plan.cost.exact)
+
+
 def features_without_values(predictor: Predictor, rows: list) -> list[str]:
     """Your own features that have a value for no past task, so the model has nothing to learn from them.
 
@@ -747,7 +806,7 @@ def features_without_values(predictor: Predictor, rows: list) -> list[str]:
 
 
 def train(predictor: Predictor, on_progress: Callable[[int, int], None] | None = None):
-    """Train the predictor's model on its whole dataset and save it.
+    """Train the predictor's model on its whole dataset and save it, with the prepared dataset: what went into it.
 
     The built-in model tells `on_progress` how many of the models it fits are done, and how many there are. A
     model type from a plugin trains as it always has, without saying.
@@ -760,22 +819,88 @@ def train(predictor: Predictor, on_progress: Callable[[int, int], None] | None =
     model_settings = settings(predictor)
     kind = model_settings.get("type", "xgboost")
     trainer, _ = model_types.get(kind)
-    rows = feature_rows(predictor, tasks)
+    rows, texts = _rows_and_texts(predictor, tasks)
     if kind == "xgboost" and on_progress is not None:
         model = trainer(tasks, rows, model_settings, on_progress=on_progress)
     else:
         model = trainer(tasks, rows, model_settings)
     if isinstance(getattr(model, "meta", None), dict):
         model.meta["features_without_values"] = features_without_values(predictor, rows)
+    prepared = prepared_dataset(predictor, tasks, rows, texts)
+    from . import files
+
     with _model_lock(predictor):
         # A save that was stopped halfway leaves its folder behind. No save runs while this lock is held.
         for unfinished in predictor.dir.glob(".model-*"):
             shutil.rmtree(unfinished, ignore_errors=True)
         model.save(predictor.model_dir)
+        files.write_bytes(predictor.prepared_path, prepared)  # in one step, with the model it went into
     predictor.config["refreshed_at"] = time.time()
     predictor.config["needs_training"] = False
     predictor.save_config()
     return model
+
+
+PREPARED_FORMAT = 1
+"""The prepared dataset's format, in the metadata of its file."""
+
+
+def prepared_dataset(predictor: Predictor, tasks: list[Task], rows: list, texts: list[dict[str, str]]) -> bytes:
+    """What went into a training, as a Parquet file: one row for each task the model learned from, oldest first.
+
+    `rows` are the tasks' features, as training read them, and `texts` the hashes of the texts their vectors were
+    made from, as _rows_and_texts gives both. Each row has the task's id, when it started, its AI model, effort
+    level, agent and who started it, each number feature, for each text feature the hash of the text whose
+    vector the model read, and what the task took: seconds, tokens, dollars and whether it was a direct answer.
+    A number or a text the task has none of is empty. It never holds a prompt or any other text, nor a vector.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    model_settings = settings(predictor)
+    learned = _learned_from(tasks, rows, model_settings)
+    found = sorted(
+        ((task, row, made) for task, row, made in zip(tasks, rows, texts) if task.id in learned),
+        key=lambda one: (one[0].started_at, one[0].id),
+    )
+    chosen = chosen_features(predictor)
+    numbers = list(dict.fromkeys(name for _, row, _ in found for name in row.numbers))
+    columns = {
+        "task_id": pa.array([task.id for task, _, _ in found], pa.string()),
+        "started_at": pa.array([task.started_at for task, _, _ in found], pa.float64()),
+        **{
+            name: pa.array([str(getattr(row, name)) for _, row, _ in found], pa.string())
+            for name in ("model", "effort", "agent", "origin")
+        },
+        "number.prompt_chars": pa.array([row.prompt_chars for _, row, _ in found], pa.int64()),
+        **{
+            f"number.{name}": pa.array([row.numbers.get(name) for _, row, _ in found], pa.float64()) for name in numbers
+        },
+        **{
+            f"text_hash.{name}": pa.array([made.get(name) for _, _, made in found], pa.string())
+            for name in chosen
+            if features.is_text(name)
+        },
+        "seconds": pa.array([task.seconds for task, _, _ in found], pa.float64()),
+        "tokens": pa.array([task.tokens for task, _, _ in found], pa.int64()),
+        "usd": pa.array([task.usd for task, _, _ in found], pa.float64()),
+        "direct": pa.array([bool(task.direct) for task, _, _ in found], pa.bool_()),
+    }
+    meta = {"format": PREPARED_FORMAT, "features": chosen, "model_type": model_settings.get("type", "xgboost")}
+    table = pa.table(columns).replace_schema_metadata({b"yardstick": json.dumps(meta)})
+    sink = pa.BufferOutputStream()
+    pq.write_table(table, sink, compression="zstd")
+    return sink.getvalue().to_pybytes()
+
+
+def _learned_from(tasks: list[Task], rows: list, model_settings: dict) -> set[str]:
+    """The ids of the tasks a model learned from: the ones the built-in model picks, the number its "tasks" counts.
+    A model type from a plugin picks its own, so for one, every task it got that can be learned from."""
+    from . import model
+
+    if model_settings.get("type", "xgboost") == "xgboost":
+        return {task.id for task in model.learned_from(tasks, rows, model_settings)}
+    return {task.id for task in model.usable(tasks)}
 
 
 def outdated(predictor: Predictor, meta: dict | None = None) -> bool:
