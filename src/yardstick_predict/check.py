@@ -35,9 +35,9 @@ LEAST_SHARE = 0.2
 """When under 20% of an AI model's test tasks have a feature, its test can't show what the feature does."""
 SAMPLE_SHARE = 0.3
 SAMPLE_MOST = 500
-"""Before the check, LLM analysis reads only the newest 30% of the tasks, and at most 500. Each AI model is tested
-on its own newest 30% or so, so those are the tasks the test needs. The rest are read only when the person keeps
-LLM analysis after the check, and agrees to what it costs."""
+"""Before the check, LLM analysis reads only each AI model's newest 30% of tasks, and at most 500 in all. Each AI
+model is tested on its own newest 30% or so, so those are the tasks the test needs. The rest are read only when
+the person keeps LLM analysis after the check, and agrees to what it costs."""
 FORMAT = 1
 """The format of the file of remembered verdicts."""
 
@@ -155,12 +155,28 @@ def verdict(with_all: dict, without: dict, share: float | None) -> dict:
     return {"verdict": found, "worse_without": change, "share": None if share is None else round(share, 4)}
 
 
-def sample(asks: list) -> list:
-    """The tasks LLM analysis reads before the check: the newest 30%, and at most 500.
+def sample(asks: list, model_of: dict[str, str] | None = None) -> list:
+    """The tasks LLM analysis reads before the check: each AI model's newest 30%, and at most 500 in all.
 
-    `asks` are the tasks it would read, newest first, as pipeline.analysis_plan gives them.
+    The test forecasts each AI model's own newest tasks, so an AI model used mostly long ago gets its share too.
+    When 30% of each would pass 500 in all, each gets the same smaller share. `asks` are the tasks it would read,
+    newest first, as pipeline.analysis_plan gives them, and `model_of` says each task's AI model, by its id.
+    Without it, the tasks count as one AI model's.
     """
-    return asks[: min(math.ceil(len(asks) * SAMPLE_SHARE), SAMPLE_MOST)]
+    model_of = model_of or {}
+    by_model: dict[str, list[int]] = {}
+    for at, ask in enumerate(asks):
+        by_model.setdefault(model_of.get(getattr(ask, "id", ask), ""), []).append(at)
+    wanted = sum(math.ceil(len(found) * SAMPLE_SHARE) for found in by_model.values())
+    share = SAMPLE_SHARE * min(1.0, SAMPLE_MOST / wanted) if wanted else 0.0
+    keep = sorted(at for found in by_model.values() for at in found[: math.ceil(len(found) * share)])
+    return [asks[at] for at in keep][:SAMPLE_MOST]
+
+
+def sampled_too_little(result: Result) -> list[str]:
+    """The AI models whose test had LLM answers for some of its tasks, but too few to judge LLM analysis."""
+    found = (result.verdicts.get("llm") or {}).items()
+    return [model for model, said in found if said["verdict"] == NOT_ENOUGH and (said.get("share") or 0) > 0]
 
 
 def as_json(result: Result, predictor: str) -> dict:

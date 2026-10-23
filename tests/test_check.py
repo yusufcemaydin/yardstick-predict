@@ -207,6 +207,18 @@ def test_llm_analysis_reads_a_sample_first_the_newest_30_percent_and_at_most_500
     assert check.sample(list(range(3))) == [0] and check.sample([]) == []
 
 
+def test_each_ai_model_gets_its_own_newest_tasks_in_the_sample():
+    # Newest first: an AI model used lately, then one used mostly long ago.
+    model_of = {**{n: "lately" for n in range(0, 800)}, **{n: "long-ago" for n in range(800, 1_000)}}
+    picked = check.sample(list(range(1_000)), model_of)
+    assert len(picked) == 300 and picked == sorted(picked)
+    assert sum(model_of[n] == "long-ago" for n in picked) == 60  # 30% of its 200, though they're the oldest
+    assert picked[-60:] == list(range(800, 860))  # its newest
+    many = {n: ("lately" if n % 2 else "long-ago") for n in range(10_000)}
+    capped = check.sample(list(range(10_000)), many)
+    assert len(capped) == 500 and {sum(many[n] == m for n in capped) for m in ("lately", "long-ago")} == {250}
+
+
 def test_the_estimate_counts_the_check_as_a_step_of_its_own():
     tasks = synthetic(400)
     found = estimate.of(tasks, {"features": ["prompt", "context", "time"]}, 0, 0, 0, checked=2)

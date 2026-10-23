@@ -836,7 +836,8 @@ def cmd_create(args) -> int:
     if checking:
         from . import check
 
-        asks = check.sample(asks)  # the rest only once the check shows LLM analysis helps
+        # The rest only once the check shows LLM analysis helps.
+        asks = check.sample(asks, {task.id: task.model for task in found.new_tasks})
     if asks:
         for text in analysis_lines(len(asks), settings["llm"]):
             ui.line(text)
@@ -1085,6 +1086,12 @@ def show_check(result) -> None:
     untested = [model for model in result.models if not result.tasks_tested(model)]
     if untested:
         ui.note(f"Too few tasks to test: {', '.join(untested)}.")
+    short = check.sampled_too_little(result)
+    if short:
+        ui.note(
+            f"LLM analysis read only a sample of your tasks, too few to judge it for {', '.join(short)}. To judge "
+            "it fully, keep it, let it read the rest, then run: yardstick-predict check"
+        )
 
 
 def check_and_choose(predictor: Predictor, key: str) -> int | None:
