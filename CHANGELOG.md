@@ -10,6 +10,9 @@ Training uses exactly the features you choose. It trains one model, not one for 
 
 - A new feature, `time`, off by default: when each task started. Its `trend` option is the number of days since 1 January 2020, so the model can follow how your tasks change over the months. Its `clock` option is the hour of the day and the day of the week, in your computer's time zone. A forecast's task starts the moment you ask. It costs nothing and sends nothing anywhere. Choose it on the Features screen, or with `--features time`, `time:trend` or `time:clock`.
 - Your own features get when each task started, as `info.started_at`.
+- Before setup or a refresh goes ahead, it says about how long the rest will take, as a range such as "about 4 to 8 minutes", and how long LLM analysis, embedding and training each take. It also says how much disk space the dataset will take. With `--yes` it says so once and goes ahead. When training may need more than a quarter of your computer's memory, it says that too.
+- Every long step shows a progress bar: reading your records, LLM analysis, embedding and training. After a few seconds, each bar also says about how long is left. Reading and training used to show only a line saying they were working. A model type from a plugin still shows that line while it trains.
+- Releases are published on PyPI, the Python package index. From this release on, `uv tool install yardstick-predict` installs it, and `uv tool upgrade yardstick-predict` updates it. If you installed an earlier version from GitHub, run that install command once to switch. If you use the `llm` extra, install `'yardstick-predict[llm]'` instead.
 
 ### Changed
 
@@ -19,10 +22,6 @@ Training uses exactly the features you choose. It trains one model, not one for 
 - The test report no longer says, for each AI model, whether it uses the conversation and LLM analysis. Every AI model uses the features you chose.
 - On the Features screen, the end of the conversation is now called Context, after its `context` flag, and History is called Project history.
 - Once this version saves a predictor's settings, an older version can't use that predictor: it doesn't know the `conversation` feature.
-
-### Added
-
-- Releases are published on PyPI, the Python package index. From this release on, `uv tool install yardstick-predict` installs it, and `uv tool upgrade yardstick-predict` updates it. If you installed an earlier version from GitHub, run that install command once to switch. If you use the `llm` extra, install `'yardstick-predict[llm]'` instead.
 
 ## [0.3.0] - 2026-10-22
 

@@ -91,11 +91,40 @@ def _pick(copies: list[Task], source: str) -> Task:
     return same if same is not None and completeness(same) >= completeness(best) else best
 
 
-def scan(predictor: Predictor, now: float | None = None) -> Scan:
+@dataclass
+class _Bytes:
+    """How many bytes of record files have been read, for one progress bar over every archive.
+
+    It passes on a step only once another thousandth of the whole is read, so reading many small files isn't
+    slowed down by drawing the bar each time.
+    """
+
+    total: int
+    on_progress: Callable[[int, int], None] | None
+    done: int = 0
+    told: int = 0
+
+    def read(self, size: int) -> None:
+        self.done = min(self.done + size, self.total)
+        if self.done - self.told >= self.total / 1000 or self.done == self.total:
+            self.reach(self.done)
+
+    def reach(self, done: int) -> None:
+        self.done = self.told = min(done, self.total)
+        if self.on_progress is not None and self.total:
+            self.on_progress(self.done, self.total)
+
+
+def _sizes(files: dict[str, tuple[int, float]]) -> int:
+    return sum(size for size, _ in files.values())
+
+
+def scan(predictor: Predictor, now: float | None = None, on_progress: Callable[[int, int], None] | None = None) -> Scan:
     """Find tasks the dataset doesn't have yet, and stored tasks whose records changed.
 
     Only changed record files are read, each with its family, such as a session with its copies and helpers.
-    A dataset read by an older version of the reader has every record file read again.
+    A dataset read by an older version of the reader has every record file read again. `on_progress` is told
+    how many bytes of them are read, and how many there are.
     """
     now = time.time() if now is None else now
     stored = _stored(predictor)
@@ -107,6 +136,8 @@ def scan(predictor: Predictor, now: float | None = None) -> Scan:
     held: set[str] = set()
     reread: set[str] = set()
     sessions: dict[str, set[str]] = {}
+    # Every archive's changed files are found first, so the progress bar knows how much there is to read.
+    todo: list[tuple[dict, dict[str, tuple[int, float]]]] = []
     for archive in predictor.config["archives"]:
         current = record_files(archive)
         changed = {path for path, state in current.items() if everything or known_files.get(path) != state}
@@ -116,17 +147,23 @@ def scan(predictor: Predictor, now: float | None = None) -> Scan:
             touched = {family[path] for path in changed}
             changed = {path for path in current if family[path] in touched}
         result.per_archive[archive["name"]] = 0
-        if not changed:
-            continue
-        reading = read_records(archive, {path: current[path] for path in changed}, now)
+        if changed:
+            todo.append((archive, {path: current[path] for path in changed}))
+    progress = _Bytes(sum(_sizes(files) for _, files in todo), on_progress)
+    progress.reach(0)
+    for archive, files in todo:
+        start = progress.done
+        reading = read_records(archive, files, now, progress.read)
+        # The files the reader passed over count as read too, such as a helper's whose session is gone.
+        progress.reach(start + _sizes(files))
         for task in reading.tasks:
             copies.setdefault(task.id, []).append(task)
         held |= reading.held
-        reread |= changed
+        reread |= set(files)
         sessions[archive["name"]] = reading.sessions
         # A file that may still be in use, such as one with a task that may still be running, is read again next time.
-        settled = [path for path in changed if now - current[path][1] >= SETTLE_SECONDS]
-        result.files.update({path: current[path] for path in settled if path not in reading.open_files})
+        settled = [path for path in files if now - files[path][1] >= SETTLE_SECONDS]
+        result.files.update({path: files[path] for path in settled if path not in reading.open_files})
     before = _stored_values(predictor, [task_id for task_id in copies if task_id in stored])
     for task_id, found in copies.items():
         kept = stored.get(task_id)
@@ -193,15 +230,26 @@ def recent_tasks(predictor: Predictor, transcript: str) -> list[Task]:
     return []
 
 
-def read_all(archives: list[dict], now: float | None = None) -> Scan:
-    """Read every task in the archives, for a new predictor."""
+def read_all(
+    archives: list[dict], now: float | None = None, on_progress: Callable[[int, int], None] | None = None
+) -> Scan:
+    """Read every task in the archives, for a new predictor.
+
+    `on_progress` is told how many bytes of record files are read, and how many there are.
+    """
     now = time.time() if now is None else now
     result = Scan(new_tasks=[], reader=READER_VERSION)
     # A task can be in more than one archive, such as in a backup. Only its most complete copy counts.
     copies: dict[str, list[Task]] = {}
-    for archive in archives:
-        current = record_files(archive)
-        reading = read_records(archive, current, now)
+    # Every archive is listed first, so the progress bar knows how much there is to read.
+    listed = [(archive, record_files(archive)) for archive in archives]
+    progress = _Bytes(sum(_sizes(current) for _, current in listed), on_progress)
+    progress.reach(0)
+    for archive, current in listed:
+        start = progress.done
+        reading = read_records(archive, current, now, progress.read)
+        # The files the reader passed over count as read too, such as a helper's whose session is gone.
+        progress.reach(start + _sizes(current))
         for task in reading.tasks:
             copies.setdefault(task.id, []).append(task)
         result.per_archive[archive["name"]] = 0
@@ -352,6 +400,8 @@ def run_analysis(
         if on_progress:
             on_progress(done, len(asks))
 
+    if on_progress and asks:
+        on_progress(0, len(asks))  # the bar starts with the step, so it can tell how fast it goes
     problem = llm.analyze(asks, predictor.config["llm"], fields, on_batch=save).problem
     return answered, problem  # counted only once every answer is in
 
@@ -454,6 +504,8 @@ def run_embeddings(
         count_of = {text: count for (_, _, text), count in zip(plan.items, plan.counts)}
     counts = [count_of.get(text) or embeddings.most_tokens(text) for text in texts]
     done = 0
+    if on_progress and texts:
+        on_progress(0, len(texts))  # the bar starts with the step, so it can tell how fast it goes
     for positions, vectors in embeddings.embed(texts, model, key, counts, on_wait):
         save({texts[position]: vector for position, vector in zip(positions, vectors)})
         done += len(positions)
@@ -549,17 +601,25 @@ def features_without_values(predictor: Predictor, rows: list) -> list[str]:
     ]
 
 
-def train(predictor: Predictor):
-    """Train the predictor's model on its whole dataset and save it."""
+def train(predictor: Predictor, on_progress: Callable[[int, int], None] | None = None):
+    """Train the predictor's model on its whole dataset and save it.
+
+    The built-in model tells `on_progress` how many of the models it fits are done, and how many there are. A
+    model type from a plugin trains as it always has, without saying.
+    """
     load_plugins(predictor)
     tasks = predictor.tasks()
     if predictor.config.get("max_tasks"):
         # The same newest tasks that were embedded, oldest first.
         tasks = learnable(tasks, predictor.config["max_tasks"])[::-1]
     model_settings = settings(predictor)
-    trainer, _ = model_types.get(model_settings.get("type", "xgboost"))
+    kind = model_settings.get("type", "xgboost")
+    trainer, _ = model_types.get(kind)
     rows = feature_rows(predictor, tasks)
-    model = trainer(tasks, rows, model_settings)
+    if kind == "xgboost" and on_progress is not None:
+        model = trainer(tasks, rows, model_settings, on_progress=on_progress)
+    else:
+        model = trainer(tasks, rows, model_settings)
     if isinstance(getattr(model, "meta", None), dict):
         model.meta["features_without_values"] = features_without_values(predictor, rows)
     with _model_lock(predictor):

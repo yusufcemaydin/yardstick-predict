@@ -331,6 +331,23 @@ def analysis_lines(asks: int, how: dict) -> list[str]:
     return [f"LLM analysis: {asks:,} tasks with {model}, {price}."]
 
 
+def say_estimate(tasks: list, config: dict, plan, asks: list, new_tasks: list | None = None, dataset: int = 0) -> None:
+    """One line on how long the rest takes, what it's made of and the room the dataset takes, before the
+    question to go ahead. Then a note on memory, only when training may use a lot of this computer's.
+
+    `tasks` are all the predictor's tasks once the new ones are in, `config` its settings, `plan` what goes to
+    Voyage and `asks` the tasks LLM analysis reads. `new_tasks` are the ones the dataset doesn't have yet, all of
+    `tasks` by default, and `dataset` is how many bytes it takes now.
+    """
+    from . import estimate
+
+    found = estimate.of(tasks, config, plan.cost.tokens, len(plan.items), len(asks), new_tasks, dataset)
+    ui.line(estimate.line(found))
+    memory = estimate.memory_note(found, estimate.total_memory())
+    if memory:
+        ui.note(memory)
+
+
 def analyze_with_progress(predictor: Predictor, asks: list) -> None:
     """Run LLM analysis with a progress bar. When it can't run, training goes on without it."""
     from .pipeline import run_analysis
@@ -710,7 +727,7 @@ def cmd_create(args) -> int:
         train,
     )
 
-    found = read_all(archives)
+    found = read_all(archives, on_progress=lambda done, total: ui.progress(done, total, "bytes"))
     counts = [(archive["name"], found.per_archive.get(archive["name"], 0)) for archive in archives]
     total = sum(count for _, count in counts)
     if len(counts) == 1:
@@ -788,6 +805,7 @@ def cmd_create(args) -> int:
             ui.line(text)
         if "description" in features.options(settings, "llm"):
             ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
+    say_estimate(found.new_tasks, {**settings, "model": model_settings, "max_tasks": limit}, plan, asks)
     question = (
         "Analyze and embed them, and train the predictor now?" if asks else "Embed them and train the predictor now?"
     )
@@ -894,9 +912,10 @@ def train_and_report(predictor: Predictor, train):
     from .model import NotEnoughData
 
     ui.heading("Training")
+    # The built-in model's bar takes this line's place. A model type from a plugin keeps it.
     ui.working("Training and testing. This takes a minute")
     try:
-        model = train(predictor)
+        model = train(predictor, lambda done, total: ui.progress(done, total, "steps"))
     except NotEnoughData as error:
         ui.error(str(error))
         return None
@@ -970,7 +989,7 @@ def _refresh(args, predictor: Predictor) -> int:
     ui.heading(predictor.name)
     ui.note(f"Last updated {ago(predictor.config.get('refreshed_at'))}.")
     ui.working("Looking for new tasks")
-    found = scan(predictor)
+    found = scan(predictor, on_progress=lambda done, total: ui.progress(done, total, "bytes"))
     counts = [f"{source} {count:,}" for source, count in found.per_archive.items() if count]
     ui.ok(f"Found {len(found.new_tasks):,} new tasks" + (f": {ui.join(counts)}" if counts else "."))
     if getattr(found, "reader", None) is not None and predictor.config.get("reader") != found.reader:
@@ -1029,6 +1048,9 @@ def _refresh(args, predictor: Predictor) -> int:
     if asks:
         for text in analysis_lines(len(asks), predictor.config["llm"]):
             ui.line(text)
+    dataset = predictor.dir / "dataset.sqlite"
+    size = dataset.stat().st_size if dataset.is_file() else 0
+    say_estimate(everything, predictor.config, plan, asks, found.new_tasks, size)
     if can_ask:
         if not ui.ask("Refresh now? This adds the new tasks, embeds them and retrains.", not ask_first):
             ui.note("Keeping the current model.")

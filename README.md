@@ -59,7 +59,7 @@ yardstick-predict create --express
 yardstick-predict
 ```
 
-It finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Then it trains and shows how well it forecast your newest tasks.
+It finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
 **Then, before you start a task, ask what it will take:**
 
@@ -69,7 +69,7 @@ yardstick-predict predict "Add a login page with tests"
 
 It shows the expected time, tokens and cost on each AI model your predictor covers, at each effort level you often use it at. `--model` and `--effort` name them yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
 
-Run `yardstick-predict` every week or so. It tells you how many new tasks it found and what embedding them costs, and asks before it refreshes.
+Run `yardstick-predict` every week or so. It tells you how many new tasks it found, what embedding them costs and about how long a refresh takes, and asks before it refreshes.
 
 ## Features the model learns from
 

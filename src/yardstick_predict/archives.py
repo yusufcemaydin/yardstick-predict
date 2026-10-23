@@ -14,7 +14,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -231,16 +231,22 @@ def read_archive(archive: dict, only: set[str] | None = None, now: float | None 
     return read_records(archive, files, now).tasks
 
 
-def read_records(archive: dict, files: dict[str, tuple[int, float]], now: float | None = None) -> Reading:
+def read_records(
+    archive: dict,
+    files: dict[str, tuple[int, float]],
+    now: float | None = None,
+    on_read: Callable[[int], None] | None = None,
+) -> Reading:
     """Read the tasks in some of an archive's record files, listed with their sizes and modification times.
 
-    The list is the one walk through the archive's folders. Nothing else is looked up on disk.
+    The list is the one walk through the archive's folders. Nothing else is looked up on disk. `on_read` is
+    told the listed size of the record files as each is read, so a long read can show how far it has got.
     """
     now = time.time() if now is None else now
     if archive["format"] == "claude-code":
-        return _read_claude_code(archive, files, now)
+        return _read_claude_code(archive, files, now, on_read)
     if archive["format"] == "codex":
-        return _read_codex(archive, files, now)
+        return _read_codex(archive, files, now, on_read)
     raise ValueError(f"Unknown archive format {archive['format']!r}. Use one of: {', '.join(FORMATS)}.")
 
 
@@ -837,7 +843,9 @@ def _claude_part(turn: _Turn, owned: dict[tuple, int]) -> _Part:
     return part
 
 
-def _read_claude_code(archive: dict, files: dict[str, tuple[int, float]], now: float) -> Reading:
+def _read_claude_code(
+    archive: dict, files: dict[str, tuple[int, float]], now: float, on_read: Callable[[int], None] | None = None
+) -> Reading:
     helpers: dict[str, list[str]] = {}
     sessions = []
     for path in files:
@@ -858,6 +866,8 @@ def _read_claude_code(archive: dict, files: dict[str, tuple[int, float]], now: f
         reading.held |= part.held
         reading.open_files |= part.open_files
         reading.sessions |= part.sessions
+        if on_read is not None:
+            on_read(sum(files[path][0] + sum(files[helper][0] for helper in helpers.get(path, [])) for path in paths))
     reading.tasks = sorted(found.values(), key=lambda t: (t.started_at, t.id))
     return reading
 
@@ -1163,7 +1173,9 @@ class _CodexThread:
     """Whether its record was written to too recently to be sure it's done."""
 
 
-def _read_codex(archive: dict, files: dict[str, tuple[int, float]], now: float) -> Reading:
+def _read_codex(
+    archive: dict, files: dict[str, tuple[int, float]], now: float, on_read: Callable[[int], None] | None = None
+) -> Reading:
     tasks: dict[str, Task] = {}
     threads: list[_CodexThread] = []
     unfinished: dict[str, str] = {}  # each main turn still running: its thread
@@ -1172,7 +1184,9 @@ def _read_codex(archive: dict, files: dict[str, tuple[int, float]], now: float) 
         try:
             found, thread, still = _read_codex_file(Path(path), archive["name"], now, files[path][1])
         except OSError:
-            continue  # removed since the folder was listed
+            found, thread, still = [], None, set()  # removed since the folder was listed
+        if on_read is not None:
+            on_read(files[path][0])
         if thread is not None:
             threads.append(thread)
             if thread.parent is None:

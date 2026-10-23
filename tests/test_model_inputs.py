@@ -128,7 +128,7 @@ def test_a_task_llm_analysis_couldnt_read_is_forecast_by_the_model_without_it(tm
         for t, r in zip(tasks, rows_for(tasks))
     ]
     tested, real = [], M.test
-    monkeypatch.setattr(M, "test", lambda *args: tested.append(args[-1]) or real(*args))
+    monkeypatch.setattr(M, "test", lambda *args, **kwargs: tested.append(args[-1]) or real(*args, **kwargs))
     model = M.train(tasks, rows)
     # One model with LLM analysis and one without it, each with its own test, for every AI model.
     assert isinstance(model, M.WithoutLLM) and tested == [True, False]
@@ -150,7 +150,7 @@ def test_a_task_llm_analysis_couldnt_read_is_forecast_by_the_model_without_it(tm
 def test_training_without_llm_analysis_tests_and_trains_one_model(monkeypatch):
     tasks = synthetic(200)
     tested, real = [], M.test
-    monkeypatch.setattr(M, "test", lambda *args: tested.append(args[-1]) or real(*args))
+    monkeypatch.setattr(M, "test", lambda *args, **kwargs: tested.append(args[-1]) or real(*args, **kwargs))
     model = M.train(tasks, with_context(tasks), ONE_WINDOW)
     assert isinstance(model, M.Model) and tested == [True]
     assert "conversation" not in model.meta["report"]["models"]["claude-opus-5-5"]

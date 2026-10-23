@@ -827,9 +827,9 @@ def test_a_touched_record_file_is_read_again_only_once(capsys, monkeypatch, few,
     reads = []
     real = pipeline.read_records
 
-    def read(archive, files, now=None):
+    def read(archive, files, now=None, on_read=None):
         reads.append(len(files))
-        return real(archive, files, now)
+        return real(archive, files, now, on_read)
 
     monkeypatch.setattr(pipeline, "read_records", read)
     for _ in range(2):

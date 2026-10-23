@@ -48,6 +48,7 @@ import tempfile
 import time
 import warnings
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -1215,11 +1216,18 @@ def _load_one(folder: Path) -> Model:
 # Training -----------------------------------------------------------------------------------------------
 
 
-def train(tasks: list[Task], rows: list[Features], settings: dict | None = None) -> Model | WithoutLLM:
+def train(
+    tasks: list[Task],
+    rows: list[Features],
+    settings: dict | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> Model | WithoutLLM:
     """Test on the newest tasks, then train the final model on all of them. `rows` match `tasks` one to one.
 
     The model reads every feature the rows have. When LLM analysis read some of the tasks, the same model is
     also tested and trained without it, for a task LLM analysis couldn't read, and the two come as a WithoutLLM.
+    `on_progress` is told how many of the models training fits are done, and how many there are: a trial
+    for each test window and the final model, as fit_sizes counts them.
     """
     settings = settings_for(settings)
     learnable = {t.id for t in usable(tasks)}
@@ -1236,23 +1244,44 @@ def train(tasks: list[Task], rows: list[Features], settings: dict | None = None)
             f"Training needs at least {MIN_TASKS} tasks with a known value for the "
             f"{' or '.join(settings['heads'])} head. This dataset has {known}."
         )
+    read_by_llm = any(_read_by_llm(r) for r in eligible_rows)
+    done, total = 0, len(fit_sizes(eligible, settings)) * (2 if read_by_llm else 1)
+
+    def fitted() -> None:
+        nonlocal done
+        done += 1
+        if on_progress is not None:
+            on_progress(min(done, total), total)
+
+    if on_progress is not None:
+        on_progress(0, total)
     # The test windows and the final models share the similar-task numbers. With the conversation feature,
     # they're worked out with the prompt and its context side by side too.
     similar = _similar_features(eligible, _prepared(eligible_rows), settings["half_life_days"])
-    model = _tested(eligible, eligible_rows, settings, similar)
-    if not any(_read_by_llm(r) for r in eligible_rows):
+    model = _tested(eligible, eligible_rows, settings, similar, on_fit=fitted)
+    if not read_by_llm:
         return model
     # A task that LLM analysis couldn't read, as when its AI model couldn't be reached, is forecast by the same
     # model without it. That one is tested too, so it gives forecasts only where it passed.
-    return WithoutLLM(model, _tested(eligible, eligible_rows, settings, similar, llm=False))
+    return WithoutLLM(model, _tested(eligible, eligible_rows, settings, similar, llm=False, on_fit=fitted))
 
 
 def _tested(
-    tasks: list[Task], rows: list[Features], settings: dict, similar: dict[str, np.ndarray], llm: bool = True
+    tasks: list[Task],
+    rows: list[Features],
+    settings: dict,
+    similar: dict[str, np.ndarray],
+    llm: bool = True,
+    on_fit: Callable[[], None] | None = None,
 ) -> Model:
-    """The final model, trained on all the tasks, with the verdicts of its test on the newest ones."""
-    report = test(tasks, rows, settings, similar, llm)
+    """The final model, trained on all the tasks, with the verdicts of its test on the newest ones.
+
+    `on_fit` is called each time a model is fitted: each trial of the test, then the final model.
+    """
+    report = test(tasks, rows, settings, similar, llm, on_trial=on_fit)
     model = fit(tasks, rows, settings, similar, llm)
+    if on_fit is not None:
+        on_fit()
     served = {
         m: {"served": r["served"], "reason": r["reason"], "heads": r["heads"]} for m, r in report["models"].items()
     }
@@ -1702,19 +1731,52 @@ def _test_windows(tasks: list[Task], settings: dict) -> list[tuple[str, list[int
     return sorted(found, key=lambda window: (window[1][0], window[0]))
 
 
+def _runs(tasks: list[Task], windows: list[tuple[str, list[int]]]) -> list[tuple[list[int], list[int]]]:
+    """Each test window that runs, with the positions of the tasks known when it opens: the ones that had finished.
+
+    A task that started earlier but was still running then hadn't shown its outcome yet. A window with fewer
+    than MIN_TASKS known doesn't run.
+    """
+    finished = finish_times(tasks)
+    found = []
+    for _, part in windows:
+        opens = part[0]
+        known = [i for i in range(opens) if finished[i] <= tasks[opens].started_at]
+        if len(known) >= MIN_TASKS:
+            found.append((part, known))
+    return found
+
+
+def fit_sizes(tasks: list[Task], settings: dict | None = None) -> list[int]:
+    """How many tasks each model that training fits learns from, in order: a trial for each test window that
+    runs, then the final model, on every task. Windows that open with the same tasks known share one trial.
+
+    With LLM analysis, training fits each of them twice, the second time without it. The progress bar counts
+    them, and the estimate before setup and refresh adds them up.
+    """
+    settings = settings_for(settings)
+    tasks = usable(tasks)
+    sizes: list[int] = []
+    for _, known in _runs(tasks, _test_windows(tasks, settings)):
+        if not sizes or sizes[-1] != len(known):
+            sizes.append(len(known))
+    return [*sizes, len(tasks)]
+
+
 def test(
     tasks: list[Task],
     rows: list[Features],
     settings: dict,
     similar: dict[str, np.ndarray] | None = None,
     llm: bool = True,
+    on_trial: Callable[[], None] | None = None,
 ) -> dict:
     """Forecast each AI model's newest tasks window by window, each from the tasks before it, and judge each model.
 
-    A window learns from the tasks on every AI model that had finished when it opens. A task that started
-    earlier but was still running then hadn't shown its outcome yet. Only the window's own model's tasks are
-    forecast in it. `similar` is what _similar_features gives for all the tasks, when it was worked out before.
-    Without `llm`, the model tested leaves out what LLM analysis said, as fit does.
+    A window learns from the tasks on every AI model that had finished when it opens. Only the window's own
+    model's tasks are forecast in it. `similar` is what _similar_features gives for all the tasks, when it was
+    worked out before. Without `llm`, the model tested leaves out what LLM analysis said, as fit does.
+    `on_trial` is called each time a trial model is fitted.
     """
     settings = settings_for(settings)
     least = min_tasks_to_test(settings)
@@ -1730,14 +1792,9 @@ def test(
         }
     if similar is None:
         similar = _similar_features(tasks, _prepared(rows), settings["half_life_days"])
-    finished = finish_times(tasks)
     scored, learned_from, tested_on = [], [], 0
     last: tuple[int, Model, list[Task]] | None = None
-    for _, part in windows:
-        opens = part[0]
-        known = [i for i in range(opens) if finished[i] <= tasks[opens].started_at]
-        if len(known) < MIN_TASKS:
-            continue
+    for part, known in _runs(tasks, windows):
         # Windows of two AI models that open with the same tasks known share one trial. The tasks known only
         # grow as windows open later, so the same number of them means the same tasks.
         if last is None or last[0] != len(known):
@@ -1745,6 +1802,8 @@ def test(
             # A task's similar tasks had all finished before it started, so before this window opened too.
             sliced = {name: found[known] for name, found in similar.items()}
             last = (len(known), fit(train_tasks, train_rows, settings, sliced, llm), train_tasks)
+            if on_trial is not None:
+                on_trial()
         _, trial, train_tasks = last
         scored.append(_score_window(trial, train_tasks, [tasks[i] for i in part], [rows[i] for i in part]))
         learned_from.append(len(known))
