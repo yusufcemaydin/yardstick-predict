@@ -8,7 +8,7 @@ import jsonschema
 import numpy as np
 import pytest
 from conftest import KEY, fake_vector
-from test_model import rows_for, synthetic
+from test_model import ONE_WINDOW, rows_for, synthetic
 
 from yardstick_predict import features, pipeline
 from yardstick_predict import model as M
@@ -130,15 +130,21 @@ def test_every_error_code_is_in_the_answer_schema_and_the_format_doc():
     assert all(f"| `{code}` |" in doc for code in ERRORS)
 
 
+@pytest.fixture(scope="module")
+def trained_model():
+    """A model trained once. The tests only forecast with it, so they can share it."""
+    tasks = synthetic(900)
+    vectors = {"prompt": {t.id: np.array(fake_vector(t.prompt), dtype=np.float32) for t in tasks}}
+    return M.train(tasks, rows_for(tasks, vectors), ONE_WINDOW)
+
+
 @pytest.fixture
-def trained(voyage, monkeypatch):
+def trained(voyage, monkeypatch, trained_model):
     monkeypatch.setenv("VOYAGE_API_KEY", KEY)
     predictor = Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
     predictor.config["features"] = ["prompt"]
     predictor.save_config()
-    tasks = synthetic(900)
-    vectors = {"prompt": {t.id: np.array(fake_vector(t.prompt), dtype=np.float32) for t in tasks}}
-    M.train(tasks, rows_for(tasks, vectors)).save(predictor.model_dir)
+    trained_model.save(predictor.model_dir)
     return predictor
 
 
@@ -260,13 +266,13 @@ def test_a_forecast_embeds_only_the_texts_the_model_can_use(voyage, monkeypatch)
     predictor = Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
     predictor.config["features"] = ["prompt", "context", "skills"]
     predictor.save_config()
-    tasks = synthetic(900)
+    tasks = synthetic(300)
     few = tasks[: M.MIN_NEIGHBORS - 1]  # too few past contexts to compare with, and no task used a skill
     vectors = {
         "prompt": {t.id: np.array(fake_vector(t.prompt), dtype=np.float32) for t in tasks},
         "context": {t.id: np.array(fake_vector("we talked before"), dtype=np.float32) for t in few},
     }
-    M.train(tasks, rows_for(tasks, vectors)).save(predictor.model_dir)
+    M.train(tasks, rows_for(tasks, vectors), ONE_WINDOW).save(predictor.model_dir)
     found, _, _ = parse(request(context="Earlier we added a signup page.", skills=["tdd"]))
     forecasts = answer(predictor, found)["forecasts"]
     assert [r["input"] for r in voyage.requests] == [["Add a login page"]]  # only the prompt goes to Voyage

@@ -17,6 +17,8 @@ from yardstick_predict import pipeline
 from yardstick_predict.archives import Task
 
 START = 1_780_000_000.0
+ONE_WINDOW = {"test_windows": 1}
+"""Test each AI model in one window, not three, so training is quicker. For tests that don't check the test itself."""
 
 
 def task(i: int, model: str, prompt: str, seconds: float, tokens: int, direct: bool, usd: float | None = 0.5) -> Task:
@@ -174,7 +176,7 @@ def test_saving_and_loading_gives_the_same_forecasts(tmp_path):
     tasks = synthetic(400)
     rng = np.random.default_rng(1)
     vectors = {"prompt": {t.id: rng.normal(size=8).astype(np.float32) for t in tasks}}
-    model = M.train(tasks, rows_for(tasks, vectors))
+    model = M.train(tasks, rows_for(tasks, vectors), ONE_WINDOW)
     assert model.meta["text_fields"] == ["prompt"]
     rows = rows_for(tasks[:20], vectors)
     before = model.forecast(rows)
@@ -294,7 +296,7 @@ def test_an_added_text_feature_helps_when_it_carries_the_signal():
 def test_number_features_such_as_benchmarks_reach_the_trees():
     tasks = synthetic(300)
     numbers = {"claude-opus-5-5": {"benchmark_price_input": 0.7}, "gpt-6.1-sol": {"benchmark_price_input": 0.4}}
-    model = M.train(tasks, rows_for(tasks, numbers=numbers))
+    model = M.train(tasks, rows_for(tasks, numbers=numbers), ONE_WINDOW)
     assert model.meta["numbers"] == ["benchmark_price_input"]
     assert model.matrix(rows_for(tasks[:2], numbers=numbers)).shape[1] == len(M.CATEGORIES) + 2
 
@@ -313,7 +315,7 @@ def test_number_features_such_as_benchmarks_reach_the_trees():
 )
 def test_every_advanced_setting_trains_and_forecasts(settings):
     tasks = synthetic(300)
-    model = M.train(tasks, rows_for(tasks), settings)
+    model = M.train(tasks, rows_for(tasks), {**ONE_WINDOW, **settings})
     result = model.forecast(rows_for(tasks[:5]))[0]
     heads = settings.get("heads", list(M.TARGETS))
     for target in M.TARGETS:
@@ -353,7 +355,7 @@ def test_a_short_half_life_trains_with_an_ai_model_used_years_ago():
     for task in tasks[:80:2]:
         task.model, task.started_at = "claude-old", task.started_at - 3 * 365 * 86400
     tasks.sort(key=lambda t: t.started_at)
-    model = M.train(tasks, rows_for(tasks), {"half_life_days": 0.5})  # older tasks count half after 12 hours
+    model = M.train(tasks, rows_for(tasks), {**ONE_WINDOW, "half_life_days": 0.5})  # a task counts half after 12 hours
     assert model.forecast(rows_for(tasks[-1:]))[0]["seconds"]["expected"] > 0
 
 

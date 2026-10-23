@@ -148,7 +148,7 @@ class _Handler(BaseHTTPRequestHandler):
 def voyage(monkeypatch):
     """A stand-in for Voyage's embeddings API, running on this computer only, with a clock waits move at once."""
     server = FakeVoyage()
-    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     monkeypatch.setenv("VOYAGE_API_BASE", server.base)
     from yardstick_predict import embeddings

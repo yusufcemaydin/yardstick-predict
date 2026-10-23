@@ -17,12 +17,15 @@ from yardstick_predict.store import Predictor, default_name, predictor_names
 
 START = 1_780_000_000.0
 SCHEMAS = Path(__file__).resolve().parent.parent / "schemas"
+ONE_WINDOW = ("--test-windows", "1")
+"""Test each AI model in one window, not three, so training is quicker. For tests that don't check the test itself."""
 
 
 @pytest.fixture
 def records(tmp_path):
+    """180 Claude Code tasks on two AI models at two effort levels: enough for each model's own test."""
     root = tmp_path / "claude-projects"
-    history(root, tasks=420, start=START, models=("claude-opus-5-5", "claude-sonnet-5-5"), efforts=("high", "max"))
+    history(root, tasks=180, start=START, models=("claude-opus-5-5", "claude-sonnet-5-5"), efforts=("high", "max"))
     return root
 
 
@@ -43,7 +46,7 @@ def run(capsys, *args, stdin: str | None = None, monkeypatch=None) -> tuple[int,
 def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeypatch):
     code, out = run(capsys, "create", "--express", "--archive", f"claude-code={records}")
     assert code == 0, out
-    assert "420 tasks" in out
+    assert "180 tasks" in out
     assert re.search(r"claude-opus-5-5\s+forecasts on", out)
     assert "Forecasts are on for claude-opus-5-5" in out and 'yardstick-predict predict "Add a login page' in out
     assert default_name() == "default"  # the first predictor is the default
@@ -51,7 +54,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     assert predictor.config["features"] == ["prompt", "context"]
     assert predictor.config["embedding"]["model"] == "voyage-4"
     assert predictor.config["model"]["type"] == "xgboost"
-    assert len(predictor.embedded("prompt")) == 420
+    assert len(predictor.embedded("prompt")) == 180
 
     code, out = run(
         capsys, "predict", "--model", "claude-opus-5-5", "--model", "gpt-unknown", "--prompt", "fix the api"
@@ -81,7 +84,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
 
     code, out = run(capsys, "status", "--json")
     status = json.loads(out)["predictors"][0]
-    assert status["tasks"] == 420 and status["features"] == ["prompt", "context"]
+    assert status["tasks"] == 180 and status["features"] == ["prompt", "context"]
     assert status["report"]["windows"] == 6  # three for each of the two AI models
 
 
@@ -150,7 +153,7 @@ def test_a_program_must_agree_to_the_cost(capsys, records, ready):
     assert predictor_names() == []  # nothing is created before the yes
     assert len(ready.requests) == 1  # only the tiny key check was sent
 
-    code, out = run(capsys, "create", "--archive", f"claude-code={records}", "--yes")
+    code, out = run(capsys, "create", "--archive", f"claude-code={records}", "--yes", *ONE_WINDOW)
     assert code == 0, out
     stored = b"".join(p.read_bytes() for p in Predictor("default").dir.parent.parent.rglob("*") if p.is_file())
     assert KEY.encode() not in stored
@@ -328,7 +331,7 @@ def test_commands_use_the_default_predictor_you_choose(capsys):
 
 
 def test_predict_reads_a_json_request_and_never_asks(capsys, records, ready, monkeypatch):
-    run(capsys, "create", "--express", "--archive", f"claude-code={records}")
+    run(capsys, "create", "--express", "--archive", f"claude-code={records}", *ONE_WINDOW)
     request = {
         "version": 1,
         "distribution": True,
@@ -360,7 +363,7 @@ def test_predict_errors_come_back_in_the_format(capsys, monkeypatch):
 
 
 def test_refresh_adds_only_new_tasks(capsys, records, ready):
-    run(capsys, "create", "--express", "--archive", f"claude-code={records}")
+    run(capsys, "create", "--express", "--archive", f"claude-code={records}", *ONE_WINDOW)
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "Nothing new" in out
 
@@ -373,8 +376,8 @@ def test_refresh_adds_only_new_tasks(capsys, records, ready):
     assert code == 2 and "--yes" in out
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "Found 3 new tasks" in out
-    assert Predictor("default").count_tasks() == 423
-    assert len(Predictor("default").embedded("prompt")) == 423
+    assert Predictor("default").count_tasks() == 183
+    assert len(Predictor("default").embedded("prompt")) == 183
 
 
 def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, records, ready, monkeypatch):
@@ -398,7 +401,7 @@ def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, r
     monkeypatch.setitem(model_types._TYPES, "stub", (stub_train, lambda folder: None))
     code, out = run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--model-type", "stub")
     assert code == 0, out
-    assert trained == [420]
+    assert trained == [180]
 
     session = ClaudeSession(records, "brand-new", START + 90 * 86400)
     for n in range(3):
@@ -408,16 +411,16 @@ def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, r
     stop["now"] = True
     code, out = run(capsys, "refresh", "--yes")
     assert code == 130
-    assert Predictor("default").count_tasks() == 423  # the new tasks were saved, but the model is the old one
+    assert Predictor("default").count_tasks() == 183  # the new tasks were saved, but the model is the old one
 
     stop["now"] = False
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0, out
     assert "Nothing new" not in out and "Training didn't finish last time" in out
-    assert trained == [420, 423]
+    assert trained == [180, 183]
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "Nothing new" in out
-    assert trained == [420, 423]
+    assert trained == [180, 183]
 
 
 def test_a_task_that_finishes_after_it_was_saved_as_stopped_is_embedded(tmp_path, capsys, ready, monkeypatch):
@@ -446,7 +449,7 @@ def test_a_task_that_finishes_after_it_was_saved_as_stopped_is_embedded(tmp_path
 
 
 def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, ready, monkeypatch):
-    monkeypatch.setattr(embeddings, "MAX_TEXTS_PER_REQUEST", 100)
+    monkeypatch.setattr(embeddings, "MAX_TEXTS_PER_REQUEST", 50)
     calls = {"n": 0}
     real_post = embeddings._post
 
@@ -457,18 +460,18 @@ def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, r
         return real_post(body, key, timeout)
 
     monkeypatch.setattr(embeddings, "_post", flaky)
-    assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", ""]) == 1
+    assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "", *ONE_WINDOW]) == 1
     error = capsys.readouterr().err  # a problem that stops the command goes to the error stream
     assert "payment method" in error and "Run yardstick-predict refresh --predictor default to finish" in error
     predictor = Predictor("default")
-    # The two requests that got through held 200 texts. A text several tasks share gives each its vector.
-    assert 200 <= len(predictor.embedded("prompt")) < 420
+    # The two requests that got through held 100 texts. A text several tasks share gives each its vector.
+    assert 100 <= len(predictor.embedded("prompt")) < 180
     assert embeddings.account(KEY)["free_tokens"] == "used"
 
     monkeypatch.setattr(embeddings, "_post", real_post)
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0, out
-    assert len(predictor.embedded("prompt")) == 420
+    assert len(predictor.embedded("prompt")) == 180
 
 
 # LLM analysis, and a model made by an older version -----------------------------------------------------
@@ -513,20 +516,21 @@ def test_llm_analysis_reads_each_task_once_and_its_descriptions_are_embedded(cap
         "context,llm",
         "--llm-provider",
         "codex",
+        *ONE_WINDOW,
     )
     assert code == 0, out
     predictor = Predictor("default")
     assert predictor.config["llm"] == {"provider": "codex", "model": llm.DEFAULT_CODEX}
-    assert "LLM analysis: 420 tasks with Codex's own model through your chatgpt subscription" in out
-    assert "Analyzed 420 tasks." in out
-    assert len(predictor.llm_labels()) == 420 and len(predictor.embedded("llm")) == 420
+    assert "LLM analysis: 180 tasks with Codex's own model through your chatgpt subscription" in out
+    assert "Analyzed 180 tasks." in out
+    assert len(predictor.llm_labels()) == 180 and len(predictor.embedded("llm")) == 180
 
     code, out = run(capsys, "predict", "--model", "claude-opus-5-5", "--prompt", "fix the api")
     assert code == 0 and json.loads(out)["forecasts"][0]["seconds"] > 0
     assert seen[-1] == 1  # the forecast's own task was read too
 
     code, out = run(capsys, "refresh", "--yes")
-    assert code == 0 and "Nothing new" in out and seen.count(420) == 1  # nothing was read twice
+    assert code == 0 and "Nothing new" in out and seen.count(180) == 1  # nothing was read twice
 
 
 def test_llm_analysis_that_cant_run_says_why_and_training_goes_on(capsys, records, ready, monkeypatch):
@@ -534,16 +538,16 @@ def test_llm_analysis_that_cant_run_says_why_and_training_goes_on(capsys, record
         return llm.Analysis({}, "No Anthropic API key was found. Set ANTHROPIC_API_KEY to your key.")
 
     monkeypatch.setattr(llm, "analyze", broken)
-    code, out = run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "llm")
-    assert code == 0 and "about $3.36 at list price" in out
+    code, out = run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "llm", *ONE_WINDOW)
+    assert code == 0 and "about $1.44 at list price" in out
     assert "ANTHROPIC_API_KEY" in out and "Training goes on without LLM analysis" in out
     assert Predictor("default").llm_labels() == {}  # nothing was noted, so a refresh tries them all again
     code, out = run(capsys, "refresh", "--yes")
-    assert code == 0 and "LLM analysis: 420 tasks" in out
+    assert code == 0 and "LLM analysis: 180 tasks" in out
 
 
 def test_a_model_made_by_an_older_version_is_trained_again_on_refresh(capsys, records, ready):
-    assert run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "")[0] == 0
+    assert run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "", *ONE_WINDOW)[0] == 0
     predictor = Predictor("default")
     path = predictor.model_dir / "model.json"
     path.write_text(json.dumps({**json.loads(path.read_text()), "format": 2}))

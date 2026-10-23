@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from test_model import rows_for, synthetic
+from test_model import ONE_WINDOW, rows_for, synthetic
 
 from yardstick_predict import model as M
 
@@ -198,7 +198,7 @@ def test_a_task_llm_analysis_couldnt_read_is_forecast_by_the_version_without_it(
 
 def test_a_model_made_by_an_older_version_has_to_be_trained_again(tmp_path):
     tasks = synthetic(200)
-    model = M.train(tasks, rows_for(tasks))
+    model = M.train(tasks, rows_for(tasks), ONE_WINDOW)
     model.save(tmp_path / "model")
     meta = json.loads((tmp_path / "model" / "model.json").read_text())
     (tmp_path / "model" / "model.json").write_text(json.dumps({**meta, "format": 2}))

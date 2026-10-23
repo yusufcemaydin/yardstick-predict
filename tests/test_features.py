@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from builders import ClaudeSession, history, usage
 from conftest import KEY
+from test_cli import ONE_WINDOW
 
 from yardstick_predict import benchmarks, features, model_types, prices
 from yardstick_predict.archives import TEXT_CHARS, read_archive
@@ -195,7 +196,8 @@ def test_your_own_features_train_and_forecast_through_a_plugin(tmp_path, capsys,
     records = tmp_path / "records"
     history(records, tasks=300, start=START)
     chosen = "words,summary,ticket"
-    code = main(["create", "--yes", "--archive", f"claude-code={records}", "--plugin", plugin, "--features", chosen])
+    flags = ["--plugin", plugin, "--features", chosen, *ONE_WINDOW]
+    code = main(["create", "--yes", "--archive", f"claude-code={records}", *flags])
     out = capsys.readouterr().out
     assert code == 0, out
     predictor = Predictor("default")
