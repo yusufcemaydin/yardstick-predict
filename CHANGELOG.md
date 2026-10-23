@@ -2,33 +2,30 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-10-23
 
-Training uses exactly the features you choose. It trains one model, not one for each mix of inputs, so it takes about 40% less time. Your predictors catch up by themselves: the next refresh trains the model again, even when it finds no new tasks. Until then, a model trained by 0.3.0 keeps forecasting as it did.
-
-### Added
-
-- A model trained by 0.3.0 keeps forecasting until you retrain it, exactly as 0.3.0 did. `status` and `refresh` say that the previous version made it and that training it again brings this version's improvements. A model made before 0.3.0 still gives no forecasts until it's trained again.
-- Settings saved by a newer version are read as far as this version can, and never saved back in this version's older format. `status` and `predict` say so once. `refresh` leaves such a predictor as it is and asks you to upgrade.
+Training uses exactly the features you choose, and setup can check which of them really help your forecasts. Embeddings and LLM answers are kept once, in a feature store all your predictors share, so a second predictor never pays for them again. A model trained by 0.3.0 keeps forecasting until you train it again: the next refresh does that, and brings this version's improvements. Releases now come from PyPI, so `uv tool install yardstick-predict` installs it.
 
 ### Added
 
-- A new feature, `time`, off by default: when each task started. Its `trend` option is the number of days since 1 January 2020, so the model can follow how your tasks change over the months. Its `clock` option is the hour of the day and the day of the week, in your computer's time zone. A forecast's task starts the moment you ask. It costs nothing and sends nothing anywhere. Choose it on the Features screen, or with `--features time`, `time:trend` or `time:clock`.
-- Your own features get when each task started, as `info.started_at`.
-- Before setup or a refresh goes ahead, it says about how long the rest will take, as a range such as "about 4 to 8 minutes", and how long LLM analysis, embedding and training each take. It also says how much disk space the dataset will take. With `--yes` it says so once and goes ahead. When training may need more than a quarter of your computer's memory, it says that too.
-- Every long step shows a progress bar: reading your records, LLM analysis, embedding and training. After a few seconds, each bar also says about how long is left. Reading and training used to show only a line saying they were working. A model type from a plugin still shows that line while it trains.
-- Releases are published on PyPI, the Python package index. From this release on, `uv tool install yardstick-predict` installs it, and `uv tool upgrade yardstick-predict` updates it. If you installed an earlier version from GitHub, run that install command once to switch. If you use the `llm` extra, install `'yardstick-predict[llm]'` instead.
 - A feature check, which finds out which of your features really help your forecasts. It tests the model with every feature, then without each one in turn. For each feature and AI model, it says whether the feature helped, didn't help, or whether there wasn't enough data to tell. There isn't enough data when under 20% of the AI model's test tasks have the feature, or under 20% of the earlier tasks the test learns from: a model that never learned from a feature can't show what it does. LLM analysis that read only some of your tasks is judged on those tasks alone, with it and without it. Setup offers it when you pick features beyond the three that are always on. Then the Features screen comes back with the features that helped turned on, for you to keep or change. LLM analysis reads only a sample of your newest tasks before the check, and the rest only if you keep it and agree to the cost. The estimate before setup counts the check's time too.
 - `yardstick-predict check NAME` runs the feature check on a predictor you already have. It's advice only: it embeds nothing, asks no AI model and changes nothing about the predictor. `--json` answers programs. The Features screen shows each feature's latest verdicts.
 - A feature store, shared by all your predictors, keeps the features that cost money or time to make: embeddings, and what LLM analysis said about each task. Each is made once. A second predictor over the same records pays Voyage for nothing it already has, and LLM analysis asks the same AI model nothing it answered before, even when the two predictors ask for different parts of the answer. The store is in the `features` folder of the yardstick folder.
 - `yardstick-predict features` lists every feature of every predictor. A stored one shows what made it, how many tasks have it, its size on disk and when it last changed. The others are worked out at training, for free. Each shows its coverage: the share of the tasks the predictor learns from that have a value for it. `--json` gives the same to programs.
 - Files deleted or broken by hand in the feature store never break a command. A missing index is rebuilt from the files, and a file that can't be read is skipped, each with a note. The next refresh makes again what's missing: an embedding comes back from the cache for free, and an LLM answer is asked for again, with the cost shown first.
+- A new feature, `time`, off by default: when each task started. Its `trend` option is the number of days since 1 January 2020, so the model can follow how your tasks change over the months. Its `clock` option is the hour of the day and the day of the week, in your computer's time zone. A forecast's task starts the moment you ask. It costs nothing and sends nothing anywhere. Choose it on the Features screen, or with `--features time`, `time:trend` or `time:clock`.
+- Your own features get when each task started, as `info.started_at`.
 - `yardstick-predict list` lists your predictors, one line each: its features, how many tasks it learned from, when it was last trained and which AI models get forecasts. `--json` gives the same to programs. `status` stays the detailed view, and says the same.
 - `yardstick-predict status` shows each feature's coverage: the share of the tasks the predictor can learn from that have a value for it, counted as `yardstick-predict features` counts it. Coverage needs XGBoost, as training does. Without it, status shows the rest.
 - Each training saves the prepared dataset, `prepared.parquet` in the predictor's folder: one row for each task the model learned from, with when it started, its AI model, its number features, the hash of each text whose embedding the model read, and what the task took. It never holds a prompt or any other text. `status` shows its size.
 - `yardstick-predict delete NAME` deletes a predictor: its settings, its dataset of tasks, its prepared dataset and its model. Your records, the feature store and your other predictors stay. In a terminal it says exactly what goes and asks first. `--yes` skips the question for programs, and `--json` answers in JSON. It refuses while a setup or refresh of that predictor runs, and waits for a forecast that is reading its model. When it was your default predictor, it says how to choose another. A predictor whose settings are broken can be deleted too.
 - `yardstick-predict features delete ID` deletes a stored feature. First it says which predictors use it and what making it again costs: an embedding usually comes back from the cache for free, and LLM answers have to be asked for again. It asks before it deletes anything, and `--yes` skips the question for programs. The listing shows each stored feature's id.
 - When the Claude Code status line's predictor is deleted, the status line says so in plain words, such as that there's no default predictor now and how to choose one.
+- Before setup or a refresh goes ahead, it says about how long the rest will take, as a range such as "about 4 to 8 minutes", and how long LLM analysis, embedding and training each take. It also says how much disk space the dataset will take. With `--yes` it says so once and goes ahead. When training may need more than a quarter of your computer's memory, it says that too.
+- Every long step shows a progress bar: reading your records, LLM analysis, embedding and training. After a few seconds, each bar also says about how long is left. Reading and training used to show only a line saying they were working. A model type from a plugin still shows that line while it trains.
+- A model trained by 0.3.0 keeps forecasting until you retrain it, exactly as 0.3.0 did. `status` and `refresh` say that the previous version made it and that training it again brings this version's improvements. A model made before 0.3.0 still gives no forecasts until it's trained again.
+- Settings saved by a newer version are read as far as this version can, and never saved back in this version's older format. `status` and `predict` say so once. `refresh` leaves such a predictor as it is and asks you to upgrade.
+- Releases are published on PyPI, the Python package index. From this release on, `uv tool install yardstick-predict` installs it, and `uv tool upgrade yardstick-predict` updates it. If you installed an earlier version from GitHub, switch once with `uv tool install 'yardstick-predict@latest'`, or `'yardstick-predict[llm]@latest'` if you use LLM analysis with an API key.
 
 ### Changed
 
@@ -234,7 +231,7 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
-[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.1.0...v0.2.0

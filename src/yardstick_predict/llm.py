@@ -51,9 +51,7 @@ DESCRIPTION_TOKENS = 150
 INSIDE = "YARDSTICK_PREDICT_LLM_CALL"
 """Set for the Claude Code and Codex commands this module starts, so yardstick's own hooks stay out of them."""
 DEFAULT_CODEX = "codex-default"
-INSTALL = (
-    "uv tool install --reinstall 'yardstick-predict[llm] @ git+https://github.com/yusufcemaydin/yardstick-predict'"
-)
+INSTALL = "uv tool install 'yardstick-predict[llm]'"
 """How to add the providers' libraries to a yardstick-predict installed with uv."""
 """Codex's own default model, whichever the plan gives."""
 

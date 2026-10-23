@@ -35,10 +35,10 @@ The numbers above are an example. Yours come from your own history.
 ## Install
 
 ```bash
-uv tool install git+https://github.com/yusufcemaydin/yardstick-predict@v0.3.0
+uv tool install yardstick-predict
 ```
 
-This installs the newest release, 0.3.0. The main branch holds work in progress.
+This installs the newest release from PyPI, the Python package index. Between releases, the main branch on GitHub may hold work in progress.
 
 You need [uv](https://docs.astral.sh/uv/), a fast tool that installs Python programs. yardstick-predict runs on macOS, Linux and Windows, with Python 3.12 or newer. uv fetches that Python if you don't have it, and everything else comes with the install.
 
@@ -120,7 +120,7 @@ It sends each task's prompt and the end of the conversation before it to the AI 
 With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price; with Claude Haiku 5.5, about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session, so these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in, stop asking, and train without LLM analysis for now. The next refresh asks again. An API key needs the providers' own libraries:
 
 ```bash
-uv tool install --reinstall 'yardstick-predict[llm] @ git+https://github.com/yusufcemaydin/yardstick-predict@v0.3.0'
+uv tool install 'yardstick-predict[llm]@latest'
 ```
 
 ## Forecasts in Claude Code
@@ -251,13 +251,13 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 
 ## Update or remove it
 
-To get the newest version, install the newest release. It replaces the version you have:
+To get the newest version:
 
 ```bash
-uv tool install git+https://github.com/yusufcemaydin/yardstick-predict@v0.3.0
+uv tool upgrade yardstick-predict
 ```
 
-If you added the `llm` extra for LLM analysis, run the `[llm]` command from that section instead. Otherwise the upgrade leaves the extra out.
+It keeps the `llm` extra if you added it. If you installed 0.3.0 or an earlier version from GitHub, switch to PyPI once with `uv tool install 'yardstick-predict@latest'`, or `uv tool install 'yardstick-predict[llm]@latest'` if you use LLM analysis with an API key. After that, the upgrade command above gets each new release.
 
 Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed. When a new version reads new features or trains the model another way, the next refresh trains it again. Until then, a model the previous version trained keeps forecasting as it did. A model from an older version gives no forecasts until it's trained again.
 
