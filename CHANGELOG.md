@@ -4,7 +4,12 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
-Training uses exactly the features you choose. It trains one model, not one for each mix of inputs, so it takes about 40% less time. Your predictors catch up by themselves: the next refresh trains the model again, even when it finds no new tasks. Until then, a predictor made with an older version gives no forecasts.
+Training uses exactly the features you choose. It trains one model, not one for each mix of inputs, so it takes about 40% less time. Your predictors catch up by themselves: the next refresh trains the model again, even when it finds no new tasks. Until then, a model trained by 0.3.0 keeps forecasting as it did.
+
+### Added
+
+- A model trained by 0.3.0 keeps forecasting until you retrain it, exactly as 0.3.0 did. `status` and `refresh` say that the previous version made it and that training it again brings this version's improvements. A model made before 0.3.0 still gives no forecasts until it's trained again.
+- Settings saved by a newer version are read as far as this version can, and never saved back in this version's older format. `status` and `predict` say so once. `refresh` leaves such a predictor as it is and asks you to upgrade.
 
 ### Added
 
@@ -22,6 +27,7 @@ Training uses exactly the features you choose. It trains one model, not one for 
 - The test report no longer says, for each AI model, whether it uses the conversation and LLM analysis. Every AI model uses the features you chose.
 - On the Features screen, the end of the conversation is now called Context, after its `context` flag, and History is called Project history.
 - Once this version saves a predictor's settings, an older version can't use that predictor: it doesn't know the `conversation` feature.
+- A feature this version doesn't know, such as one a newer version added or one from a plugin that no longer adds it, is skipped with a one-line note. Before, forecasts and refreshes stopped with an error. The model still forecasts, without that feature's values. A feature you name with `--features` must still exist.
 
 ## [0.3.0] - 2026-10-22
 

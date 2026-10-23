@@ -1,0 +1,660 @@
+{
+ "format": 3,
+ "settings": {
+  "type": "xgboost",
+  "heads": [
+   "seconds",
+   "tokens",
+   "usd"
+  ],
+  "head": "distribution",
+  "family": "lognormal",
+  "loss": "log_score",
+  "dropout": 0.0,
+  "test_share": 0.3,
+  "test_windows": 1,
+  "validation_share": 0.15,
+  "half_life_days": 30.0
+ },
+ "categories": {
+  "model": [
+   "claude-opus-5-5",
+   "gpt-6.1-sol",
+   "claude-haiku-5-5"
+  ],
+  "effort": [
+   "xhigh",
+   "high",
+   "max",
+   "low"
+  ],
+  "agent": [
+   "claude-code",
+   "codex"
+  ],
+  "origin": [
+   "person",
+   "program"
+  ]
+ },
+ "numbers": [
+  "effort_level",
+  "project_days_since",
+  "project_direct",
+  "project_seconds",
+  "project_tasks_before",
+  "project_tokens",
+  "project_usd",
+  "prompt_asks",
+  "prompt_file_names",
+  "prompt_lines",
+  "prompt_links",
+  "prompt_list_items"
+ ],
+ "text_fields": [
+  "prompt",
+  "context"
+ ],
+ "rich_fields": [
+  "prompt"
+ ],
+ "conversation": false,
+ "llm": false,
+ "guess": {
+  "fields": [
+   "prompt",
+   "context"
+  ],
+  "sizes": [
+   16,
+   16
+  ],
+  "outputs": [
+   "guess_seconds",
+   "guess_tokens",
+   "guess_usd",
+   "guess_direct"
+  ]
+ },
+ "parts": {
+  "seconds.direct": {
+   "start": {
+    "*": [
+     2.9277703102107986,
+     -0.15079232022395955
+    ],
+    "claude-haiku-5-5": [
+     2.793116191772798,
+     -0.16894322418190055
+    ],
+    "claude-opus-5-5": [
+     3.427931938997715,
+     -0.20845249764279603
+    ],
+    "gpt-6.1-sol": [
+     2.5302397451942493,
+     -0.4200373737334224
+    ]
+   },
+   "effort_start": {
+    "claude-haiku-5-5": {
+     "low": [
+      2.680904409328505,
+      -0.20503718834032433
+     ]
+    },
+    "claude-opus-5-5": {
+     "high": [
+      3.5676292663377653,
+      -0.2834163021996206
+     ],
+     "max": [
+      3.56620320459926,
+      -0.32688496323599997
+     ]
+    },
+    "gpt-6.1-sol": {
+     "xhigh": [
+      2.3931443875951612,
+      -0.6888145317948875
+     ]
+    }
+   },
+   "rounds": 5,
+   "params": {
+    "tree_method": "hist",
+    "max_depth": 3,
+    "eta": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 20.0,
+    "lambda": 1.0,
+    "seed": 0,
+    "multi_strategy": "one_output_per_tree"
+   }
+  },
+  "seconds.work": {
+   "start": {
+    "*": [
+     5.5241314962322265,
+     -0.30814296573564964
+    ],
+    "claude-haiku-5-5": [
+     5.2999071664373085,
+     -0.47817691184933897
+    ],
+    "claude-opus-5-5": [
+     5.827746609496726,
+     -0.27886037207342507
+    ],
+    "gpt-6.1-sol": [
+     5.182310681362898,
+     -0.6253745741592185
+    ]
+   },
+   "effort_start": {
+    "claude-haiku-5-5": {
+     "low": [
+      5.187794395742593,
+      -0.6569754422547769
+     ]
+    },
+    "claude-opus-5-5": {
+     "high": [
+      5.823133983494708,
+      -0.24970716722744787
+     ],
+     "max": [
+      5.896311646249427,
+      -0.33143790105590876
+     ]
+    },
+    "gpt-6.1-sol": {
+     "xhigh": [
+      5.134160020716732,
+      -0.7309799277496332
+     ]
+    }
+   }
+  },
+  "tokens.direct": {
+   "start": {
+    "*": [
+     10.347532964141582,
+     -0.4614470265500474
+    ],
+    "claude-haiku-5-5": [
+     10.300171488428344,
+     -0.5237229959679752
+    ],
+    "claude-opus-5-5": [
+     10.708545541907672,
+     -0.5650392700336533
+    ],
+    "gpt-6.1-sol": [
+     10.040441883945729,
+     -0.6539307679325792
+    ]
+   },
+   "effort_start": {
+    "claude-haiku-5-5": {
+     "low": [
+      10.260703585993399,
+      -0.5878113990952671
+     ]
+    },
+    "claude-opus-5-5": {
+     "high": [
+      10.826764880620749,
+      -0.6992435662133887
+     ],
+     "max": [
+      10.783764669415586,
+      -0.658984279029053
+     ]
+    },
+    "gpt-6.1-sol": {
+     "xhigh": [
+      9.934536162072021,
+      -0.849486512426565
+     ]
+    }
+   },
+   "rounds": 12,
+   "params": {
+    "tree_method": "hist",
+    "max_depth": 3,
+    "eta": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 20.0,
+    "lambda": 1.0,
+    "seed": 0,
+    "multi_strategy": "one_output_per_tree"
+   }
+  },
+  "tokens.work": {
+   "start": {
+    "*": [
+     11.89213499734669,
+     -0.44338473899764735
+    ],
+    "claude-haiku-5-5": [
+     11.707067258296771,
+     -0.6094861213587648
+    ],
+    "claude-opus-5-5": [
+     12.218017624377886,
+     -0.5407837463119357
+    ],
+    "gpt-6.1-sol": [
+     11.510003029349592,
+     -0.7047007307060905
+    ]
+   },
+   "effort_start": {
+    "claude-haiku-5-5": {
+     "low": [
+      11.614532888765728,
+      -0.7764808100391392
+     ]
+    },
+    "claude-opus-5-5": {
+     "high": [
+      12.224187831004661,
+      -0.5847043443417733
+     ],
+     "max": [
+      12.278666326627118,
+      -0.5524450630693324
+     ]
+    },
+    "gpt-6.1-sol": {
+     "xhigh": [
+      11.45617392967901,
+      -0.8117692739885305
+     ]
+    }
+   },
+   "rounds": 1,
+   "params": {
+    "tree_method": "hist",
+    "max_depth": 3,
+    "eta": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 20.0,
+    "lambda": 1.0,
+    "seed": 0,
+    "multi_strategy": "one_output_per_tree"
+   }
+  },
+  "usd.direct": {
+   "start": {
+    "*": [
+     -2.7748304132627464,
+     -0.4614470265500476
+    ],
+    "claude-haiku-5-5": [
+     -2.822191888975984,
+     -0.5237229959679756
+    ],
+    "claude-opus-5-5": [
+     -2.4138178354966557,
+     -0.5650392700336531
+    ],
+    "gpt-6.1-sol": [
+     -3.0819214934585983,
+     -0.6539307679325794
+    ]
+   },
+   "effort_start": {
+    "claude-haiku-5-5": {
+     "low": [
+      -2.861659791410929,
+      -0.5878113990952679
+     ]
+    },
+    "claude-opus-5-5": {
+     "high": [
+      -2.2955984967835783,
+      -0.6992435662133889
+     ],
+     "max": [
+      -2.3385987079887425,
+      -0.658984279029053
+     ]
+    },
+    "gpt-6.1-sol": {
+     "xhigh": [
+      -3.1878272153323066,
+      -0.8494865124265648
+     ]
+    }
+   },
+   "rounds": 12,
+   "params": {
+    "tree_method": "hist",
+    "max_depth": 3,
+    "eta": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 20.0,
+    "lambda": 1.0,
+    "seed": 0,
+    "multi_strategy": "one_output_per_tree"
+   }
+  },
+  "usd.work": {
+   "start": {
+    "*": [
+     -1.2302283800576395,
+     -0.4433847389976475
+    ],
+    "claude-haiku-5-5": [
+     -1.4152961191075588,
+     -0.6094861213587646
+    ],
+    "claude-opus-5-5": [
+     -0.9043457530264435,
+     -0.5407837463119357
+    ],
+    "gpt-6.1-sol": [
+     -1.6123603480547344,
+     -0.7047007307060911
+    ]
+   },
+   "effort_start": {
+    "claude-haiku-5-5": {
+     "low": [
+      -1.507830488638601,
+      -0.7764808100391389
+     ]
+    },
+    "claude-opus-5-5": {
+     "high": [
+      -0.8981755463996668,
+      -0.5847043443417733
+     ],
+     "max": [
+      -0.8436970507772142,
+      -0.5524450630693324
+     ]
+    },
+    "gpt-6.1-sol": {
+     "xhigh": [
+      -1.6661894477253147,
+      -0.8117692739885306
+     ]
+    }
+   },
+   "rounds": 1,
+   "params": {
+    "tree_method": "hist",
+    "max_depth": 3,
+    "eta": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 20.0,
+    "lambda": 1.0,
+    "seed": 0,
+    "multi_strategy": "one_output_per_tree"
+   }
+  }
+ },
+ "expected": {},
+ "width_scale": {
+  "seconds": {
+   "*": 1.1087024430486654
+  },
+  "tokens": {
+   "*": 1.200603222020324
+  },
+  "usd": {
+   "*": 1.200603222020324
+  }
+ },
+ "defaults": {
+  "claude-haiku-5-5": {
+   "effort": "low",
+   "agent": "claude-code"
+  },
+  "claude-opus-5-5": {
+   "effort": "high",
+   "agent": "claude-code"
+  },
+  "gpt-6.1-sol": {
+   "effort": "xhigh",
+   "agent": "codex"
+  }
+ },
+ "effort_counts": {
+  "gpt-6.1-sol": [
+   [
+    "xhigh",
+    80
+   ]
+  ],
+  "claude-opus-5-5": [
+   [
+    "high",
+    57
+   ],
+   [
+    "max",
+    43
+   ]
+  ],
+  "claude-haiku-5-5": [
+   [
+    "low",
+    12
+   ]
+  ]
+ },
+ "direct": {
+  "start": {
+   "*": 0.1926854629190388,
+   "claude-haiku-5-5": 0.17866500294762172,
+   "claude-opus-5-5": 0.1632524604353356,
+   "gpt-6.1-sol": 0.23214813504956713
+  },
+  "effort_start": {
+   "claude-haiku-5-5": {
+    "low": 0.17229203230831916
+   },
+   "claude-opus-5-5": {
+    "high": 0.1893922904701763,
+    "max": 0.12466622471464317
+   },
+   "gpt-6.1-sol": {
+    "xhigh": 0.2365335381274635
+   }
+  },
+  "rounds": 27,
+  "params": {
+   "tree_method": "hist",
+   "max_depth": 3,
+   "eta": 0.05,
+   "subsample": 0.8,
+   "colsample_bytree": 0.8,
+   "min_child_weight": 20.0,
+   "lambda": 1.0,
+   "seed": 0
+  }
+ },
+ "report": {
+  "trained_on": 107,
+  "tested_on": 60,
+  "windows": 2,
+  "models": {
+   "claude-haiku-5-5": {
+    "served": false,
+    "reason": "not_enough_data",
+    "heads": [],
+    "tasks_tested": 0,
+    "failed_checks": [],
+    "tasks": 12,
+    "conversation": false,
+    "llm": false
+   },
+   "claude-opus-5-5": {
+    "served": true,
+    "reason": null,
+    "heads": [
+     "seconds",
+     "tokens",
+     "usd"
+    ],
+    "tasks_tested": 30,
+    "seconds": {
+     "score": 0.6568,
+     "simple_rule_score": 0.6728,
+     "better_than_simple_rule": 0.0238,
+     "in_50_range": 0.4333,
+     "in_90_range": 0.9667,
+     "expected_over_real_total": 0.8926,
+     "tasks_tested": 30
+    },
+    "tokens": {
+     "score": 0.4422,
+     "simple_rule_score": 0.4784,
+     "better_than_simple_rule": 0.0758,
+     "in_50_range": 0.3667,
+     "in_90_range": 0.8667,
+     "expected_over_real_total": 0.796,
+     "tasks_tested": 30
+    },
+    "usd": {
+     "score": 0.4422,
+     "simple_rule_score": 0.4784,
+     "better_than_simple_rule": 0.0758,
+     "in_50_range": 0.3667,
+     "in_90_range": 0.8667,
+     "expected_over_real_total": 0.796,
+     "tasks_tested": 30
+    },
+    "failed_checks": [],
+    "tasks": 100,
+    "conversation": true,
+    "llm": true
+   },
+   "gpt-6.1-sol": {
+    "served": true,
+    "reason": null,
+    "heads": [
+     "seconds",
+     "tokens",
+     "usd"
+    ],
+    "tasks_tested": 30,
+    "seconds": {
+     "score": 0.6332,
+     "simple_rule_score": 0.6858,
+     "better_than_simple_rule": 0.0768,
+     "in_50_range": 0.4,
+     "in_90_range": 0.8333,
+     "expected_over_real_total": 0.8932,
+     "tasks_tested": 30
+    },
+    "tokens": {
+     "score": 0.3947,
+     "simple_rule_score": 0.4533,
+     "better_than_simple_rule": 0.1294,
+     "in_50_range": 0.3333,
+     "in_90_range": 0.8,
+     "expected_over_real_total": 0.9164,
+     "tasks_tested": 30
+    },
+    "usd": {
+     "score": 0.3947,
+     "simple_rule_score": 0.4533,
+     "better_than_simple_rule": 0.1294,
+     "in_50_range": 0.3333,
+     "in_90_range": 0.8,
+     "expected_over_real_total": 0.9164,
+     "tasks_tested": 30
+    },
+    "failed_checks": [],
+    "tasks": 80,
+    "conversation": false,
+    "llm": false
+   }
+  },
+  "pit": {
+   "seconds": [
+    6,
+    7,
+    2,
+    6,
+    4,
+    6,
+    9,
+    5,
+    7,
+    8
+   ],
+   "tokens": [
+    4,
+    8,
+    7,
+    4,
+    5,
+    6,
+    2,
+    3,
+    9,
+    12
+   ],
+   "usd": [
+    4,
+    8,
+    7,
+    4,
+    5,
+    6,
+    2,
+    3,
+    9,
+    12
+   ]
+  },
+  "min_tasks_to_test": 60,
+  "thresholds": {
+   "min_test_tasks": 30,
+   "tolerance": 0.02,
+   "min_range_held": 0.75,
+   "totals_range": [
+    0.5,
+    2.0
+   ]
+  }
+ },
+ "served": {
+  "claude-haiku-5-5": {
+   "served": false,
+   "reason": "not_enough_data",
+   "heads": []
+  },
+  "claude-opus-5-5": {
+   "served": true,
+   "reason": null,
+   "heads": [
+    "seconds",
+    "tokens",
+    "usd"
+   ]
+  },
+  "gpt-6.1-sol": {
+   "served": true,
+   "reason": null,
+   "heads": [
+    "seconds",
+    "tokens",
+    "usd"
+   ]
+  }
+ },
+ "trained_at": 1792775617.47695,
+ "tasks": 192
+}

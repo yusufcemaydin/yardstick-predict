@@ -281,8 +281,28 @@ class EmbedPlan:
 
 
 def chosen_features(predictor: Predictor) -> list[str]:
-    """The features the predictor uses. The prompt is always first."""
-    return features.check(predictor.config.get("features") or list(features.DEFAULT))
+    """The features the predictor uses. The prompt is always first.
+
+    A feature this version doesn't know is skipped, so a predictor that lists one still trains and forecasts,
+    without that feature's values. unknown_features names them.
+    """
+    unknown = set(unknown_features(predictor))
+    return features.check([name for name in _listed(predictor) if name not in unknown])
+
+
+def unknown_features(predictor: Predictor) -> list[str]:
+    """The features the predictor's settings list that this version doesn't know, such as one a newer version
+    added, or one from a plugin that no longer adds it. Load the predictor's plugins first."""
+    known = features.available()
+    return [name for name in dict.fromkeys(_listed(predictor)) if name != features.REQUIRED and name not in known]
+
+
+def _listed(predictor: Predictor) -> list[str]:
+    """The features the predictor's settings list, or the default ones when they list none."""
+    listed = predictor.config.get("features")
+    if not isinstance(listed, list) or not listed:
+        return list(features.DEFAULT)
+    return [name if isinstance(name, str) else json.dumps(name) for name in listed]
 
 
 def settings(predictor: Predictor) -> dict:
@@ -634,16 +654,31 @@ def train(predictor: Predictor, on_progress: Callable[[int, int], None] | None =
 
 
 def outdated(predictor: Predictor, meta: dict | None = None) -> bool:
-    """Whether the saved model was made by an older version, which read other features. It must be trained again.
+    """Whether the saved model was made by a version before the previous release, which read other features. It
+    gives no forecasts until it's trained again.
 
     `meta` is what the saved model says about itself, when it's read already. Only the built-in model is checked.
     """
+    saved = _saved_format(predictor, meta)
+    return saved is not None and saved < model_types.PREVIOUS_FORMAT
+
+
+def from_previous_version(predictor: Predictor, meta: dict | None = None) -> bool:
+    """Whether the saved model was made by the previous release. It still forecasts, as that release did, and
+    training it again brings this version's improvements. `meta` is as outdated takes it."""
+    saved = _saved_format(predictor, meta)
+    return saved is not None and model_types.PREVIOUS_FORMAT <= saved < model_types.BUILT_IN_FORMAT
+
+
+def _saved_format(predictor: Predictor, meta: dict | None) -> int | None:
+    """The format the built-in model was saved in, 0 when it doesn't say. None without a built-in model."""
     if settings(predictor).get("type", "xgboost") != "xgboost":
-        return False
+        return None
     meta = model_meta(predictor) if meta is None else meta
     if meta is None:
-        return False
-    return not isinstance(meta.get("format"), int) or meta["format"] < model_types.BUILT_IN_FORMAT
+        return None
+    saved = meta.get("format")
+    return saved if isinstance(saved, int) and not isinstance(saved, bool) else 0
 
 
 def _model_lock(predictor: Predictor, shared: bool = False):

@@ -546,12 +546,14 @@ def test_llm_analysis_that_cant_run_says_why_and_training_goes_on(capsys, record
     assert code == 0 and "LLM analysis: 180 tasks" in out
 
 
-def test_a_model_made_by_an_older_version_is_trained_again_on_refresh(capsys, records, ready):
+def test_a_model_made_by_a_version_before_the_previous_release_is_trained_again_on_refresh(capsys, records, ready):
     assert run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "", *ONE_WINDOW)[0] == 0
     predictor = Predictor("default")
     path = predictor.model_dir / "model.json"
-    path.write_text(json.dumps({**json.loads(path.read_text()), "format": model_types.BUILT_IN_FORMAT - 1}))
-    assert pipeline.outdated(predictor)
+    path.write_text(json.dumps({**json.loads(path.read_text()), "format": model_types.PREVIOUS_FORMAT - 1}))
+    assert pipeline.outdated(predictor) and not pipeline.from_previous_version(predictor)
+    code, out = run(capsys, "status")
+    assert code == 0 and "gives no forecasts until it's trained again" in out
     # Its settings are from before the conversation was a feature to choose, when every predictor read it.
     predictor.config["format"] = 1
     predictor.save_config()

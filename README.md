@@ -246,7 +246,9 @@ uv tool install git+https://github.com/yusufcemaydin/yardstick-predict@v0.3.0
 
 If you added the `llm` extra for LLM analysis, run the `[llm]` command from that section instead. Otherwise the upgrade leaves the extra out.
 
-Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed. When a new version reads new features or trains the model another way, the next refresh trains it again. Until then, the predictor gives no forecasts.
+Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed. When a new version reads new features or trains the model another way, the next refresh trains it again. Until then, a model the previous version trained keeps forecasting as it did. A model from an older version gives no forecasts until it's trained again.
+
+From 0.4 on, going back to an older version is safe too. It reads what it can of a predictor that a newer version saved, and never changes it: it skips any feature it doesn't know, with a note, and it won't refresh that predictor.
 
 To remove everything, uninstall the program, delete its folder and delete the Voyage key it kept:
 

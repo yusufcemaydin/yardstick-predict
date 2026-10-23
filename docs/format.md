@@ -101,7 +101,7 @@ When the whole request can't be answered, the answer has an `error` instead of `
 | `unknown_predictor` | The request names a predictor that doesn't exist. |
 | `broken_predictor` | The predictor's settings file can't be read, or is empty or broken. The message says which file. |
 | `plugin_failed` | A plugin the predictor uses couldn't be loaded. The message says which, and why. |
-| `not_trained` | The predictor has no model yet. |
+| `not_trained` | The predictor has no model yet, or its model was made by a version before the previous release and has to be trained again. `yardstick-predict refresh` trains it. |
 | `no_embedding_key` | No Voyage key was found. |
 | `embedding_failed` | Voyage couldn't embed the request's text. The message gives Voyage's reason. |
 | `missing_library` | A library the model needs is missing. The message says how to add it. |

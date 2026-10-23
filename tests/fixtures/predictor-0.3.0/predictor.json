@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "name": "default",
+  "created_at": 1792775614.957011,
+  "embedding": {
+    "model": "voyage-4",
+    "dimensions": 16
+  },
+  "archives": [
+    {
+      "name": "claude-code",
+      "format": "claude-code",
+      "path": "/records/claude-code"
+    },
+    {
+      "name": "codex",
+      "format": "codex",
+      "path": "/records/codex"
+    }
+  ],
+  "refreshed_at": 1792775617.487639,
+  "features": [
+    "prompt",
+    "context",
+    "llm"
+  ],
+  "options": {
+    "llm": [
+      "kind",
+      "description"
+    ]
+  },
+  "llm": {
+    "provider": "codex",
+    "model": "codex-default"
+  },
+  "model": {
+    "type": "xgboost",
+    "heads": [
+      "seconds",
+      "tokens",
+      "usd"
+    ],
+    "head": "distribution",
+    "family": "lognormal",
+    "loss": "log_score",
+    "dropout": 0.0,
+    "test_share": 0.3,
+    "test_windows": 1,
+    "validation_share": 0.15,
+    "half_life_days": 30.0
+  },
+  "plugins": [],
+  "needs_training": false,
+  "reader": 2
+}

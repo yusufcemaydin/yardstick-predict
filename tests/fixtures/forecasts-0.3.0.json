@@ -1,0 +1,605 @@
+{
+ "made_by": "yardstick-predict 0.3.0",
+ "now": 1780242703,
+ "request": {
+  "version": 1,
+  "distribution": true,
+  "tasks": [
+   {
+    "id": "read",
+    "prompt": "add a search page with tests and docs",
+    "models": [
+     "claude-opus-5-5",
+     "gpt-6.1-sol",
+     "claude-haiku-5-5",
+     "brand-new-model"
+    ],
+    "project": "tools",
+    "session": "session-044",
+    "context": "page report invoice export parser deploy config config email upload upload theme api add search test form parser docs build docs config upload test export\nDone."
+   },
+   {
+    "id": "unread",
+    "prompt": "fix the billing api cache",
+    "models": [
+     "claude-opus-5-5",
+     "gpt-6.1-sol",
+     "claude-haiku-5-5",
+     "brand-new-model"
+    ],
+    "project": "tools",
+    "session": "session-044",
+    "context": "page report invoice export parser deploy config config email upload upload theme api add search test form parser docs build docs config upload test export\nDone.",
+    "origin": "person"
+   },
+   {
+    "id": "new-conversation",
+    "prompt": "refactor the parser",
+    "models": [
+     "claude-opus-5-5",
+     "gpt-6.1-sol"
+    ],
+    "origin": "program",
+    "project": "blog",
+    "conversation_tokens": 30000
+   },
+   {
+    "id": "effort",
+    "prompt": "export the report table",
+    "models": [
+     "claude-opus-5-5"
+    ],
+    "effort": "max"
+   },
+   {
+    "id": "unknown-effort",
+    "prompt": "fix the login form",
+    "models": [
+     "claude-opus-5-5"
+    ],
+    "effort": "ultra"
+   }
+  ]
+ },
+ "labels": {
+  "read": {
+   "kind": "feature",
+   "files": 4.0,
+   "steps": 5.0,
+   "runs_code": true,
+   "looks_up": false,
+   "continues": false,
+   "clarity": "clear",
+   "minutes": 25.0,
+   "description": "Add a search page, with tests and docs."
+  },
+  "new-conversation": {
+   "kind": "refactor",
+   "files": 3.0,
+   "steps": 4.0,
+   "runs_code": true,
+   "looks_up": false,
+   "continues": false,
+   "clarity": "clear",
+   "minutes": 12.0,
+   "description": "Split the parser into smaller parts."
+  },
+  "effort": {
+   "kind": "small_change",
+   "files": 1.0,
+   "steps": 2.0,
+   "runs_code": true,
+   "looks_up": false,
+   "continues": false,
+   "clarity": "clear",
+   "minutes": 4.0,
+   "description": "Add an export button to the report table."
+  },
+  "unknown-effort": {
+   "kind": "bug_fix",
+   "files": 2.0,
+   "steps": 3.0,
+   "runs_code": true,
+   "looks_up": false,
+   "continues": false,
+   "clarity": "clear",
+   "minutes": 6.0,
+   "description": "Fix the checks on the login form."
+  }
+ },
+ "vectors": {
+  "add a search page with tests and docs": [
+   -0.389693,
+   -0.122494,
+   -0.47033,
+   -0.191287,
+   -0.193223,
+   0.039806,
+   0.027278,
+   -0.197893,
+   -0.181037,
+   0.13582,
+   0.24721,
+   0.18787,
+   0.273861,
+   -0.425228,
+   -0.304613,
+   0.016458
+  ],
+  "page report invoice export parser deploy config config email upload upload theme api add search test form parser docs build docs config upload test export\nDone.": [
+   0.165857,
+   -0.098516,
+   -0.340424,
+   0.022334,
+   -0.452954,
+   0.050467,
+   0.200906,
+   0.163829,
+   -0.236682,
+   -0.356336,
+   0.342868,
+   -0.262423,
+   0.377605,
+   -0.203818,
+   -0.116612,
+   -0.065859
+  ],
+  "Add a search page, with tests and docs.": [
+   -0.183206,
+   -0.091754,
+   -0.287134,
+   0.062563,
+   -0.088605,
+   -0.204282,
+   -0.173637,
+   0.042455,
+   -0.326743,
+   0.402326,
+   0.297551,
+   0.308937,
+   0.225722,
+   -0.484693,
+   -0.204767,
+   -0.098538
+  ],
+  "fix the billing api cache": [
+   -0.444561,
+   0.002074,
+   0.138152,
+   0.194081,
+   0.140025,
+   0.074729,
+   -0.102025,
+   -0.054926,
+   -0.081152,
+   -0.030975,
+   0.198363,
+   0.424089,
+   0.179765,
+   0.223251,
+   0.60566,
+   0.176821
+  ],
+  "refactor the parser": [
+   0.076145,
+   -0.173446,
+   -0.000576,
+   -0.346974,
+   0.088163,
+   -0.339071,
+   0.011772,
+   0.0717,
+   -0.102487,
+   -0.05326,
+   0.478848,
+   0.169165,
+   0.340059,
+   -0.01918,
+   0.521654,
+   0.237325
+  ],
+  "Split the parser into smaller parts.": [
+   0.314621,
+   -0.350066,
+   0.04849,
+   -0.419676,
+   0.147243,
+   0.239301,
+   0.29237,
+   0.000246,
+   0.356269,
+   0.117312,
+   -0.072022,
+   -0.004775,
+   0.348491,
+   0.176781,
+   0.237529,
+   0.283804
+  ],
+  "export the report table": [
+   0.02605,
+   -0.167555,
+   0.286079,
+   -0.158583,
+   0.134186,
+   -0.472444,
+   0.222331,
+   0.430889,
+   0.372808,
+   -0.037383,
+   0.25995,
+   0.052179,
+   -0.037698,
+   0.105538,
+   0.401927,
+   0.056271
+  ],
+  "Add an export button to the report table.": [
+   0.444709,
+   -0.186975,
+   0.141578,
+   -0.045458,
+   0.013256,
+   -0.011561,
+   0.178864,
+   0.28697,
+   -0.141457,
+   -0.201018,
+   0.449673,
+   0.33382,
+   0.21155,
+   -0.27329,
+   -0.048242,
+   -0.36699
+  ]
+ },
+ "answer": {
+  "version": 1,
+  "predictor": "default",
+  "embedding_model": "voyage-4",
+  "forecasts": [
+   {
+    "task": "read",
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "seconds": 423.5,
+    "tokens": 227396,
+    "usd": 0.454791,
+    "distribution": {
+     "shape": "two_part_lognormal",
+     "direct_probability": 0.19079,
+     "seconds": {
+      "direct": {
+       "mu": 3.498363,
+       "sigma": 0.788175
+      },
+      "work": {
+       "mu": 5.838245,
+       "sigma": 0.895995
+      }
+     },
+     "tokens": {
+      "direct": {
+       "mu": 10.889107,
+       "sigma": 0.526669
+      },
+      "work": {
+       "mu": 12.236778,
+       "sigma": 0.716006
+      }
+     },
+     "usd": {
+      "direct": {
+       "mu": -2.233256,
+       "sigma": 0.526669
+      },
+      "work": {
+       "mu": -0.885585,
+       "sigma": 0.716006
+      }
+     }
+    }
+   },
+   {
+    "task": "read",
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh",
+    "seconds": 152.1,
+    "tokens": 90383,
+    "usd": 0.180767,
+    "distribution": {
+     "shape": "two_part_lognormal",
+     "direct_probability": 0.238177,
+     "seconds": {
+      "direct": {
+       "mu": 2.376235,
+       "sigma": 0.535441
+      },
+      "work": {
+       "mu": 5.13416,
+       "sigma": 0.53377
+      }
+     },
+     "tokens": {
+      "direct": {
+       "mu": 9.908708,
+       "sigma": 0.466056
+      },
+      "work": {
+       "mu": 11.472672,
+       "sigma": 0.548291
+      }
+     },
+     "usd": {
+      "direct": {
+       "mu": -3.213656,
+       "sigma": 0.466056
+      },
+      "work": {
+       "mu": -1.649692,
+       "sigma": 0.548291
+      }
+     }
+    }
+   },
+   {
+    "task": "read",
+    "model": "claude-haiku-5-5",
+    "effort": "low",
+    "seconds": null,
+    "tokens": null,
+    "usd": null,
+    "reason": "not_enough_data",
+    "distribution": null
+   },
+   {
+    "task": "read",
+    "model": "brand-new-model",
+    "seconds": null,
+    "tokens": null,
+    "usd": null,
+    "reason": "unknown_model",
+    "distribution": null
+   },
+   {
+    "task": "unread",
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "seconds": 363.0,
+    "tokens": 218663,
+    "usd": 0.437325,
+    "distribution": {
+     "shape": "two_part_lognormal",
+     "direct_probability": 0.19079,
+     "seconds": {
+      "direct": {
+       "mu": 3.568306,
+       "sigma": 0.833118
+      },
+      "work": {
+       "mu": 5.718624,
+       "sigma": 0.84933
+      }
+     },
+     "tokens": {
+      "direct": {
+       "mu": 10.84758,
+       "sigma": 0.498979
+      },
+      "work": {
+       "mu": 12.218132,
+       "sigma": 0.688057
+      }
+     },
+     "usd": {
+      "direct": {
+       "mu": -2.274784,
+       "sigma": 0.498979
+      },
+      "work": {
+       "mu": -0.904231,
+       "sigma": 0.688057
+      }
+     }
+    }
+   },
+   {
+    "task": "unread",
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh",
+    "seconds": 152.1,
+    "tokens": 90542,
+    "usd": 0.181085,
+    "distribution": {
+     "shape": "two_part_lognormal",
+     "direct_probability": 0.238177,
+     "seconds": {
+      "direct": {
+       "mu": 2.385263,
+       "sigma": 0.554968
+      },
+      "work": {
+       "mu": 5.13416,
+       "sigma": 0.53377
+      }
+     },
+     "tokens": {
+      "direct": {
+       "mu": 9.933477,
+       "sigma": 0.475775
+      },
+      "work": {
+       "mu": 11.472672,
+       "sigma": 0.548291
+      }
+     },
+     "usd": {
+      "direct": {
+       "mu": -3.188885,
+       "sigma": 0.475775
+      },
+      "work": {
+       "mu": -1.649692,
+       "sigma": 0.548291
+      }
+     }
+    }
+   },
+   {
+    "task": "unread",
+    "model": "claude-haiku-5-5",
+    "effort": "low",
+    "seconds": null,
+    "tokens": null,
+    "usd": null,
+    "reason": "not_enough_data",
+    "distribution": null
+   },
+   {
+    "task": "unread",
+    "model": "brand-new-model",
+    "seconds": null,
+    "tokens": null,
+    "usd": null,
+    "reason": "unknown_model",
+    "distribution": null
+   },
+   {
+    "task": "new-conversation",
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "seconds": 424.4,
+    "tokens": 226480,
+    "usd": 0.45296,
+    "distribution": {
+     "shape": "two_part_lognormal",
+     "direct_probability": 0.19079,
+     "seconds": {
+      "direct": {
+       "mu": 3.595758,
+       "sigma": 0.791373
+      },
+      "work": {
+       "mu": 5.838245,
+       "sigma": 0.895995
+      }
+     },
+     "tokens": {
+      "direct": {
+       "mu": 10.8508,
+       "sigma": 0.437796
+      },
+      "work": {
+       "mu": 12.236778,
+       "sigma": 0.716006
+      }
+     },
+     "usd": {
+      "direct": {
+       "mu": -2.271563,
+       "sigma": 0.437796
+      },
+      "work": {
+       "mu": -0.885585,
+       "sigma": 0.716006
+      }
+     }
+    }
+   },
+   {
+    "task": "new-conversation",
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh",
+    "seconds": 152.1,
+    "tokens": 91095,
+    "usd": 0.182191,
+    "distribution": {
+     "shape": "two_part_lognormal",
+     "direct_probability": 0.238177,
+     "seconds": {
+      "direct": {
+       "mu": 2.398052,
+       "sigma": 0.529522
+      },
+      "work": {
+       "mu": 5.13416,
+       "sigma": 0.53377
+      }
+     },
+     "tokens": {
+      "direct": {
+       "mu": 10.049982,
+       "sigma": 0.430264
+      },
+      "work": {
+       "mu": 11.472672,
+       "sigma": 0.548291
+      }
+     },
+     "usd": {
+      "direct": {
+       "mu": -3.072379,
+       "sigma": 0.430264
+      },
+      "work": {
+       "mu": -1.649692,
+       "sigma": 0.548291
+      }
+     }
+    }
+   },
+   {
+    "task": "effort",
+    "model": "claude-opus-5-5",
+    "effort": "max",
+    "seconds": 430.6,
+    "tokens": 249138,
+    "usd": 0.498277,
+    "distribution": {
+     "shape": "two_part_lognormal",
+     "direct_probability": 0.12566,
+     "seconds": {
+      "direct": {
+       "mu": 3.514167,
+       "sigma": 0.750407
+      },
+      "work": {
+       "mu": 5.845598,
+       "sigma": 0.825677
+      }
+     },
+     "tokens": {
+      "direct": {
+       "mu": 10.806078,
+       "sigma": 0.455781
+      },
+      "work": {
+       "mu": 12.258648,
+       "sigma": 0.73948
+      }
+     },
+     "usd": {
+      "direct": {
+       "mu": -2.316284,
+       "sigma": 0.455781
+      },
+      "work": {
+       "mu": -0.863716,
+       "sigma": 0.73948
+      }
+     }
+    }
+   },
+   {
+    "task": "unknown-effort",
+    "model": "claude-opus-5-5",
+    "effort": "ultra",
+    "seconds": null,
+    "tokens": null,
+    "usd": null,
+    "reason": "not_enough_data",
+    "distribution": null
+   }
+  ]
+ }
+}

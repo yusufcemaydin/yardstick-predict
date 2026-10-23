@@ -31,6 +31,8 @@ A refresh reads only the record files that changed since the last one, each with
 
 When a new version reads records more accurately, the next refresh reads all of them again, once, by itself. It embeds only the texts that changed.
 
+When a new version trains the model another way, the next refresh trains it again, even when it finds no new tasks. Until then, a model the previous version trained keeps forecasting, exactly as that version did. A model from an older version gives no forecasts until it's trained again.
+
 ## 2. Features
 
 Every feature describes what's known before a task starts. Three are always used. They cost nothing, and they send nothing anywhere:

@@ -66,7 +66,7 @@ except Exception as error:  # On a Mac without Homebrew's OpenMP, XGBoost can't 
     ) from None
 
 from .archives import Task
-from .model_types import BUILT_IN_FORMAT
+from .model_types import BUILT_IN_FORMAT, PREVIOUS_FORMAT
 
 TARGETS = ("seconds", "tokens", "usd")
 PARTS = ("direct", "work")
@@ -120,8 +120,9 @@ GUESS_ALPHAS = (0.3, 3.0, 30.0, 300.0)
 GUESS_BLOCKS = 10
 """Training's first guesses are made stretch by stretch of time, each from the ones before it."""
 FORMAT = BUILT_IN_FORMAT
-"""The saved model's format. A model in an older format has to be trained again, and one in a newer
-format needs a newer version of yardstick-predict."""
+"""The saved model's format. A model the previous release saved, in PREVIOUS_FORMAT, still forecasts until it's
+trained again. One in an older format has to be trained again, and one in a newer format needs a newer version
+of yardstick-predict."""
 LLM = "llm"
 """The embedded feature LLM analysis writes. Its number features' names start with llm_."""
 WITHOUT_LLM = "without-llm"
@@ -165,7 +166,8 @@ class NotEnoughData(Exception):
 
 
 class OutdatedModel(Exception):
-    """The saved model was made by an older version, which read different features. It has to be trained again."""
+    """The saved model was made by a version before the previous release, which read different features. It has
+    to be trained again."""
 
 
 class NewerFormat(Exception):
@@ -1169,8 +1171,12 @@ def _swap_in(folder: Path, write) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
-def load(folder: Path) -> Model | WithoutLLM:
-    """Load a saved model. Every file is plain JSON or plain numbers, so loading runs no code."""
+def load(folder: Path):
+    """Load a saved model: a Model, or a WithoutLLM. Every file is plain JSON or plain numbers, so loading runs
+    no code.
+
+    A model the previous release saved loads as that release loaded it, so it forecasts as it did then.
+    """
     meta = json.loads((folder / "model.json").read_text())
     saved = meta.get("format")
     if isinstance(saved, int) and saved > FORMAT:
@@ -1178,6 +1184,10 @@ def load(folder: Path) -> Model | WithoutLLM:
             "This predictor's model was saved by a newer version of yardstick-predict. "
             "Upgrade with: uv tool upgrade yardstick-predict"
         )
+    if isinstance(saved, int) and saved == PREVIOUS_FORMAT:
+        from . import model_0_3  # a model saved by 0.3. This goes when model_0_3 does.
+
+        return model_0_3.load(folder, meta)
     if not isinstance(saved, int) or saved < FORMAT:
         raise OutdatedModel(
             "This predictor's model was trained by an older version of yardstick-predict. "

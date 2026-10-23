@@ -338,12 +338,16 @@ def test_an_effort_level_reaches_a_model_that_takes_one_and_a_model_of_your_own_
     assert len(answer(predictor, tasks)["forecasts"]) == 2  # Stub's served takes only the model's name
 
 
-def test_a_feature_no_plugin_adds_anymore_is_a_plugin_problem(stub):
-    predictor, _ = stub
+def test_a_feature_no_plugin_adds_anymore_is_skipped_and_the_forecast_still_comes(stub):
+    predictor, model = stub
     predictor.config["features"] = ["prompt", "a_feature_from_a_plugin"]
-    with pytest.raises(RequestError) as caught:
-        answer(predictor, parse(request())[0])
-    assert caught.value.code == "plugin_failed" and "a_feature_from_a_plugin" in caught.value.message
+    model.result = {**model.result, "seconds": {"expected": 90.0}}
+    assert pipeline.unknown_features(predictor) == ["a_feature_from_a_plugin"]
+    assert pipeline.chosen_features(predictor) == ["prompt"]
+    forecast = answer(predictor, parse(request())[0])["forecasts"][0]
+    assert forecast["seconds"] == 90.0 and "a_feature_from_a_plugin" not in model.rows[0].numbers
+    with pytest.raises(ValueError, match="Unknown feature"):
+        features.check(["prompt", "a_feature_from_a_plugin"])  # a feature a person names must exist
 
 
 def test_a_free_model_costs_nothing_and_a_model_with_no_price_has_no_cost(stub, monkeypatch):

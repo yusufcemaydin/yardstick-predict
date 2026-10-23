@@ -31,9 +31,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 BUILT_IN_FORMAT = 4
-"""The format the built-in model saves in. A model in an older format has to be trained again, and one in a
-newer format needs a newer version of yardstick-predict. It's here so the command can check a saved model
-without loading XGBoost."""
+"""The format the built-in model saves in. A model in a newer format needs a newer version of yardstick-predict.
+It's here so the command can check a saved model without loading XGBoost."""
+PREVIOUS_FORMAT = 3
+"""The format the previous release, 0.3, saved the built-in model in. Such a model still forecasts, as that
+release did, until a refresh trains it again. A model in an older format has to be trained again first."""
 
 _TYPES: dict[str, tuple[Callable, Callable]] = {}
 

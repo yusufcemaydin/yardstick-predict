@@ -30,7 +30,8 @@ _TASK_ROW = f"({', '.join(_COLUMNS)}) VALUES ({', '.join('?' for _ in _COLUMNS)}
 _TEXTS = ("prompt", "context", "skills", "prior_skills")
 """A task's texts. They take most of the room."""
 FORMAT = 2
-"""The format a predictor's settings are saved in. Settings in an older format are brought up to date when read."""
+"""The format a predictor's settings are saved in. Settings in an older format are brought up to date when read.
+Settings in a newer format are read as far as they can be, and never saved."""
 
 
 def home() -> Path:
@@ -149,6 +150,11 @@ def _read_config(name: str, path: Path) -> dict:
         embedding = config.get("embedding") if isinstance(config, dict) else None
         if isinstance(embedding, dict) and isinstance(config.get("archives"), list) and embedding.get("model"):
             return _current(config)
+        if isinstance(config, dict) and _newer(config):
+            raise BrokenPredictor(
+                f"Predictor {name!r} was saved by a newer version of yardstick-predict, and this version can't "
+                "read its settings. Upgrade with: uv tool upgrade yardstick-predict"
+            )
         why = "are empty or broken"
     raise BrokenPredictor(
         f"Predictor {name!r} can't be used: its settings in {path} {why}. Fix that file, "
@@ -156,16 +162,23 @@ def _read_config(name: str, path: Path) -> dict:
     )
 
 
+def _newer(config: dict) -> bool:
+    """Whether a newer version of yardstick-predict saved these settings, in a format this version doesn't know."""
+    saved = config.get("format")
+    return isinstance(saved, int) and not isinstance(saved, bool) and saved > FORMAT
+
+
 def _current(config: dict) -> dict:
     """Settings saved in an older format, as this version keeps them. The next save writes them so.
 
     In format 1, the conversation so far wasn't a feature to choose. Every predictor read it, so one saved
-    then has the conversation feature.
+    then has the conversation feature. One that listed no features had the defaults, which now have it too.
+    Settings a newer version saved stay as they are.
     """
     if isinstance(config.get("format"), int) and config["format"] >= FORMAT:
         return config
     listed = config.get("features")
-    if isinstance(listed, list) and "conversation" not in listed:
+    if isinstance(listed, list) and listed and "conversation" not in listed:
         at = 1 if listed[:1] == ["prompt"] else 0
         config["features"] = [*listed[:at], "conversation", *listed[at:]]
     config["format"] = FORMAT
@@ -207,7 +220,16 @@ class Predictor:
         files.write_text(folder / "predictor.json", json.dumps(config, indent=2) + "\n")
         return cls(name)
 
+    @property
+    def newer(self) -> bool:
+        """Whether a newer version of yardstick-predict saved the settings. This version reads what it can of them,
+        and never saves them: it would write them in its older format."""
+        return _newer(self.config)
+
     def save_config(self) -> None:
+        """Save the settings in one step. Settings a newer version saved are left as they are."""
+        if self.newer:
+            return
         files.write_text(self.dir / "predictor.json", json.dumps(self.config, indent=2) + "\n")
 
     @property

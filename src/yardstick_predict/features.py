@@ -232,7 +232,11 @@ def available() -> dict[str, str]:
 
 
 def check(chosen: list[str] | tuple[str, ...]) -> list[str]:
-    """The prompt first, then each chosen feature once. Raises ValueError for a feature that doesn't exist."""
+    """The prompt first, then each chosen feature once. Raises ValueError for a feature that doesn't exist.
+
+    It's strict, for features a person or a program names. A saved predictor's features go through
+    pipeline.chosen_features, which skips the ones this version doesn't know.
+    """
     unknown = [name for name in chosen if name != REQUIRED and name not in available()]
     if unknown:
         raise ValueError(f"Unknown feature {unknown[0]!r}. Choose from: {', '.join(available())}.")

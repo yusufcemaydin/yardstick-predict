@@ -156,11 +156,11 @@ def test_training_without_llm_analysis_tests_and_trains_one_model(monkeypatch):
     assert "conversation" not in model.meta["report"]["models"]["claude-opus-5-5"]
 
 
-def test_a_model_made_by_an_older_version_has_to_be_trained_again(tmp_path):
+def test_a_model_made_by_a_version_before_the_previous_release_has_to_be_trained_again(tmp_path):
     tasks = synthetic(200)
     model = M.train(tasks, rows_for(tasks), ONE_WINDOW)
     model.save(tmp_path / "model")
     meta = json.loads((tmp_path / "model" / "model.json").read_text())
-    (tmp_path / "model" / "model.json").write_text(json.dumps({**meta, "format": M.FORMAT - 1}))
+    (tmp_path / "model" / "model.json").write_text(json.dumps({**meta, "format": M.PREVIOUS_FORMAT - 1}))
     with pytest.raises(M.OutdatedModel, match="refresh"):
         M.load(tmp_path / "model")

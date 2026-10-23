@@ -47,7 +47,7 @@ ERRORS = {
     "unknown_predictor": "The request names a predictor that doesn't exist.",
     "broken_predictor": "The predictor's settings file can't be read, or is empty or broken.",
     "plugin_failed": "A plugin the predictor uses couldn't be loaded.",
-    "not_trained": "The predictor has no model yet.",
+    "not_trained": "The predictor has no model yet, or its model is from a version before the previous release.",
     "no_embedding_key": "No Voyage key was found.",
     "embedding_failed": "Voyage couldn't embed the request's text.",
     "missing_library": "A library the model needs is missing.",
@@ -203,9 +203,10 @@ def _usable_texts(model, chosen: list[str]) -> list[str]:
     A model type of your own gets every text feature, since only it knows what it uses.
     """
     from .model import MIN_NEIGHBORS, Model, WithoutLLM
+    from .model_0_3 import Choice  # a model saved by 0.3. This goes when model_0_3 does.
 
     names = [name for name in chosen if features.is_text(name)]
-    if not isinstance(model, (Model, WithoutLLM)):
+    if not isinstance(model, (Model, WithoutLLM, Choice)):
         return names
     return [name for name in names if name in model.pools and len(model.pools[name][0]) >= MIN_NEIGHBORS]
 
@@ -261,7 +262,7 @@ def load(predictor: Predictor):
         raise RequestError("plugin_failed", str(error)) from None
     except NewerFormat as error:  # saved by a newer version of this tool
         raise RequestError("model_too_new", str(error)) from None
-    except OutdatedModel as error:  # trained by an older version, which read other features
+    except OutdatedModel as error:  # trained by a version before the previous release, which read other features
         raise RequestError("not_trained", str(error)) from None
 
 
@@ -310,10 +311,9 @@ def answer(
 
     now = time.time()
     model = load(predictor) if model is None else model
-    try:
-        chosen = pipeline.chosen_features(predictor)
-    except ValueError as error:  # a feature that a plugin added before, and doesn't add now
-        raise RequestError("plugin_failed", str(error)) from None
+    # A feature this version doesn't know, such as one a plugin added before and doesn't add now, is skipped.
+    # The model still forecasts, without that feature's values.
+    chosen = pipeline.chosen_features(predictor)
     defaults = model.meta.get("defaults", {})
     verdict = _verdicts(model)
     pairs = [(task, name, *verdict(name, task.effort)) for task in tasks for name in task.models]

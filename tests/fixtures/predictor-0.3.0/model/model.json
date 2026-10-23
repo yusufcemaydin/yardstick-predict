@@ -1,0 +1,270 @@
+{
+ "format": 3,
+ "settings": {
+  "type": "xgboost",
+  "heads": [
+   "seconds",
+   "tokens",
+   "usd"
+  ],
+  "head": "distribution",
+  "family": "lognormal",
+  "loss": "log_score",
+  "dropout": 0.0,
+  "test_share": 0.3,
+  "test_windows": 1,
+  "validation_share": 0.15,
+  "half_life_days": 30.0
+ },
+ "categories": {
+  "model": [
+   "claude-opus-5-5",
+   "gpt-6.1-sol",
+   "claude-haiku-5-5"
+  ],
+  "effort": [
+   "xhigh",
+   "high",
+   "max",
+   "low"
+  ],
+  "agent": [
+   "claude-code",
+   "codex"
+  ],
+  "origin": [
+   "person",
+   "program"
+  ]
+ },
+ "defaults": {
+  "claude-haiku-5-5": {
+   "effort": "low",
+   "agent": "claude-code"
+  },
+  "claude-opus-5-5": {
+   "effort": "high",
+   "agent": "claude-code"
+  },
+  "gpt-6.1-sol": {
+   "effort": "xhigh",
+   "agent": "codex"
+  }
+ },
+ "effort_counts": {
+  "gpt-6.1-sol": [
+   [
+    "xhigh",
+    80
+   ]
+  ],
+  "claude-opus-5-5": [
+   [
+    "high",
+    57
+   ],
+   [
+    "max",
+    43
+   ]
+  ],
+  "claude-haiku-5-5": [
+   [
+    "low",
+    12
+   ]
+  ]
+ },
+ "report": {
+  "trained_on": 107,
+  "tested_on": 60,
+  "windows": 2,
+  "models": {
+   "claude-haiku-5-5": {
+    "served": false,
+    "reason": "not_enough_data",
+    "heads": [],
+    "tasks_tested": 0,
+    "failed_checks": [],
+    "tasks": 12,
+    "conversation": false,
+    "llm": false
+   },
+   "claude-opus-5-5": {
+    "served": true,
+    "reason": null,
+    "heads": [
+     "seconds",
+     "tokens",
+     "usd"
+    ],
+    "tasks_tested": 30,
+    "seconds": {
+     "score": 0.6568,
+     "simple_rule_score": 0.6728,
+     "better_than_simple_rule": 0.0238,
+     "in_50_range": 0.4333,
+     "in_90_range": 0.9667,
+     "expected_over_real_total": 0.8926,
+     "tasks_tested": 30
+    },
+    "tokens": {
+     "score": 0.4422,
+     "simple_rule_score": 0.4784,
+     "better_than_simple_rule": 0.0758,
+     "in_50_range": 0.3667,
+     "in_90_range": 0.8667,
+     "expected_over_real_total": 0.796,
+     "tasks_tested": 30
+    },
+    "usd": {
+     "score": 0.4422,
+     "simple_rule_score": 0.4784,
+     "better_than_simple_rule": 0.0758,
+     "in_50_range": 0.3667,
+     "in_90_range": 0.8667,
+     "expected_over_real_total": 0.796,
+     "tasks_tested": 30
+    },
+    "failed_checks": [],
+    "tasks": 100,
+    "conversation": true,
+    "llm": true
+   },
+   "gpt-6.1-sol": {
+    "served": true,
+    "reason": null,
+    "heads": [
+     "seconds",
+     "tokens",
+     "usd"
+    ],
+    "tasks_tested": 30,
+    "seconds": {
+     "score": 0.6332,
+     "simple_rule_score": 0.6858,
+     "better_than_simple_rule": 0.0768,
+     "in_50_range": 0.4,
+     "in_90_range": 0.8333,
+     "expected_over_real_total": 0.8932,
+     "tasks_tested": 30
+    },
+    "tokens": {
+     "score": 0.3947,
+     "simple_rule_score": 0.4533,
+     "better_than_simple_rule": 0.1294,
+     "in_50_range": 0.3333,
+     "in_90_range": 0.8,
+     "expected_over_real_total": 0.9164,
+     "tasks_tested": 30
+    },
+    "usd": {
+     "score": 0.3947,
+     "simple_rule_score": 0.4533,
+     "better_than_simple_rule": 0.1294,
+     "in_50_range": 0.3333,
+     "in_90_range": 0.8,
+     "expected_over_real_total": 0.9164,
+     "tasks_tested": 30
+    },
+    "failed_checks": [],
+    "tasks": 80,
+    "conversation": false,
+    "llm": false
+   }
+  },
+  "pit": {
+   "seconds": [
+    6,
+    7,
+    2,
+    6,
+    4,
+    6,
+    9,
+    5,
+    7,
+    8
+   ],
+   "tokens": [
+    4,
+    8,
+    7,
+    4,
+    5,
+    6,
+    2,
+    3,
+    9,
+    12
+   ],
+   "usd": [
+    4,
+    8,
+    7,
+    4,
+    5,
+    6,
+    2,
+    3,
+    9,
+    12
+   ]
+  },
+  "min_tasks_to_test": 60,
+  "thresholds": {
+   "min_test_tasks": 30,
+   "tolerance": 0.02,
+   "min_range_held": 0.75,
+   "totals_range": [
+    0.5,
+    2.0
+   ]
+  }
+ },
+ "served": {
+  "claude-haiku-5-5": {
+   "served": false,
+   "reason": "not_enough_data",
+   "heads": []
+  },
+  "claude-opus-5-5": {
+   "served": true,
+   "reason": null,
+   "heads": [
+    "seconds",
+    "tokens",
+    "usd"
+   ]
+  },
+  "gpt-6.1-sol": {
+   "served": true,
+   "reason": null,
+   "heads": [
+    "seconds",
+    "tokens",
+    "usd"
+   ]
+  }
+ },
+ "trained_at": 1792775616.990122,
+ "tasks": 192,
+ "versions": [
+  "conversation",
+  "conversation-llm",
+  "plain"
+ ],
+ "uses": {
+  "claude-haiku-5-5": "plain",
+  "claude-opus-5-5": "conversation-llm",
+  "gpt-6.1-sol": "plain"
+ },
+ "without_llm": {
+  "claude-opus-5-5": {
+   "version": "conversation",
+   "served": true,
+   "reason": null
+  }
+ },
+ "features_without_values": []
+}

@@ -314,6 +314,26 @@ def feature_summary(config: dict) -> str:
     return "; ".join(found)
 
 
+def unknown_features_note(predictor: Predictor) -> None:
+    """Say in one line which features the predictor lists that this version doesn't know. They're skipped.
+
+    The predictor's plugins must be loaded first, or their features would count as unknown.
+    """
+    from .pipeline import unknown_features
+
+    names = unknown_features(predictor)
+    if names:
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        it = "it" if len(names) == 1 else "them"
+        ui.note(f"Skipping {listed}: this version doesn't know {it}. A newer version or a plugin added {it}.")
+
+
+def newer_settings_note(predictor: Predictor) -> None:
+    """Say that a newer version saved the predictor's settings, when it did. This version only reads them."""
+    if predictor.newer:
+        ui.note("A newer version of yardstick-predict saved this predictor. This version reads what it can of it.")
+
+
 def analysis_lines(asks: int, how: dict) -> list[str]:
     """What LLM analysis of this many tasks costs, or how it counts toward a subscription, in plain words."""
     from . import llm
@@ -955,6 +975,12 @@ def say_how_to_use(model, name: str, full: bool = True) -> None:
 
 def cmd_refresh(args) -> int:
     predictor = pick_predictor(args.predictor)
+    if predictor.newer:
+        # A refresh would save the settings, the dataset and the model the way this older version does.
+        raise SystemExit(
+            f"{predictor.name} was saved by a newer version of yardstick-predict, so this version leaves it as it "
+            "is. Upgrade with: uv tool upgrade yardstick-predict"
+        )
     # Two refreshes at once could each train, and the slower one could save an older model over a newer one.
     with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
         if not mine:
@@ -969,7 +995,9 @@ def _refresh(args, predictor: Predictor) -> int:
     from .pipeline import (
         analysis_plan,
         chosen_features,
+        from_previous_version,
         load_plugins,
+        model_meta,
         model_ready,
         outdated,
         plan_embeddings,
@@ -988,6 +1016,7 @@ def _refresh(args, predictor: Predictor) -> int:
     ask_first = getattr(args, "ask_first", False)
     ui.heading(predictor.name)
     ui.note(f"Last updated {ago(predictor.config.get('refreshed_at'))}.")
+    unknown_features_note(predictor)
     ui.working("Looking for new tasks")
     found = scan(predictor, on_progress=lambda done, total: ui.progress(done, total, "bytes"))
     counts = [f"{source} {count:,}" for source, count in found.per_archive.items() if count]
@@ -1008,12 +1037,17 @@ def _refresh(args, predictor: Predictor) -> int:
     if removed:
         ui.note(f"{len(removed):,} saved tasks aren't in their records anymore, so they're taken out.")
     has_model = model_ready(predictor)
+    meta = model_meta(predictor) if has_model else None
     behind = bool(predictor.config.get("needs_training"))
     if behind and has_model:
         ui.note("Training didn't finish last time. The model is out of date.")
-    elif has_model and outdated(predictor):
+    elif has_model and outdated(predictor, meta):
         behind = True
         ui.note("This model was made by an older version, which trained it another way. It needs training again.")
+    elif has_model and from_previous_version(predictor, meta):
+        behind = True
+        ui.note("This model was made by the previous version. It still forecasts, and training it again brings")
+        ui.note("this version's improvements.")
     model_name = predictor.embedding_model
     key, _ = embeddings.find_key()
     from . import features
@@ -1261,6 +1295,8 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     ]
     ui.out()
     ui.line(ui.join([ui.dim(part) for part in footer]))
+    newer_settings_note(predictor)
+    unknown_features_note(predictor)
 
 
 def cmd_status(args) -> int:
@@ -1307,7 +1343,7 @@ def cmd_status(args) -> int:
     if not found:
         ui.out("There's no predictor yet. Run yardstick-predict to create one.")
         return 0
-    from .pipeline import outdated
+    from .pipeline import from_previous_version, outdated
 
     for entry in found:
         ui.out()
@@ -1321,12 +1357,20 @@ def cmd_status(args) -> int:
             f"{entry['tasks']:,} tasks",
             f"updated {ago(entry['refreshed_at'])}",
         ]
+        predictor = predictors[entry["name"]]
         ui.line(ui.join(facts))
-        ui.line(f"Features: {feature_summary(predictors[entry['name']].config)}")
+        ui.line(f"Features: {feature_summary(predictor.config)}")
+        newer_settings_note(predictor)
+        if not predictor.config.get("plugins"):
+            unknown_features_note(predictor)  # without plugins, every feature this version knows is built in
         meta = metas.get(entry["name"])
-        if meta and outdated(predictors[entry["name"]], meta):
-            ui.note("Its model was made by an older version. Train it again with: yardstick-predict refresh")
+        if meta and outdated(predictor, meta):
+            ui.note("Its model was made by an older version, and gives no forecasts until it's trained again.")
+            ui.note("Train it again with: yardstick-predict refresh")
         elif meta:
+            if from_previous_version(predictor, meta):
+                ui.note("Its model was made by the previous version, and it still forecasts. Train it again to get")
+                ui.note("this version's improvements: yardstick-predict refresh")
             try:
                 ui.line(f"Trained on {meta.get('tasks', 0):,} tasks.")
                 print_report(meta)
