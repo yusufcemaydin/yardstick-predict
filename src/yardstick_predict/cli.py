@@ -346,21 +346,26 @@ def newer_settings_note(predictor: Predictor) -> None:
         ui.note("A newer version of yardstick-predict saved this predictor. This version reads what it can of it.")
 
 
-def analysis_lines(asks: int, how: dict) -> list[str]:
-    """What LLM analysis of this many tasks costs, or how it counts toward a subscription, in plain words."""
+def analysis_lines(asks: int, how: dict, tasks: int | None = None) -> list[str]:
+    """What LLM analysis of this many tasks costs, or how it counts toward a subscription, in plain words.
+
+    `tasks`, when given, is how many different tasks the `asks` readings are of. It's fewer when some tasks are
+    read more than once, as when predictors that share them ask for different parts.
+    """
     from . import llm
 
     provider = llm.PROVIDERS[how["provider"]]
     model = llm.title(how["model"])
+    read = f"{asks:,} tasks" if tasks is None or tasks == asks else f"{tasks:,} tasks, read {asks:,} times in all,"
     if not provider.billed:
         requests = -(-asks // provider.batch)
         return [
-            f"LLM analysis: {asks:,} tasks with {model} through your {provider.title.lower()}, "
+            f"LLM analysis: {read} with {model} through your {provider.title.lower()}, "
             f"in about {requests:,} requests. It counts toward your plan's usage limits."
         ]
     usd = llm.cost(asks, how["model"])
     price = f"about ${usd:,.2f} at list price" if usd is not None else "its price isn't in yardstick's list"
-    return [f"LLM analysis: {asks:,} tasks with {model}, {price}."]
+    return [f"LLM analysis: {read} with {model}, {price}."]
 
 
 def say_estimate(
@@ -2186,8 +2191,10 @@ def remake_lines(feature, users: list[Predictor], remade) -> list[str]:
     if feature.kind == "llm":
         how = {"provider": feature.made_with.get("provider"), "model": str(feature.made_with.get("model"))}
         found = [f"{who}, for {remade.tasks:,} task{'' if remade.tasks == 1 else 's'}."]
-        if how["provider"] in llm.PROVIDERS and remade.tasks:
-            found += analysis_lines(remade.tasks, how)
+        if remade.analyses > remade.tasks:
+            found.append("They ask for different parts of the analysis, so their tasks are read once for each.")
+        if how["provider"] in llm.PROVIDERS and remade.analyses:
+            found += analysis_lines(remade.analyses, how, remade.tasks)
         if any("description" in features.options(predictor.config, "llm") for predictor in users):
             found.append("It describes the tasks anew, and embedding the new descriptions costs Voyage tokens.")
         return [*found, asks]

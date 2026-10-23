@@ -503,6 +503,36 @@ def test_a_program_deletes_a_stored_feature_with_yes_and_reads_json(capsys, monk
         assert code == 1 and json.loads(out)["error"]["code"] == error
 
 
+def test_making_llm_answers_again_counts_an_analysis_for_each_set_of_parts_asked_for(capsys, monkeypatch):
+    from test_embeddings import _task
+
+    how = {"provider": "anthropic", "model": "claude-opus-5-5"}
+    tasks = [_task(n, f"task {n}") for n in range(6)]
+    made = {}
+    for name, parts in (("kind", ["kind"]), ("described", ["description"]), ("alike", ["kind"])):
+        made[name] = Predictor.create(name, [], EMBEDDING, features=["prompt", "llm"], options={"llm": parts}, llm=how)
+        made[name].add_tasks(tasks)
+    answers = feature_store.answers(how["provider"], how["model"])
+    # One asks for the kind of task, the other for a description, so each has the tasks they share read again.
+    found = pipeline.remake(answers, [made["kind"], made["described"]])
+    assert found.usd == pytest.approx(llm.cost(12, how["model"])) and (found.tasks, found.analyses) == (6, 12)
+    # Two that ask for the same parts share one analysis of each task.
+    found = pipeline.remake(answers, [made["kind"], made["alike"]])
+    assert found.usd == pytest.approx(llm.cost(6, how["model"])) and (found.tasks, found.analyses) == (6, 6)
+
+    feature_store.save_answers(answers, {"t0": {"kind": "feature", "by": "anthropic:claude-opus-5-5"}})
+    answering(monkeypatch, "n")
+    code, out = run(capsys, "features", "delete", answers.id)
+    assert "Used by alike, described and kind. The next refresh of each makes it again, for 6 tasks." in out
+    assert "They ask for different parts of the analysis, so their tasks are read once for each." in out
+    assert "LLM analysis: 6 tasks, read 12 times in all, with Claude Opus 5.5, about $0.10 at list price." in out
+    monkeypatch.setattr(command, "interactive", lambda: False)
+    code, out = run(capsys, "features", "delete", answers.id, "--yes", "--json")
+    remade = json.loads(out)["remake"]
+    assert code == 0 and (remade["tasks"], remade["analyses"]) == (6, 12)
+    assert remade["usd"] == pytest.approx(llm.cost(12, how["model"]))
+
+
 def test_a_stored_feature_no_predictor_uses_goes_without_any_cost(capsys, monkeypatch):
     answers = feature_store.answers("claude", "claude-opus-5-5")
     feature_store.save_answers(answers, {"t1": {"kind": "feature"}})  # made for a predictor deleted since

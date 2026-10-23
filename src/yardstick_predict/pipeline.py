@@ -750,6 +750,10 @@ class Remake:
     tasks: int = 0
     """How many tasks get it again: the ones each predictor learns from that have its text, or that LLM analysis
     reads. A task several predictors share counts once."""
+    analyses: int = 0
+    """For LLM answers: how many times LLM analysis reads a task, which is what it costs. A task is read once for
+    each different set of parts the predictors ask for, such as the kind of task or a description. Predictors that
+    ask for the same parts share one reading of each task."""
     texts: int = 0
     """For embeddings: how many different texts are embedded again."""
     cached: int = 0
@@ -770,13 +774,21 @@ def remake(feature, predictors: list[Predictor]) -> Remake:
     from .store import llm_answers
 
     if feature.kind == feature_store.LLM:
-        asked: set[str] = set()
+        # The first predictor to ask for a set of parts has its tasks read, and saves the answers. Another that
+        # asks for the same parts finds them. One that asks for other parts has its tasks read again.
+        asked: dict[tuple[str, ...], set[str]] = {}
         for predictor in predictors:
+            parts = tuple(llm.parts(features.options(predictor.config, "llm")))
             asks = analysis_plan(predictor.tasks(), predictor.config, {}, predictor.config.get("max_tasks"))
-            asked |= {ask.id for ask in asks}
+            asked.setdefault(parts, set()).update(ask.id for ask in asks)
+        analyses = sum(len(ids) for ids in asked.values())
         provider, model = feature.made_with.get("provider"), str(feature.made_with.get("model"))
         billed = provider in llm.PROVIDERS and llm.PROVIDERS[provider].billed
-        return Remake(tasks=len(asked), usd=llm.cost(len(asked), model) if billed else None)
+        return Remake(
+            tasks=len(set().union(*asked.values())),
+            analyses=analyses,
+            usd=llm.cost(analyses, model) if billed else None,
+        )
     field, model = feature.made_with.get("field"), str(feature.made_with.get("model"))
     items: list[tuple[str, str, str]] = []
     for predictor in predictors:
@@ -786,9 +798,14 @@ def remake(feature, predictors: list[Predictor]) -> Remake:
         items += embedding_items(predictor.tasks(), [field], None, limit, predictor.config, labels)
     plan = price(items, model, None)
     texts = len({text for _, _, text in items})
-    usd = plan.cost.list_usd if model in embeddings.MODELS else None
-    tasks = len({task_id for task_id, _, _ in items})
-    return Remake(tasks, texts, texts - len(plan.texts), plan.cost.tokens, usd, plan.cost.exact)
+    return Remake(
+        tasks=len({task_id for task_id, _, _ in items}),
+        texts=texts,
+        cached=texts - len(plan.texts),
+        tokens=plan.cost.tokens,
+        usd=plan.cost.list_usd if model in embeddings.MODELS else None,
+        exact=plan.cost.exact,
+    )
 
 
 def features_without_values(predictor: Predictor, rows: list) -> list[str]:
