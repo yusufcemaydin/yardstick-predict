@@ -178,3 +178,17 @@ def test_trials_shared_by_windows_are_counted_once():
     same = [replace(t, model="claude-opus-5-5") for t in tasks]
     assert len(M.fit_sizes(same, {})) == 4  # one AI model: three windows, then the final model
     assert M.fit_sizes(tasks[:50], {}) == [50]  # too few tasks to test: only the final model
+
+
+def test_a_terminal_without_fancy_characters_gets_plain_ones(terminal, monkeypatch):
+    import io
+
+    shown = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+    monkeypatch.setattr("sys.stdout", shown)
+    ui.progress(0, 1000, "texts")
+    terminal.now += 15
+    ui.progress(30, 1000, "texts")  # once the time left shows
+    ui.out(ui.join(["one", "two"]))
+    shown.flush()
+    text = re.sub(r"\033\[[0-9;]*[mK]", "", shown.buffer.getvalue().decode("ascii"))
+    assert "30 / 1,000 texts - about 8 min left" in text and "one - two" in text

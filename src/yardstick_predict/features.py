@@ -58,6 +58,9 @@ days counted from any other day wrong.
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _CUSTOM: dict[str, tuple[str, Callable[[TaskInfo], object]]] = {}
+LATER = frozenset({"conversation", "time"})
+"""Built-in features added after 0.3.0, whose names a plugin could pick before. A plugin that registers one
+keeps it: its own feature is used under that name, and the built-in one is off while the plugin is loaded."""
 _LIST_ITEM = re.compile(r"(?m)^[ \t]*(?:[-*•]|\d+[.)])[ \t]")
 _FILE_NAME = re.compile(
     r"[\w./-]+\.(?:py|ts|tsx|js|jsx|mjs|md|json|go|rs|swift|kt|java|css|scss|html|sql|ya?ml|toml|sh|rb|php|c|h|cpp)\b"
@@ -217,7 +220,7 @@ def register_feature(name: str, kind: str, function: Callable[[TaskInfo], object
     may be any real, finite number, NumPy's too. A bool is not a number here. For forecast requests, a
     task's "extra" object reaches the function as `info.extra`.
     """
-    if not _NAME.match(name) or name in TEXT or name in BUILT_IN:
+    if not _NAME.match(name) or ((name in TEXT or name in BUILT_IN) and name not in LATER):
         raise ValueError(f"Pick a new feature name of lowercase letters, digits and underscores, not {name!r}.")
     if name.startswith("llm_"):
         raise ValueError(f"Names that start with llm_ are kept for LLM analysis. Pick another one than {name!r}.")
@@ -286,7 +289,12 @@ def numbers(chosen: list[str], info: TaskInfo, table: dict | None, config: dict 
     if info.effort in LEVELS:
         found["effort_level"] = float(LEVELS[info.effort])
     for name in chosen:
-        if name == "benchmarks":
+        if name in _CUSTOM:
+            if _CUSTOM[name][0] == "number":
+                value = number(_CUSTOM[name][1](info))
+                if value is not None:
+                    found[name] = value
+        elif name == "benchmarks":
             found.update(benchmarks.facts(table or {}, info.model))
         elif name == "time":
             found.update(time_numbers(info.started_at, options(config or {}, "time")))
@@ -294,11 +302,12 @@ def numbers(chosen: list[str], info: TaskInfo, table: dict | None, config: dict 
             from . import llm
 
             found.update(llm.numbers(info.llm))
-        elif name in _CUSTOM and _CUSTOM[name][0] == "number":
-            value = number(_CUSTOM[name][1](info))
-            if value is not None:
-                found[name] = value
     return found
+
+
+def built_in(name: str, chosen) -> bool:
+    """Whether a built-in feature is on: chosen, and not taken over by a plugin's feature of the same name."""
+    return name in chosen and name not in _CUSTOM
 
 
 def _file_names(prompt: str) -> int:

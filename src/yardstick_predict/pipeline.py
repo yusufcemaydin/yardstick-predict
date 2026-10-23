@@ -568,7 +568,7 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
     from .model import Features
 
     chosen = chosen_features(predictor)
-    conversation = "conversation" in chosen
+    conversation = features.built_in("conversation", chosen)
     names = [name for name in chosen if features.is_text(name)]
     stored = {name: predictor.get_embeddings(name) for name in names}
     hashes = {name: predictor.embedded(name).hashes for name in names}

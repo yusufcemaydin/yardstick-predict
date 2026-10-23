@@ -356,7 +356,7 @@ def answer(
             task.conversation_tokens,
             info.agent,
             task.prompt,
-            conversation="conversation" in chosen,
+            conversation=features.built_in("conversation", chosen),
         )
         rows.append(
             Features(

@@ -481,3 +481,17 @@ def test_a_model_list_download_cut_off_midway_is_a_connection_problem(monkeypatc
     monkeypatch.setattr(benchmarks.urllib.request, "urlopen", lambda request, timeout: CutOff())
     with pytest.raises(OSError, match="broke"):
         benchmarks.download()
+
+
+def test_a_plugin_that_named_its_own_feature_time_or_conversation_keeps_it(monkeypatch):
+    # Both names became built-in features after 0.3.0, which let plugins use them.
+    monkeypatch.setattr(features, "_CUSTOM", {})
+    features.register_feature("time", "number", lambda info: 7)
+    features.register_feature("conversation", "text", lambda info: "a summary")
+    info = features.TaskInfo(prompt="Fix it", model="m", started_at=START)
+    found = features.numbers(["time"], info, None)
+    assert found["time"] == 7.0 and "days_since_2020" not in found  # the plugin's, not the built-in one
+    assert not features.built_in("conversation", ["conversation"])
+    assert features.is_text("conversation") and features.text("conversation", info) == "a summary"
+    with pytest.raises(ValueError):
+        features.register_feature("context", "text", lambda info: "x")  # built in since before plugins came

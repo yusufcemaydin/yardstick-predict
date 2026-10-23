@@ -15,7 +15,14 @@ import time
 from dataclasses import dataclass
 from functools import lru_cache
 
-_MARKS = {"ok": ("✓", "+"), "fail": ("✗", "x"), "wait": ("…", "..."), "bar": ("━", "#"), "rest": ("─", "-")}
+_MARKS = {
+    "ok": ("✓", "+"),
+    "fail": ("✗", "x"),
+    "wait": ("…", "..."),
+    "bar": ("━", "#"),
+    "rest": ("─", "-"),
+    "dot": ("·", "-"),
+}
 _ANSI = re.compile(r"\033\[[0-9;]*m")
 _transient = False
 """Whether the last thing printed was a line the next output replaces, like a progress bar."""
@@ -96,7 +103,7 @@ def width(text: str) -> int:
 
 def join(parts: list[str]) -> str:
     """Short facts on one line, split by a quiet dot, or by commas in plain text."""
-    return dim(" · ").join(parts) if styled() else ", ".join(parts)
+    return dim(f" {mark('dot')} ").join(parts) if styled() else ", ".join(parts)
 
 
 def _clear() -> None:
@@ -233,7 +240,7 @@ def progress(done: int, total: int, unit: str) -> None:
     track = accent(mark("bar") * filled) + dim(mark("rest") * (width - filled))
     counts = f"{size(done)} / {size(total)}" if unit == "bytes" else f"{done:,} / {total:,} {unit}"
     left = bar.left(now)
-    tail = dim(f" · {time_left(left)}") if left is not None else ""
+    tail = dim(f" {mark('dot')} {time_left(left)}") if left is not None else ""
     print(f"\r\033[2K  {track}  {counts}{tail}", end="", flush=True)
     _transient = True
 

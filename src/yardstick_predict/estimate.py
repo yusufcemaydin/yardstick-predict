@@ -81,8 +81,8 @@ class Estimate:
 
 
 def text_bytes(tasks: list[Task]) -> int:
-    """How long the tasks' texts are, all told."""
-    return sum(len(t.prompt) + len(t.context) + len(t.skills) + len(t.prior_skills) for t in tasks)
+    """How many bytes the tasks' texts take, all told. A character outside English takes two to four."""
+    return sum(len(f"{t.prompt}{t.context}{t.skills}{t.prior_skills}".encode(errors="replace")) for t in tasks)
 
 
 def of(
