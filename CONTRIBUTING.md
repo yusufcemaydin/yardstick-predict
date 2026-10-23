@@ -33,6 +33,29 @@ uv run ruff format src tests
 
 [How it works](docs/how-it-works.md) explains the data, the model and the test. A change to the model must keep passing the test on real runs, not just the unit tests. Say in your pull request how it did.
 
+## Keep private data out
+
+The repository is public, so the tests include a privacy check, `tests/test_privacy.py`. It reads every file git tracks, except binary files and `uv.lock`, and fails when one holds:
+
+- an email address. GitHub's no-reply addresses, which reach no one, and the example domains `example.com`, `example.org` and `example.net` are fine.
+- a home folder with a real-looking user name, such as `/Users/<name>`, `/home/<name>` or `C:\Users\<name>`. The few made-up names the tests use are fine.
+- text shaped like a secret key: an Anthropic, OpenAI, Voyage, GitHub or AWS key, or a private key file.
+
+It names the file and line of each find, never the text itself, so its output is safe to share. It reads files only, not commit messages.
+
+Some words must stay private but can't be listed in a public file, such as the names of people, clients or other projects. Keep them in a file on your own computer, outside the repository, one a line. Case doesn't matter, and blank lines and lines that start with `#` are skipped. When the environment variable `YARDSTICK_PRIVATE_TERMS` names that file, the check fails on those words too:
+
+```bash
+YARDSTICK_PRIVATE_TERMS=~/private-terms.txt uv run pytest tests/test_privacy.py
+```
+
+To run it before every push, give git a pre-push hook: a script git runs before each push, which stops the push when the script fails. Save these two lines as `.git/hooks/pre-push`, then make the file runnable with `chmod +x .git/hooks/pre-push`:
+
+```sh
+#!/bin/sh
+YARDSTICK_PRIVATE_TERMS="$HOME/private-terms.txt" uv run pytest -q tests/test_privacy.py
+```
+
 ## Report a problem or suggest an idea
 
 Open an issue and pick a form:
