@@ -20,6 +20,10 @@ Training uses exactly the features you choose. It trains one model, not one for 
 - On the Features screen, the end of the conversation is now called Context, after its `context` flag, and History is called Project history.
 - Once this version saves a predictor's settings, an older version can't use that predictor: it doesn't know the `conversation` feature.
 
+### Added
+
+- Releases are published on PyPI, the Python package index. From this release on, `uv tool install yardstick-predict` installs it, and `uv tool upgrade yardstick-predict` updates it. If you installed an earlier version from GitHub, run that install command once to switch. If you use the `llm` extra, install `'yardstick-predict[llm]'` instead.
+
 ## [0.3.0] - 2026-10-22
 
 Forecasts learn from much more of what's known before a task starts, and records are read more accurately again. Your predictors catch up by themselves: the next refresh reads all your records again, once, embeds only the texts that changed, and trains the model again. Until then, a predictor made with an older version gives no forecasts. Training tests more versions of the model, so it takes longer: about a minute for a few thousand tasks, and two or three with LLM analysis.

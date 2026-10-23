@@ -1,0 +1,58 @@
+name: Release
+
+# Pushing a version tag, such as v0.4.0, builds the package and publishes it on PyPI. Nothing else starts this
+# workflow: not pull requests, and not pushes to a branch. CONTRIBUTING.md says how to release, and what to set up
+# on PyPI once.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false  # the build needs no access to GitHub
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+      - name: Check that the tag matches the version
+        run: |
+          version="$(uv version --short)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::The tag is $GITHUB_REF_NAME, but pyproject.toml says the version is $version. Tag the commit that sets the version you mean to release."
+            exit 1
+          fi
+          if ! grep -qxF "__version__ = \"$version\"" src/yardstick_predict/__init__.py; then
+            echo "::error::src/yardstick_predict/__init__.py doesn't say version $version. Set the same version there as in pyproject.toml."
+            exit 1
+          fi
+      - name: Build the source package and the wheel
+        run: uv build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: package
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish on PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # PyPI trusts uploads from this repository, this workflow and this environment, so no password or token is kept
+    # anywhere. Only this job gets the proof of where it runs, and it builds nothing, so no build code can use it.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/yardstick-predict/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: package
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3

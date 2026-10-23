@@ -95,6 +95,30 @@ Code that's minified, obfuscated or generated without its source will be closed 
 
 You can use AI tools to write your change. You're still responsible for it. Read it, test it, and be ready to explain it.
 
+## Releasing
+
+Between releases, the version on the main branch ends in `.dev0`, such as `0.4.0.dev0`, which means work toward 0.4.0. To release it, a maintainer:
+
+1. Sets the version, such as `0.4.0`, in `pyproject.toml` and `src/yardstick_predict/__init__.py`, and runs `uv lock`.
+2. In `CHANGELOG.md`, renames `## [Unreleased]` to the version and the day, such as `## [0.4.0] - 2026-11-02`, and starts a new, empty `## [Unreleased]` above it.
+3. Merges that change into main once the tests pass.
+4. Tags the merged commit with the version and pushes the tag:
+
+   ```bash
+   git tag v0.4.0
+   git push origin v0.4.0
+   ```
+
+The tag starts the release workflow, `.github/workflows/release.yml`. It checks that the tag matches the version in both files, `v0.4.0` for `0.4.0`, and stops if not. Then it builds the package and publishes it on PyPI, the Python package index. Nothing else starts it: not pull requests, and not pushes to a branch.
+
+After the release, set the next version on main, such as `0.5.0.dev0`.
+
+Before the first release, set up PyPI once:
+
+1. Make an account on [PyPI](https://pypi.org) and turn on two-factor sign-in.
+2. Tell PyPI to trust this repository's release workflow, so it takes the upload with no password or token kept anywhere. PyPI calls this a trusted publisher. Before the project exists on PyPI, add it as a pending publisher, under Your account > Publishing, with the project name `yardstick-predict`, owner `yusufcemaydin`, repository `yardstick-predict`, workflow `release.yml` and environment `pypi`. The first release then creates the project.
+3. On GitHub, under the repository's Settings > Environments, create an environment named `pypi`. To approve each publish yourself, add yourself as a required reviewer. Under deployment branches and tags, allow only tags that match `v*`.
+
 ## License
 
 By sending a change, you agree that it's released under the [Apache License 2.0](LICENSE), like the rest of the project.
