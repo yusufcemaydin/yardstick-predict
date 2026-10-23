@@ -5,6 +5,7 @@
     yardstick-predict refresh      Add new runs, embed them and retrain.
     yardstick-predict predict      Forecast a task: a table in a terminal, JSON for programs.
     yardstick-predict status       Show your predictors and how well they forecast.
+    yardstick-predict check        Check which of a predictor's features help its forecasts. Changes nothing.
     yardstick-predict default      Show or choose the predictor used when a command names none.
 
 It only asks questions when a person runs it in a terminal. When a program runs it, it never asks.
@@ -281,15 +282,21 @@ def choose_archives(can_ask: bool, given: list[str]) -> list[dict]:
 
 def choose_features(can_ask: bool, args):
     """The features a person picks on the Features screen, or a program names with flags."""
-    from . import features, menu
+    from . import menu
 
     try:
         if args.features is not None or not can_ask:
             return menu.from_flags(args.features, args.llm_provider, args.llm_model)
-        custom = {name: says for name, says in features.available().items() if name not in features.BUILT_IN}
-        return menu.ask(custom)
+        return menu.ask(custom_features())
     except ValueError as error:
         raise SystemExit(str(error)) from None
+
+
+def custom_features() -> dict[str, str]:
+    """The features plugins add, with what each is, for the Features screen."""
+    from . import features
+
+    return {name: says for name, says in features.available().items() if name not in features.BUILT_IN}
 
 
 def feature_summary(config: dict) -> str:
@@ -351,17 +358,20 @@ def analysis_lines(asks: int, how: dict) -> list[str]:
     return [f"LLM analysis: {asks:,} tasks with {model}, {price}."]
 
 
-def say_estimate(tasks: list, config: dict, plan, asks: list, new_tasks: list | None = None, dataset: int = 0) -> None:
+def say_estimate(
+    tasks: list, config: dict, plan, asks: list, new_tasks: list | None = None, dataset: int = 0, checked: int = 0
+) -> None:
     """One line on how long the rest takes, what it's made of and the room the dataset takes, before the
     question to go ahead. Then a note on memory, only when training may use a lot of this computer's.
 
     `tasks` are all the predictor's tasks once the new ones are in, `config` its settings, `plan` what goes to
     Voyage and `asks` the tasks LLM analysis reads. `new_tasks` are the ones the dataset doesn't have yet, all of
-    `tasks` by default, and `dataset` is how many bytes it takes now.
+    `tasks` by default, and `dataset` is how many bytes it takes now. `checked` is how many features the feature
+    check tests the model without, when it runs.
     """
     from . import estimate
 
-    found = estimate.of(tasks, config, plan.cost.tokens, len(plan.items), len(asks), new_tasks, dataset)
+    found = estimate.of(tasks, config, plan.cost.tokens, len(plan.items), len(asks), new_tasks, dataset, checked)
     ui.line(estimate.line(found))
     memory = estimate.memory_note(found, estimate.total_memory())
     if memory:
@@ -766,6 +776,9 @@ def cmd_create(args) -> int:
         )
     picked = choose_features(can_ask, args)
     chosen, settings = picked.features, picked.config()
+    # The check is advice for a person setting up step by step. A program, or a person who named the features
+    # with flags, gets the features they named.
+    checking = can_ask and args.features is None and built_in and offer_check(chosen, found.new_tasks, args.max_tasks)
     items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks, config=settings)
 
     model_name = args.embedding or (None if can_ask else "voyage-4")
@@ -820,15 +833,31 @@ def cmd_create(args) -> int:
         for text in cost_lines(plan.cost, model_name, plan.tasks):
             ui.line(text)
     asks = analysis_plan(found.new_tasks, settings, {}, limit)
+    if checking:
+        from . import check
+
+        asks = check.sample(asks)  # the rest only once the check shows LLM analysis helps
     if asks:
         for text in analysis_lines(len(asks), settings["llm"]):
             ui.line(text)
+        if checking:
+            ui.note("For the check, it reads only your newest tasks. If it helps, you can have it read the rest after.")
         if "description" in features.options(settings, "llm"):
             ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
-    say_estimate(found.new_tasks, {**settings, "model": model_settings, "max_tasks": limit}, plan, asks)
-    question = (
-        "Analyze and embed them, and train the predictor now?" if asks else "Embed them and train the predictor now?"
+    checked = len(chosen) - 1 if checking else 0  # every feature but the prompt
+    say_estimate(
+        found.new_tasks, {**settings, "model": model_settings, "max_tasks": limit}, plan, asks, checked=checked
     )
+    if checking:
+        question = (
+            "Analyze and embed them, then check the features?" if asks else "Embed them, then check the features?"
+        )
+    else:
+        question = (
+            "Analyze and embed them, and train the predictor now?"
+            if asks
+            else "Embed them and train the predictor now?"
+        )
     if can_ask and not ui.ask(question, True):
         ui.note("Stopped. Nothing was created.")
         return 0
@@ -864,6 +893,10 @@ def cmd_create(args) -> int:
             plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
         if plan.items and not embed_with_progress(predictor, plan, key):
             return 1
+        if checking:
+            stop = check_and_choose(predictor, key)
+            if stop is not None:
+                return stop
         model = train_and_report(predictor, train)
         if model is None:
             return 1
@@ -971,6 +1004,166 @@ def say_how_to_use(model, name: str, full: bool = True) -> None:
         ui.note("It's your default predictor, so commands use it when they name none.")
     ui.note("Programs send JSON to yardstick-predict predict and read JSON back.")
     ui.note("Run yardstick-predict every week or so to add new tasks and retrain.")
+
+
+# The feature check -------------------------------------------------------------------------------------
+
+
+def offer_check(chosen: list[str], tasks: list, limit: int | None) -> bool:
+    """Ask whether to check which of the chosen features help, before anything is spent. Enter says yes.
+
+    It's asked only when an optional feature is chosen and at least one AI model has enough tasks for the test
+    to judge it. Otherwise the check couldn't tell anything.
+    """
+    from collections import Counter
+
+    from .model import min_tasks_to_test
+    from .pipeline import learnable
+
+    if len(chosen) < 2:  # only the prompt, which is always used
+        return False
+    counts = Counter(task.model for task in learnable(tasks, limit))
+    if max(counts.values(), default=0) < min_tasks_to_test():
+        return False
+    ui.heading("Feature check")
+    ui.note("Some features carry no signal for your kind of work, and with few tasks a feature can't show anything.")
+    return ui.ask("Check which of these features actually help? Recommended.", True)
+
+
+def run_check(predictor: Predictor):
+    """Run the feature check with a progress bar, show what it found and remember it.
+
+    Returns what it found, or None when it couldn't test any AI model, so the features stay as they are.
+    """
+    from . import check
+    from .model import NotEnoughData
+
+    ui.heading("Feature check")
+    # The bar takes this line's place once the first trial model is being fitted.
+    ui.working("Testing the model with every feature, then without each one")
+    try:
+        result = check.run(check.inputs(predictor), lambda done, total: ui.progress(done, total, "steps"))
+    except NotEnoughData as error:
+        ui.note(f"It couldn't run. {error}")
+        return None
+    check.remember(result, predictor.name)
+    say_checked(result)
+    show_check(result)
+    return result if any(result.tasks_tested(model) for model in result.models) else None
+
+
+def say_checked(result) -> None:
+    """Say how many features the check tested, on how many of the AI models' newest tasks."""
+    count = len(result.features)
+    tested = result.report.get("tested_on", 0)
+    ui.ok(f"Checked {count} feature{'' if count == 1 else 's'} on {tested:,} test task{'' if tested == 1 else 's'}.")
+
+
+def show_check(result) -> None:
+    """The feature check's verdicts as a small table: a row for each feature, a column for each AI model tested."""
+    from . import check
+
+    tested = [model for model in result.models if result.tasks_tested(model)]
+    if not tested:
+        needed = result.report.get("min_tasks_to_test") or 60
+        ui.note(f"There aren't enough tasks to check the features yet. Each AI model needs {needed:,} of its own.")
+        return
+    ui.line("Tested on each AI model's newest tasks, with every feature and then without each one.")
+    ui.line()
+    looks = {check.HELPED: ui.green, check.NO_HELP: str, check.NOT_ENOUGH: ui.dim}
+    rows = [("", *(ui.dim(model) for model in tested))]
+    for name in result.features:
+        found = [result.verdicts[name][model]["verdict"] for model in tested]
+        rows.append((ui.bold(check.title(name)), *(looks[kind](check.WORDS[kind]) for kind in found)))
+    ui.table(rows)
+    ui.line()
+    ui.note(f"A feature helped when an AI model's test scored more than {check.WORSE_BY:.0%} worse without it.")
+    ui.note(
+        f"Not enough data: the AI model had too few tasks to test, or under {check.LEAST_SHARE:.0%} of its test "
+        "tasks had the feature."
+    )
+    untested = [model for model in result.models if not result.tasks_tested(model)]
+    if untested:
+        ui.note(f"Too few tasks to test: {', '.join(untested)}.")
+
+
+def check_and_choose(predictor: Predictor, key: str) -> int | None:
+    """In setup: run the feature check, then let the person keep the features it suggests or change them.
+
+    The features that helped at least one AI model start on. When the check can't test any AI model, the features
+    stay as chosen. Whatever the final choice still needs is shown with its cost and asked for first: LLM analysis
+    of the tasks its sample left out, and embedding any text the check didn't have. Returns None to go on and
+    train, or the command's exit code when it stops.
+    """
+    from . import features, menu
+    from .pipeline import plan_embeddings, refresh_benchmarks
+
+    config = predictor.config
+    sampled = "llm" in config["features"]  # LLM analysis read only a sample for the check
+    result = run_check(predictor)
+    if result is not None:
+        helped = result.helped()
+        options = {name: chosen for name, chosen in (config.get("options") or {}).items() if name in helped}
+        start = menu.Picked([features.REQUIRED, *helped], options, dict(config.get("llm") or {}))
+        ui.line()
+        if helped:
+            ui.note("The features that helped are on below. Press Enter to keep them, or change them first.")
+        else:
+            ui.note("None of them helped, so they're off below. Press Enter to keep it that way, or turn some on.")
+        picked = menu.ask(custom_features(), start)
+        config.pop("llm", None)
+        config.update(picked.config())
+        predictor.save_config()
+    if "benchmarks" in config["features"] and not (predictor.dir / "benchmarks.json").is_file():
+        warning = refresh_benchmarks(predictor)
+        if warning:
+            ui.note(warning)
+    if "llm" in config["features"] and not analyze_the_rest(predictor, sampled):
+        config["features"] = [name for name in config["features"] if name != "llm"]
+        (config.get("options") or {}).pop("llm", None)
+        config.pop("llm", None)
+        predictor.save_config()
+        ui.note("LLM analysis is left out of this predictor.")
+    plan = plan_embeddings(predictor, key)
+    # The descriptions LLM analysis just wrote were in the cost of analyzing the rest. Anything else is new.
+    if any(name != "llm" for _, name, _ in plan.items):
+        ui.heading("Cost")
+        for text in cost_lines(plan.cost, predictor.embedding_model, plan.tasks):
+            ui.line(text)
+        if not ui.ask("Embed them and train the predictor now?", True):
+            ui.note(
+                "Stopped. Your choice of features is kept. Embed and train later with: "
+                f"yardstick-predict refresh --predictor {predictor.name}"
+            )
+            return 0
+    if plan.items and not embed_with_progress(predictor, plan, key):
+        return 1
+    return None
+
+
+def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
+    """Show what LLM analysis of the tasks it hasn't read costs, ask, and run it. False when the person says no.
+
+    With `sampled`, it read a sample for the feature check. Turned on only after the check, it read nothing yet.
+    """
+    from . import features
+    from .pipeline import analysis_plan
+
+    labels = predictor.llm_labels()
+    rest = analysis_plan(predictor.tasks(), predictor.config, labels, predictor.config.get("max_tasks"))
+    if not rest:
+        return True
+    ui.heading("Cost")
+    if sampled:
+        ui.line("For the check, LLM analysis read only a sample of your tasks. To read the rest:")
+    for text in analysis_lines(len(rest), predictor.config["llm"]):
+        ui.line(text)
+    if "description" in features.options(predictor.config, "llm"):
+        ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
+    if not ui.ask("Analyze them now?", True):
+        return False
+    analyze_with_progress(predictor, rest)
+    return True
 
 
 def cmd_refresh(args) -> int:
@@ -1379,6 +1572,81 @@ def cmd_status(args) -> int:
     return code
 
 
+def cmd_check(args) -> int:
+    """Check which of a predictor's features help its forecasts, and show the verdicts. It's advice only: it reads
+    the predictor's tasks and features, embeds nothing, asks no AI model and keeps none of the models it tests.
+    It remembers the verdicts, so the Features screen can show them."""
+    from . import check, model_types
+    from .model import NotEnoughData
+    from .pipeline import load_plugins, settings
+
+    def stop(code: str, message: str) -> int:
+        if args.json:
+            print(json.dumps({"version": 1, "error": {"code": code, "message": message}}, indent=2))
+            return 1
+        raise SystemExit(message)
+
+    names = predictor_names()
+    if args.name and args.name not in names:
+        return stop(
+            "unknown_predictor",
+            f"There's no predictor called {args.name!r}. Your predictors: {', '.join(names) or 'none'}.",
+        )
+    if not names:
+        return stop("no_predictor", "There's no predictor yet. Run yardstick-predict to create one.")
+    name = args.name or default_name()
+    if name is None:
+        return stop(
+            "no_default_predictor",
+            f"You have several predictors and no default: {', '.join(names)}. Name one, like: "
+            f"yardstick-predict check {names[0]}",
+        )
+    try:
+        predictor = Predictor(name)
+        load_plugins(predictor)
+    except BrokenPredictor as error:
+        return stop("broken_predictor", str(error))
+    except model_types.PluginError as error:
+        return stop("plugin_failed", str(error))
+    kind = settings(predictor).get("type", "xgboost")
+    if kind != "xgboost":
+        return stop(
+            "unsupported_model_type",
+            f"{name} uses the {kind} model type from a plugin. The check tests the built-in model only.",
+        )
+    person = not args.json
+    if person:
+        ui.heading(name)
+        ui.working("Reading its tasks")
+    # No setup or refresh changes the tasks while they're read. The tests then run on what was read, so one can
+    # start meanwhile.
+    with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
+        if not mine:
+            return stop("busy", f"{name} is being set up or refreshed by another command. Try again when it's done.")
+        given = check.inputs(predictor)
+    if not given.features:
+        if args.json:
+            print(json.dumps(check.as_json(check.judge({"": {}}, {}, []), name), indent=2))
+            return 0
+        ui.line("There's nothing to check: it uses only the features that are always on.")
+        return 0
+    if person:
+        ui.working("Testing the model with every feature, then without each one")
+    try:
+        result = check.run(given, (lambda done, total: ui.progress(done, total, "steps")) if person else None)
+    except NotEnoughData as error:
+        return stop("not_enough_data", f"The check can't run. {error}")
+    check.remember(result, name)
+    if args.json:
+        print(json.dumps(check.as_json(result, name), indent=2))
+        return 0
+    say_checked(result)
+    show_check(result)
+    ui.line()
+    ui.note("This is advice only: nothing changed. To use other features, create a new predictor with them.")
+    return 0
+
+
 def cmd_claude_code(args) -> int:
     """Add the status line and its hooks to Claude Code's settings, or take them out again."""
     from . import claude_code
@@ -1622,6 +1890,12 @@ def make_parser() -> argparse.ArgumentParser:
     status.add_argument("--predictor", help="Show only this predictor.")
     status.add_argument("--json", action="store_true", help="Print JSON.")
 
+    check = commands.add_parser(
+        "check", help="Check which of a predictor's features help its forecasts. Advice only: it changes nothing."
+    )
+    check.add_argument("name", nargs="?", help="The predictor to check. Default: your default predictor.")
+    check.add_argument("--json", action="store_true", help="Print JSON.")
+
     default = commands.add_parser("default", help="Show or choose the predictor used when a command names none.")
     default.add_argument("name", nargs="?", help="The predictor to make the default.")
 
@@ -1632,7 +1906,7 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-TRAINS_OR_FORECASTS = ("create", "refresh", "predict")
+TRAINS_OR_FORECASTS = ("create", "refresh", "predict", "check")
 """The commands that need XGBoost. The others work on a computer where it can't load, so you can still
 look at your predictors, choose a default and take the status line out of Claude Code."""
 
@@ -1653,6 +1927,7 @@ def main(argv: list[str] | None = None) -> int:
         "refresh": cmd_refresh,
         "predict": cmd_predict,
         "status": cmd_status,
+        "check": cmd_check,
         "default": cmd_default,
         "claude-code": cmd_claude_code,
     }
@@ -1662,6 +1937,8 @@ def main(argv: list[str] | None = None) -> int:
         person = forecasting and terminal_output() and bool(args.task or args.prompt)
         if forecasting and not (person and not args.json and not args.distribution):
             print(json.dumps({"version": 1, "error": {"code": "missing_library", "message": problem}}))
+        elif args.command == "check" and args.json:
+            print(json.dumps({"version": 1, "error": {"code": "missing_library", "message": problem}}, indent=2))
         else:
             ui.error(problem)
         return 1

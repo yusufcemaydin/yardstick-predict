@@ -55,6 +55,8 @@ TREND_FROM = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
 It must never change after a release. A saved model learned from days counted from this day, and would read
 days counted from any other day wrong.
 """
+TIME_NUMBERS = ("days_since_2020", "hour_of_day", "day_of_week")
+"""The number features the time feature brings: the first with its trend option, the other two with its clock."""
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _CUSTOM: dict[str, tuple[str, Callable[[TaskInfo], object]]] = {}
@@ -340,16 +342,17 @@ def time_numbers(started_at: float | None, chosen: list[str]) -> dict[str, float
     started = number(started_at)
     if started is None:
         return {}
+    trend, hour, day = TIME_NUMBERS
     found: dict[str, float] = {}
     if "trend" in chosen:
-        found["days_since_2020"] = (started - TREND_FROM) / 86_400
+        found[trend] = (started - TREND_FROM) / 86_400
     if "clock" in chosen:
         try:
             local = time.localtime(started)
         except (OverflowError, OSError, ValueError):
             return found  # a moment too far off for this computer's clock to name
-        found["hour_of_day"] = local.tm_hour + local.tm_min / 60
-        found["day_of_week"] = float(local.tm_wday)
+        found[hour] = local.tm_hour + local.tm_min / 60
+        found[day] = float(local.tm_wday)
     return found
 
 

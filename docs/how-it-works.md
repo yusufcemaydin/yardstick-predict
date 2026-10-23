@@ -103,15 +103,31 @@ Each AI model's forecasts are then scored against **the simple rule**: the same 
 
 A model also needs 30 earlier tasks and 30 test tasks, so it needs 60 tasks of its own before the test can judge it. A window that has too few finished tasks before it doesn't run, and its tasks don't count as tested. A model that fails gets `null` forecasts and a reason. So does an effort level the model never ran at: nothing was learned about it. `yardstick-predict status` shows the scores and which check failed.
 
-## 5. On a Mac
+## 5. The feature check
+
+Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The feature check finds out which of a predictor's features help its forecasts. Setup offers it when you pick features beyond the three that are always on, and at least one AI model has the 60 tasks the test needs. `yardstick-predict check NAME` runs it on a predictor you already have. It tests the built-in model, not a model type from a plugin.
+
+It runs the test above once with every feature, then once without each optional feature in turn. It only tests: it fits a model for each test window, and no final model. The similar past tasks are worked out once for all the tests, since leaving a feature out only drops what that feature brings. For each feature and each AI model, it gives one of three verdicts:
+
+- **Helped:** the AI model's test scored more than 1% worse without the feature. A lower score is better. When the test scored time, tokens and cost, each counts alike: the check averages how much worse each scored.
+- **Didn't help:** the test scored about the same without it, or better.
+- **Not enough data:** the AI model had too few tasks to test, or under 20% of its test tasks had the feature, as with skills that few prompts name.
+
+A feature that didn't help costs embedding tokens or an AI model's time for nothing, and adds noise the trees can chase. Not enough data is no verdict either way: check again once you have more tasks. The check is advice. It never changes a predictor by itself.
+
+In setup, the Features screen comes back after the check, with the features that helped at least one AI model turned on. You keep them or change them, and the model trains with what you choose. LLM analysis is tried on a sample first: before the check it reads only your newest 30% of tasks, and at most 500, with its cost shown first. If you keep it on, setup shows what reading the rest costs and asks. With a very large history, 500 tasks may be under 20% of an AI model's test tasks, and then LLM analysis gets not enough data. Turning on a feature the check didn't have shows its cost before anything is embedded.
+
+Each verdict is saved with when it was checked and the predictor's name, in `features/checks.json` in the yardstick folder. A later verdict replaces it, except a verdict of not enough data, which tells nothing new. The Features screen shows the latest verdicts next to each feature. With `--json`, `yardstick-predict check` gives programs every verdict, with `worse_without`, how much worse the test scored without the feature (0.05 is 5% worse), and `share`, the share of the AI model's test tasks that had it.
+
+## 6. On a Mac
 
 XGBoost needs a library called OpenMP. On a Mac, XGBoost looks for it only where Homebrew would put it. scikit-learn, installed with yardstick-predict on Macs, carries its own copy. When XGBoost can't find OpenMP, the command restarts once with scikit-learn's folder on the list of places the Mac searches, so nothing else has to be installed.
 
-## 6. Speed
+## 7. Speed
 
 - **Reading records** takes well under a minute for gigabytes of history. A refresh reads only what changed.
 - **Training** takes under a minute for a few thousand tasks, test included, and about twice as long with LLM analysis, which also trains and tests the model without it. On that much data, XGBoost's threads cost more time than they save, so it uses one, and up to four on very large histories.
 - **A forecast** takes about half a second from the command line. Most of that is starting Python. Add one short request to Voyage for the embeddings, unless the cache already holds them, and with LLM analysis, one request to the AI model you picked. When Voyage can't be reached, a forecast says so within seconds.
 - **LLM analysis** reads past tasks once, in batches: several at a time with an API key, fewer through a subscription.
 
-Before setup or a refresh goes ahead, it says about how long the rest will take, and how much disk space the dataset will take. It works this out from what it knows by then: how many tokens go to Voyage, how many tasks LLM analysis reads, and how many tasks training learns from. A few rough constants turn those into time, disk space and memory. Training's and the dataset's were measured on synthetic tasks. Voyage's and the AI models' speeds can't be measured without paying, so theirs are worked out from how the requests go out. Voyage's assume an account with a payment method: one without gets low limits, and embedding takes much longer. The constants are in [`estimate.py`](../src/yardstick_predict/estimate.py), each with how it was found. Nothing is timed while the command runs, and the time is given as a range, from 70% to 150% of the estimate. While each long step runs, its progress bar says how long is left, from how fast it has gone lately.
+Before setup or a refresh goes ahead, it says about how long the rest will take, and how much disk space the dataset will take. It works this out from what it knows by then: how many tokens go to Voyage, how many tasks LLM analysis reads, how many tasks training learns from and, in setup, how many features the feature check tests. A few rough constants turn those into time, disk space and memory. Training's and the dataset's were measured on synthetic tasks. Voyage's and the AI models' speeds can't be measured without paying, so theirs are worked out from how the requests go out. Voyage's assume an account with a payment method: one without gets low limits, and embedding takes much longer. The constants are in [`estimate.py`](../src/yardstick_predict/estimate.py), each with how it was found. Nothing is timed while the command runs, and the time is given as a range, from 70% to 150% of the estimate. While each long step runs, its progress bar says how long is left, from how fast it has gone lately.

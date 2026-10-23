@@ -29,7 +29,7 @@ The numbers above are an example. Yours come from your own history.
 - **One fixed, versioned JSON format,** with published schemas, so any program in any language can call it.
 - **Runs on your computer.** Only the text you choose is sent: to Voyage to embed it and, if you turn on LLM analysis, to the AI model you pick.
 - **Shows the exact cost before spending anything,** and counts Voyage's free tokens.
-- **You choose the features,** and training uses exactly those. The task, its similar past tasks and the project's recent tasks are always used. You can add the conversation so far, the end of the conversation, skills, public model facts, when the task started, an AI model's read of each task, or your own.
+- **You choose the features,** and training uses exactly those. The task, its similar past tasks and the project's recent tasks are always used. You can add the conversation so far, the end of the conversation, skills, public model facts, when the task started, an AI model's read of each task, or your own. A feature check tells you which of them really help your forecasts.
 - **Advanced settings** for experts: output heads, curve shape, loss, dropout, data split, and other model types.
 
 ## Install
@@ -61,6 +61,8 @@ yardstick-predict
 
 It finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
+When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The check tests the model with each feature and without it, shows what helped for each AI model, and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice: say no, and setup trains with the features you picked.
+
 **Then, before you start a task, ask what it will take:**
 
 ```bash
@@ -89,6 +91,8 @@ Setup lists each feature with its options under it. Type a number to turn a feat
 | your own | Any text or number you compute from a task. See [Extend it](#extend-it). | — |
 
 Training uses exactly the features you choose. The conversation tells a lot about a person's sessions and can mislead about a program's one-off runs, so a predictor that mostly forecasts programs' runs may forecast better without `conversation`. With LLM analysis, training also makes the same model without it, with a test of its own, for the tasks that LLM analysis can't read.
+
+To find out which features help your own forecasts, run the feature check: setup offers it, and `yardstick-predict check` runs it on a predictor you already have. The Features screen shows each feature's latest verdicts. [How it works](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/how-it-works.md#5-the-feature-check) explains how to read them.
 
 Choose features at setup, or with flags. A feature named alone gets all its options:
 
@@ -233,6 +237,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | `yardstick-predict refresh` | Adds new runs, embeds them and retrains. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each predictor, its features and how it did on its test. `--json` for programs. |
+| `yardstick-predict check [NAME]` | Checks which of a predictor's features help its forecasts: it tests the model with each feature and without it. It's advice only and changes nothing. `--json` for programs. |
 | `yardstick-predict default [NAME]` | Shows or sets your default predictor: the one commands use when they name none. `--predictor NAME` picks another for one command. |
 | `yardstick-predict claude-code install` | Shows forecasts in Claude Code's status line. `--here` for one folder, `remove` to turn it off. |
 

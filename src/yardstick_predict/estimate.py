@@ -60,7 +60,7 @@ Measured as the most memory training on synthetic tasks used: 290 MB for 1,000 t
 MEMORY_PER_TEXT_BYTE = 3
 """The tasks' texts are in memory too, in more than one copy while training runs."""
 
-STEPS = ("LLM analysis", "embedding", "training")
+STEPS = ("LLM analysis", "embedding", "feature check", "training")
 """The steps after the question, in the order they run."""
 
 
@@ -93,6 +93,7 @@ def of(
     asks: int,
     new_tasks: list[Task] | None = None,
     dataset: int = 0,
+    checked: int = 0,
 ) -> Estimate:
     """What the rest of setup or a refresh takes.
 
@@ -100,7 +101,9 @@ def of(
     and their options, how LLM analysis runs, its model's settings and how many tasks it learns from. `tokens`
     go to Voyage and make `vectors` embeddings. LLM analysis reads `asks` tasks, and when it describes them, the
     descriptions are embedded too. `new_tasks` are the ones the dataset doesn't have yet, all of `tasks` by
-    default, and `dataset` is how many bytes it takes now.
+    default, and `dataset` is how many bytes it takes now. With the feature check, `checked` is how many features
+    it leaves out, one at a time: it fits each test window's trial once with every feature and once without
+    each, and no final model.
     """
     from . import features, llm, model
     from .pipeline import learnable
@@ -115,11 +118,17 @@ def of(
     # A model type from a plugin is counted as if it trained like the built-in one.
     built_in = settings if settings.get("type", "xgboost") == "xgboost" else {}
     learn_from = learnable(tasks, config.get("max_tasks"))
-    sizes = model.fit_sizes(learn_from, built_in) * (2 if analyzed else 1)
+    sizes = model.fit_sizes(learn_from, built_in)
+
+    def fitting(models: list[int]) -> float:
+        """How long fitting models on these many tasks each takes."""
+        return sum(TRAIN_SECONDS_PER_MODEL + TRAIN_SECONDS_PER_TASK * size for size in models)
+
     steps = {
         "LLM analysis": asks * LLM_SECONDS_PER_TASK.get(how.get("provider"), max(LLM_SECONDS_PER_TASK.values())),
         "embedding": tokens / EMBED_TOKENS_A_SECOND,
-        "training": sum(TRAIN_SECONDS_PER_MODEL + TRAIN_SECONDS_PER_TASK * size for size in sizes),
+        "feature check": (1 + checked) * fitting(sizes[:-1]) if checked else 0.0,
+        "training": fitting(sizes * (2 if analyzed else 1)),
     }
     disk = (
         dataset

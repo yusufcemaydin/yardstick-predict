@@ -3,7 +3,8 @@
 The first three features are always on: they cost nothing and send nothing anywhere. The others are
 choices. Most cost embedding tokens or send text to another company. The conversation costs nothing, but
 it suits a person's sessions better than a program's one-off runs. LLM analysis also asks how it's paid
-for and which AI model reads the tasks.
+for and which AI model reads the tasks. Next to each feature the feature check tested, the screen shows
+what the check said last.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from . import features, llm, ui
+from . import check, features, llm, ui
 
 
 @dataclass
@@ -64,17 +65,29 @@ def _group(name: str) -> features.Group | None:
     return next((g for g in features.MENU if g.key == name), None)
 
 
-def ask(custom: dict[str, str] | None = None) -> Picked:
-    """Show every feature with its options, and let a person turn them on and off until they press Enter."""
+def ask(
+    custom: dict[str, str] | None = None, start: Picked | None = None, verdicts: dict[str, dict] | None = None
+) -> Picked:
+    """Show every feature with its options, and let a person turn them on and off until they press Enter.
+
+    The features `start` picks start on, with their options. Without it, the default features do, with all their
+    options. LLM analysis runs as `start` says, and is asked about only when `start` doesn't say. Next to each
+    feature go the feature check's `verdicts` on it, by default the latest ones remembered.
+    """
     groups = list(features.MENU)
-    # The features on by default start on, with all their options.
-    on: dict[str, set[str]] = {
-        g.key: {o.key for o in g.options} if g.key in features.DEFAULT else set() for g in groups if not g.always
-    }
+    verdicts = check.latest() if verdicts is None else verdicts
+    chosen_first = features.DEFAULT if start is None else start.features
+    on: dict[str, set[str]] = {}
+    for g in groups:
+        if g.always:
+            continue
+        every = {o.key for o in g.options}
+        kept = (start.options.get(g.key) if start is not None else None) or every
+        on[g.key] = every & set(kept) if g.key in chosen_first else set()
     for name in custom or {}:
-        on[name] = set()
+        on[name] = {"on"} if start is not None and name in start.features else set()
     while True:
-        _show(groups, on, custom or {})
+        _show(groups, on, custom or {}, verdicts)
         reply = input(ui.prompt("Turn on or off", "[Enter when done]")).strip().lower()
         if not reply:
             break
@@ -89,11 +102,13 @@ def ask(custom: dict[str, str] | None = None) -> Picked:
     }
     picked = Picked(features.check(chosen), options)
     if "llm" in picked.features:
-        picked.llm = ask_access()
+        picked.llm = dict(start.llm) if start is not None and start.llm else ask_access()
     return picked
 
 
-def _show(groups: list[features.Group], on: dict[str, set[str]], custom: dict[str, str]) -> None:
+def _show(
+    groups: list[features.Group], on: dict[str, set[str]], custom: dict[str, str], verdicts: dict[str, dict]
+) -> None:
     ui.heading("Features")
     ui.note("What the predictor learns from. The first three are always on, cost nothing and send nothing anywhere.")
     ui.line()
@@ -109,6 +124,9 @@ def _show(groups: list[features.Group], on: dict[str, set[str]], custom: dict[st
         mark = ui.dim("always on") if always else state(bool(on[key]))
         ui.line(f"{ui.accent(str(number).rjust(2))}  {ui.bold(title.ljust(title_width))}{mark}")
         ui.line(f"    {ui.dim(says)}")
+        said = check.summary(verdicts.get(key) or {})
+        if said:
+            ui.line(f"    {ui.dim(said)}")
         for letter, option in zip("abcdefgh", () if always else options):
             ui.line(f"      {ui.accent(letter)}  {option.says.ljust(option_width)}{state(option.key in on[key])}")
     ui.line()

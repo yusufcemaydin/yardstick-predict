@@ -65,6 +65,7 @@ except Exception as error:  # On a Mac without Homebrew's OpenMP, XGBoost can't 
         "folder inside scikit-learn, or install OpenMP with: brew install libomp"
     ) from None
 
+from . import benchmarks, features
 from .archives import Task
 from .model_types import BUILT_IN_FORMAT, PREVIOUS_FORMAT
 
@@ -114,6 +115,8 @@ CONVERSATION = (
 )
 """The number features the conversation feature brings, about the conversation a task is in. Rows with them
 also get how close each prompt is to its context, and the two side by side."""
+CLOSENESS = "prompt_context_closeness"
+"""How close a prompt's meaning is to its context's, for rows with the conversation feature."""
 GUESSES = ("guess_seconds", "guess_tokens", "guess_usd", "guess_direct")
 GUESS_ALPHAS = (0.3, 3.0, 30.0, 300.0)
 """How hard the first guess's weights are pulled toward 0. Training picks the one that guesses best."""
@@ -628,7 +631,7 @@ def _with_conversation(rows: list[Features], use: bool, joint: bool) -> list[Fea
         numbers, vectors = dict(r.numbers), dict(r.vectors)
         prompt, context = r.vectors.get("prompt"), r.vectors.get("context")
         if prompt is not None and context is not None:
-            numbers["prompt_context_closeness"] = float(_length_one(prompt) @ _length_one(context))
+            numbers[CLOSENESS] = float(_length_one(prompt) @ _length_one(context))
         if joint and prompt is not None:
             other = _length_one(context) if context is not None else np.zeros(len(prompt), dtype=np.float32)
             vectors[JOINT] = np.concatenate([_length_one(prompt), other])
@@ -645,19 +648,62 @@ def _prepared(rows: list[Features]) -> list[Features]:
 
 def _read_by_llm(row: Features) -> bool:
     """Whether the row has what LLM analysis said about its task."""
-    return row.vectors.get(LLM) is not None or any(name.startswith("llm_") for name in row.numbers)
+    return has_feature(row, LLM)
 
 
 def _without_llm(rows: list[Features]) -> list[Features]:
     """The rows as the model without LLM analysis sees them."""
+    return without(rows, LLM)
+
+
+# Leaving one feature out --------------------------------------------------------------------------------
+
+
+def _parts(name: str) -> tuple[frozenset[str], frozenset[str], str | None]:
+    """The names of a feature's numbers and vectors, and the start every one of its numbers' names has, if any.
+
+    The conversation brings its numbers, and the model adds how close each prompt is to its context and the two
+    side by side. Benchmarks and time bring their numbers, and LLM analysis numbers whose names start with llm_,
+    with its description's vector. The context, the skills and your own features are a vector or a number of
+    their own name.
+    """
+    if name == "conversation":
+        return frozenset({*CONVERSATION, CLOSENESS}), frozenset({JOINT}), None
+    if name == LLM:
+        return frozenset(), frozenset({LLM}), "llm_"
+    if name == "benchmarks":
+        return frozenset(benchmarks.FACTS), frozenset(), None
+    if name == "time":
+        return frozenset(features.TIME_NUMBERS), frozenset(), None
+    return frozenset({name}), frozenset({name}), None
+
+
+def without(rows: list[Features], name: str) -> list[Features]:
+    """The rows without one feature: exactly the numbers and vectors it brings, as if it had never been chosen.
+
+    The rows are as the pipeline builds them. The model works out the conversation's closeness number and the
+    joint vector of the prompt and its context by itself, only from the conversation's numbers and both vectors,
+    so rows without the conversation or the context never get them. Rows the model already read may hold them:
+    without the conversation, they go too. The feature check and the model without LLM analysis both leave
+    features out here.
+    """
+    numbers, vectors, start = _parts(name)
     return [
         replace(
             r,
-            numbers={name: value for name, value in r.numbers.items() if not name.startswith("llm_")},
-            vectors={name: vector for name, vector in r.vectors.items() if name != LLM},
+            numbers={k: v for k, v in r.numbers.items() if k not in numbers and not (start and k.startswith(start))},
+            vectors={k: v for k, v in r.vectors.items() if k not in vectors},
         )
         for r in rows
     ]
+
+
+def has_feature(row: Features, name: str) -> bool:
+    """Whether a row has a value for a feature: any of its numbers, or its vector."""
+    numbers, vectors, start = _parts(name)
+    return any(row.vectors.get(v) is not None for v in vectors) or any(
+        k in numbers or bool(start and k.startswith(start)) for k in row.numbers
+    )
 
 
 # The first guess: a weighted sum of the whole embedding --------------------------------------------------
@@ -1240,20 +1286,7 @@ def train(
     for each test window and the final model, as fit_sizes counts them.
     """
     settings = settings_for(settings)
-    learnable = {t.id for t in usable(tasks)}
-    pairs = sorted(((t, r) for t, r in zip(tasks, rows) if t.id in learnable), key=lambda p: (p[0].started_at, p[0].id))
-    if any(r.vectors.get("prompt") is not None for _, r in pairs):
-        pairs = [(t, r) for t, r in pairs if r.vectors.get("prompt") is not None]
-    if len(pairs) < MIN_TASKS:
-        raise NotEnoughData(f"Training needs at least {MIN_TASKS} finished tasks. This dataset has {len(pairs)}.")
-    eligible, eligible_rows = [t for t, _ in pairs], [r for _, r in pairs]
-    # A head with too few known values is left out. With no head left, there is nothing to learn.
-    known = max(sum(target_value(t, head) is not None for t in eligible) for head in settings["heads"])
-    if known < MIN_TASKS:
-        raise NotEnoughData(
-            f"Training needs at least {MIN_TASKS} tasks with a known value for the "
-            f"{' or '.join(settings['heads'])} head. This dataset has {known}."
-        )
+    eligible, eligible_rows = _eligible(tasks, rows, settings)
     read_by_llm = any(_read_by_llm(r) for r in eligible_rows)
     done, total = 0, len(fit_sizes(eligible, settings)) * (2 if read_by_llm else 1)
 
@@ -1274,6 +1307,29 @@ def train(
     # A task that LLM analysis couldn't read, as when its AI model couldn't be reached, is forecast by the same
     # model without it. That one is tested too, so it gives forecasts only where it passed.
     return WithoutLLM(model, _tested(eligible, eligible_rows, settings, similar, llm=False, on_fit=fitted))
+
+
+def _eligible(tasks: list[Task], rows: list[Features], settings: dict) -> tuple[list[Task], list[Features]]:
+    """The tasks training learns from and tests on, oldest first, with their rows. Raises NotEnoughData when too few.
+
+    Stopped tasks and tasks left waiting are left out. When any task has an embedded prompt, so are the ones
+    without one. `settings` are filled in already, as settings_for gives them.
+    """
+    learnable = {t.id for t in usable(tasks)}
+    pairs = sorted(((t, r) for t, r in zip(tasks, rows) if t.id in learnable), key=lambda p: (p[0].started_at, p[0].id))
+    if any(r.vectors.get("prompt") is not None for _, r in pairs):
+        pairs = [(t, r) for t, r in pairs if r.vectors.get("prompt") is not None]
+    if len(pairs) < MIN_TASKS:
+        raise NotEnoughData(f"Training needs at least {MIN_TASKS} finished tasks. This dataset has {len(pairs)}.")
+    eligible = [t for t, _ in pairs]
+    # A head with too few known values is left out. With no head left, there is nothing to learn.
+    known = max(sum(target_value(t, head) is not None for t in eligible) for head in settings["heads"])
+    if known < MIN_TASKS:
+        raise NotEnoughData(
+            f"Training needs at least {MIN_TASKS} tasks with a known value for the "
+            f"{' or '.join(settings['heads'])} head. This dataset has {known}."
+        )
+    return eligible, [r for _, r in pairs]
 
 
 def _tested(
@@ -1833,6 +1889,52 @@ def test(
         "totals_range": list(TOTALS_RANGE),
     }
     return report
+
+
+def compare(
+    tasks: list[Task],
+    rows: list[Features],
+    settings: dict | None = None,
+    names: list[str] | tuple[str, ...] = (),
+    on_progress: Callable[[int, int], None] | None = None,
+) -> tuple[dict[str, dict], dict[str, dict[str, float]]]:
+    """The test training runs, with every feature the rows have, then again without each feature in `names`.
+
+    It only tests: no final model is fitted. Returns each test's report by the feature it left out, with "" for
+    the test with every feature. Also, for each feature in `names`, the share of each AI model's test tasks that
+    have it. The similar-task numbers are worked out once for every test, since leaving a feature out only drops
+    its own. A feature no task has would test the same as every feature, so it isn't tested again.
+    `on_progress` is told how many trial models are fitted, and how many there are in all.
+    """
+    settings = settings_for(settings)
+    tasks, rows = _eligible(tasks, rows, settings)
+    present = [name for name in names if any(has_feature(r, name) for r in rows)]
+    total = (len(fit_sizes(tasks, settings)) - 1) * (1 + len(present))
+    done = 0
+
+    def tried() -> None:
+        nonlocal done
+        done += 1
+        if on_progress is not None:
+            on_progress(min(done, total), total)
+
+    if on_progress is not None and total:
+        on_progress(0, total)  # the bar starts with the step, so it can tell how fast it goes
+    similar = _similar_features(tasks, _prepared(rows), settings["half_life_days"])
+    reports = {"": test(tasks, rows, settings, similar, on_trial=tried)}
+    for name in present:
+        reports[name] = test(tasks, without(rows, name), settings, similar, on_trial=tried)
+    for name in names:
+        reports.setdefault(name, reports[""])  # no task has it, so the test without it is the same
+    tested: dict[str, list[int]] = {}
+    for part, _ in _runs(tasks, _test_windows(tasks, settings)):
+        for i in part:
+            tested.setdefault(tasks[i].model, []).append(i)
+    shares = {
+        name: {model: float(np.mean([has_feature(rows[i], name) for i in found])) for model, found in tested.items()}
+        for name in names
+    }
+    return reports, shares
 
 
 def _score_window(trial: Model, train_tasks: list[Task], test_tasks: list[Task], test_rows: list[Features]) -> dict:
