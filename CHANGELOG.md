@@ -6,6 +6,11 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 Training uses exactly the features you choose. It trains one model, not one for each mix of inputs, so it takes about 40% less time. Your predictors catch up by themselves: the next refresh trains the model again, even when it finds no new tasks. Until then, a predictor made with an older version gives no forecasts.
 
+### Added
+
+- A new feature, `time`, off by default: when each task started. Its `trend` option is the number of days since 1 January 2020, so the model can follow how your tasks change over the months. Its `clock` option is the hour of the day and the day of the week, in your computer's time zone. A forecast's task starts the moment you ask. It costs nothing and sends nothing anywhere. Choose it on the Features screen, or with `--features time`, `time:trend` or `time:clock`.
+- Your own features get when each task started, as `info.started_at`.
+
 ### Changed
 
 - The conversation so far is now a feature of its own, `conversation`, on by default. It's what the conversation's earlier tasks took and how big the conversation has grown. With `context`, it also covers how close the prompt is to the end of the conversation, and past tasks found by both together. It costs nothing and sends nothing anywhere. Turn it off on the Features screen, or leave it out of `--features`. A predictor made with an older version keeps it.

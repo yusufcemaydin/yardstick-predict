@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import textwrap
+import time
+from datetime import datetime, timezone
 from fractions import Fraction
 
 import numpy as np
@@ -13,12 +15,13 @@ from builders import ClaudeSession, history, usage
 from conftest import KEY
 from test_cli import ONE_WINDOW
 
-from yardstick_predict import benchmarks, features, model_types, prices
+from yardstick_predict import benchmarks, features, model_types, pipeline, prices
 from yardstick_predict.archives import TEXT_CHARS, read_archive
 from yardstick_predict.cli import main
 from yardstick_predict.store import Predictor
 
 START = 1_780_000_000.0
+TIME_NUMBERS = {"days_since_2020", "hour_of_day", "day_of_week"}
 
 
 @pytest.fixture
@@ -144,6 +147,95 @@ def test_benchmarks_come_from_a_public_list_with_one_spelling_for_every_source()
     assert facts["benchmark_reasons"] == 1.0
     assert benchmarks.facts(table, "some-unlisted-model") == {}
     assert benchmarks.normalize("openai/gpt-6.1-sol") == benchmarks.normalize("gpt-6.1-sol") == "gpt-6-1-sol"
+
+
+@pytest.fixture
+def time_zone():
+    """A way to set this computer's time zone for one test. The old one comes back after it."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("Windows can't change a running program's time zone")
+    before = os.environ.get("TZ")
+
+    def set_to(zone: str) -> None:
+        os.environ["TZ"] = zone
+        time.tzset()
+
+    yield set_to
+    if before is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = before
+    time.tzset()
+
+
+def utc(*when: int) -> float:
+    """A moment in UTC, in seconds since 1970."""
+    return datetime(*when, tzinfo=timezone.utc).timestamp()
+
+
+def test_the_trend_counts_days_since_2020_the_same_in_every_time_zone(time_zone):
+    for zone in ("UTC0", "JST-9", "EST+5"):
+        time_zone(zone)
+        assert features.time_numbers(utc(2020, 1, 1), ["trend"]) == {"days_since_2020": 0.0}
+        assert features.time_numbers(utc(2020, 1, 2, 12), ["trend"]) == {"days_since_2020": 1.5}
+        found = features.time_numbers(utc(2026, 10, 18, 23, 30), ["trend"])
+        assert found["days_since_2020"] == pytest.approx(2482 + 23.5 / 24)
+
+
+def test_the_clock_reads_the_hour_and_the_day_of_the_week_in_your_time_zone(time_zone):
+    sunday_night, monday_morning = utc(2026, 10, 18, 23, 30), utc(2026, 1, 12, 9, 15)
+    london = "GMT0BST,M3.5.0/1,M10.5.0"  # an hour ahead from the last Sunday in March to the last in October
+    zones = {
+        "UTC0": [(23.5, 6.0), (9.25, 0.0)],  # 0 is Monday and 6 is Sunday
+        "EST+5": [(18.5, 6.0), (4.25, 0.0)],  # five hours behind
+        "JST-9": [(8.5, 0.0), (18.25, 0.0)],  # nine hours ahead, so Sunday night is Monday morning
+        "IST-5:30": [(5.0, 0.0), (14.75, 0.0)],  # five and a half hours ahead
+        london: [(0.5, 0.0), (9.25, 0.0)],  # on summer time in October, not in January
+    }
+    for zone, expected in zones.items():
+        time_zone(zone)
+        found = [features.time_numbers(moment, ["clock"]) for moment in (sunday_night, monday_morning)]
+        assert found == [{"hour_of_day": hour, "day_of_week": day} for hour, day in expected], zone
+
+
+def test_the_time_options_pick_their_numbers_from_when_the_task_started(tmp_path):
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt("Fix the flaky test")
+    session.reply(30, calls_usage=usage())
+    session.save(mtime=START)
+    task = read_archive({"name": "c", "format": "claude-code", "path": str(tmp_path)}, now=START + 86400)[0]
+    info = features.TaskInfo.of(task)
+    assert info.started_at == task.started_at == START  # a recorded task comes with its start time
+
+    def chosen(config: dict | None) -> set[str]:
+        return set(features.numbers(["time"], info, None, config)) & TIME_NUMBERS
+
+    assert chosen({"options": {"time": ["trend"]}}) == {"days_since_2020"}
+    assert chosen({"options": {"time": ["clock"]}}) == {"hour_of_day", "day_of_week"}
+    assert chosen({"options": {"time": ["trend", "clock"]}}) == chosen({}) == chosen(None) == TIME_NUMBERS
+    assert not set(features.numbers([], info, None)) & TIME_NUMBERS  # the feature is off
+    unknown = features.TaskInfo(prompt="Fix it", model="m")
+    assert not set(features.numbers(["time"], unknown, None)) & TIME_NUMBERS  # no start time, no numbers
+
+
+def test_a_model_trains_and_forecasts_with_the_time(tmp_path, capsys, voyage, monkeypatch):
+    monkeypatch.setenv("VOYAGE_API_KEY", KEY)
+    records = tmp_path / "records"
+    history(records, tasks=180, start=START, models=("claude-opus-5-5", "claude-sonnet-5-5"), efforts=("high", "max"))
+    code = main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "time", *ONE_WINDOW])
+    assert code == 0, capsys.readouterr().out
+    predictor = Predictor("default")
+    assert predictor.config["features"] == ["prompt", "time"]
+    assert predictor.config["options"] == {"time": ["trend", "clock"]}
+    meta = json.loads((predictor.model_dir / "model.json").read_text())
+    assert TIME_NUMBERS <= set(meta["numbers"])
+    capsys.readouterr()
+    assert main(["predict", "--model", "claude-opus-5-5", "--prompt", "fix the api"]) == 0
+    assert json.loads(capsys.readouterr().out)["forecasts"][0]["seconds"] > 0
+    # Training reads only the options the predictor chose.
+    predictor.config["options"] = {"time": ["clock"]}
+    row = pipeline.feature_rows(predictor, predictor.tasks()[:1])[0]
+    assert set(row.numbers) & TIME_NUMBERS == {"hour_of_day", "day_of_week"}
 
 
 PLUGIN = '''

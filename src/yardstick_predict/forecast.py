@@ -169,7 +169,8 @@ def parse(data: object) -> tuple[list[TaskRequest], bool, str | None]:
     return found, distribution, predictor
 
 
-def _info(task: TaskRequest, model: str, defaults: dict, skills: list[str], llm: dict) -> features.TaskInfo:
+def _info(task: TaskRequest, model: str, defaults: dict, skills: list[str], llm: dict, now: float) -> features.TaskInfo:
+    """The task as features see it on one AI model. It starts `now`, the moment the forecast is asked for."""
     known = defaults.get(model, {})
     return features.TaskInfo(
         prompt=task.prompt,
@@ -182,6 +183,7 @@ def _info(task: TaskRequest, model: str, defaults: dict, skills: list[str], llm:
         project=task.project,
         extra=task.extra,
         llm=llm,
+        started_at=now,
     )
 
 
@@ -302,9 +304,11 @@ def answer(
 
     What came before each task, in its project and, with the conversation feature, in its conversation, comes
     from the predictor's tasks plus `recent`: tasks read from the records just now, newer than the last refresh.
+    Each task starts now, the moment the forecast is asked for.
     """
     from .model import Features
 
+    now = time.time()
     model = load(predictor) if model is None else model
     try:
         chosen = pipeline.chosen_features(predictor)
@@ -327,7 +331,7 @@ def answer(
     # the model can't use.
     served_pairs = [(task, name) for task, name, served, _ in pairs if served]
     infos = [
-        _info(task, name, defaults, _known_skills(task, predictor.config), labels.get(task.id, {}))
+        _info(task, name, defaults, _known_skills(task, predictor.config), labels.get(task.id, {}), now)
         for task, name in served_pairs
     ]
     usable = _usable_texts(model, chosen)
@@ -339,7 +343,6 @@ def answer(
     ]
     vectors = _embed(predictor, items)
     table = pipeline.benchmark_table(predictor)
-    now = time.time()
     if served_pairs:
         newer = {t.id: t for t in recent or []}
         past = Past([t for t in predictor.tasks(texts=False) if t.id not in newer] + list(newer.values()))
@@ -363,7 +366,7 @@ def answer(
                 origin=info.origin,
                 prompt_chars=len(info.prompt),
                 vectors={field: found[row] for field, found in vectors.items() if row in found},
-                numbers={**features.numbers(chosen, info, table), **before},
+                numbers={**features.numbers(chosen, info, table, predictor.config), **before},
                 started_at=now,
             )
         )

@@ -29,7 +29,7 @@ The numbers above are an example. Yours come from your own history.
 - **One fixed, versioned JSON format,** with published schemas, so any program in any language can call it.
 - **Runs on your computer.** Only the text you choose is sent: to Voyage to embed it and, if you turn on LLM analysis, to the AI model you pick.
 - **Shows the exact cost before spending anything,** and counts Voyage's free tokens.
-- **You choose the features,** and training uses exactly those. The task, its similar past tasks and the project's recent tasks are always used. You can add the conversation so far, the end of the conversation, skills, public model facts, an AI model's read of each task, or your own.
+- **You choose the features,** and training uses exactly those. The task, its similar past tasks and the project's recent tasks are always used. You can add the conversation so far, the end of the conversation, skills, public model facts, when the task started, an AI model's read of each task, or your own.
 - **Advanced settings** for experts: output heads, curve shape, loss, dropout, data split, and other model types.
 
 ## Install
@@ -82,6 +82,7 @@ Setup lists each feature with its options under it. Type a number to turn a feat
 | `context`, Context | The last 1,500 characters of the conversation before the prompt, embedded. | On |
 | `skills`, Skills | The skills known before the task runs, embedded by their descriptions. Options: `named`, the skills the prompt invokes, such as a typed `/review`, and `earlier`, the skills used earlier in the conversation. | Off |
 | `benchmarks`, Model facts | Public facts about each AI model from [OpenRouter's model list](https://openrouter.ai/models): prices, context size, longest answer and release date. They are the same for old and new models. | Off |
+| `time`, Time | When the task started. Options: `trend`, the days since 1 January 2020, and `clock`, the hour of the day and the day of the week, in your computer's time zone. A forecast's task starts the moment you ask. It costs nothing and sends nothing anywhere. | Off |
 | `llm`, LLM analysis | An AI model reads each task before it starts and describes the work. Options: `kind`, the kind of task and its expected size, and `description`, a few sentences on the work, embedded. | Off |
 | your own | Any text or number you compute from a task. See [Extend it](#extend-it). | — |
 
@@ -217,7 +218,7 @@ yardstick-predict create --yes --plugin my_features --features conversation,cont
 
 `--plugin` takes a module in the current folder, as here, or the path of a `.py` file. The predictor remembers where the file is, so the plugin also loads when a forecast runs from another folder, as the status line's do.
 
-A text feature is embedded like the prompt. A number feature goes to the model as it is. Your function gets the task's prompt, context, skills, project, model, thinking level and agent, from past records when training and from the request when forecasting. A request can also carry an `"extra"` object for your features, which reaches them as `info.extra`. Past tasks have no extra, so a feature should also work its value out from the task itself. Training says so when one of your features had no value for any past task.
+A text feature is embedded like the prompt. A number feature goes to the model as it is. Your function gets the task's prompt, context, skills, project, model, thinking level and agent, from past records when training and from the request when forecasting. It also gets when the task started, as `info.started_at`, in seconds since 1970: a forecast's task starts the moment you ask. A request can also carry an `"extra"` object for your features, which reaches them as `info.extra`. Past tasks have no extra, so a feature should also work its value out from the task itself. Training says so when one of your features had no value for any past task.
 
 A plugin can also add a model type with `yardstick_predict.model_types.register_model_type(name, train, load)`, then use it with `--model-type`. [`model_types.py`](src/yardstick_predict/model_types.py) describes what a model type provides.
 

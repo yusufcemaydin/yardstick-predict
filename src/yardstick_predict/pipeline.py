@@ -529,7 +529,7 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
                 origin=task.origin,
                 prompt_chars=len(task.prompt),
                 vectors=vectors,
-                numbers={**features.numbers(chosen, info, table), **before},
+                numbers={**features.numbers(chosen, info, table, predictor.config), **before},
                 started_at=task.started_at,
             )
         )

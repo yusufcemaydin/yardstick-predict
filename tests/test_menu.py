@@ -23,6 +23,19 @@ def test_flags_name_features_and_their_options():
     assert menu.from_flags("llm").llm == {"provider": "anthropic", "model": "claude-opus-5-5"}
 
 
+def test_the_time_feature_takes_either_option_or_both():
+    for given, chosen in (
+        ("time", ["trend", "clock"]),
+        ("time:trend", ["trend"]),
+        ("time:clock", ["clock"]),
+        ("time:trend+clock", ["trend", "clock"]),
+    ):
+        picked = menu.from_flags(given)
+        assert picked.features == ["prompt", "time"] and picked.options == {"time": chosen}, given
+    with pytest.raises(ValueError, match="time has no option 'season'. Its options: trend, clock."):
+        menu.from_flags("time:season")
+
+
 def test_flags_that_make_no_sense_say_why():
     with pytest.raises(ValueError, match="has no option"):
         menu.from_flags("skills:everything")
@@ -34,7 +47,7 @@ def test_flags_that_make_no_sense_say_why():
 
 def test_a_person_turns_features_and_options_on_and_off(monkeypatch, capsys):
     # Turn on one skills option and all of LLM analysis, turn the conversation off, then pay with Codex.
-    answers(monkeypatch, "6b 8", "4", "1", "", "4")
+    answers(monkeypatch, "6b 9", "4", "1", "", "4")
     picked = menu.ask()
     out = capsys.readouterr().out
     assert picked.features == ["prompt", "context", "skills", "llm"]
@@ -43,8 +56,19 @@ def test_a_person_turns_features_and_options_on_and_off(monkeypatch, capsys):
     assert "Task is always on" in out and "How should it be paid for?" not in out  # the prompt shows on input
 
 
+def test_the_features_screen_shows_the_time_with_its_two_options(monkeypatch, capsys):
+    monkeypatch.setenv("NO_COLOR", "1")
+    answers(monkeypatch, "8b", "")  # only the clock
+    picked = menu.ask()
+    out = capsys.readouterr().out
+    assert picked.features == ["prompt", "conversation", "context", "time"]
+    assert picked.options == {"time": ["clock"]}
+    assert " 8  Time" in out and "when the task started" in out and " 9  LLM analysis" in out
+    assert "days since 1 January 2020" in out and "hour of day and day of week, in your time zone" in out
+
+
 def test_a_key_paid_analysis_shows_each_models_price(monkeypatch, capsys):
-    answers(monkeypatch, "8", "", "1", "3")
+    answers(monkeypatch, "9", "", "1", "3")
     picked = menu.ask()
     out = capsys.readouterr().out
     assert picked.llm == {"provider": "anthropic", "model": "claude-haiku-5-5"}

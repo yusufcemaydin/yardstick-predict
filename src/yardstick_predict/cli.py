@@ -1491,8 +1491,8 @@ def make_parser() -> argparse.ArgumentParser:
     )
     create.add_argument(
         "--features",
-        help="The optional features, such as conversation,context,skills:named,benchmarks,llm. A feature alone gets "
-        f"all its options. Default: {added}.",
+        help="The optional features, such as conversation,context,skills:named,benchmarks,time,llm. A feature alone "
+        f"gets all its options. Default: {added}.",
     )
     create.add_argument(
         "--llm-provider",

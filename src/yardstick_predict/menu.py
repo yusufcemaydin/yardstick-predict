@@ -112,14 +112,14 @@ def _show(groups: list[features.Group], on: dict[str, set[str]], custom: dict[st
         for letter, option in zip("abcdefgh", () if always else options):
             ui.line(f"      {ui.accent(letter)}  {option.says.ljust(option_width)}{state(option.key in on[key])}")
     ui.line()
-    ui.note("Type a number to turn a feature on or off, or a number and a letter for one option, like 8 or 6b.")
+    ui.note("Type a number to turn a feature on or off, or a number and a letter for one option, like 9 or 6b.")
 
 
 def _toggle(token: str, groups: list[features.Group], on: dict[str, set[str]], custom: dict[str, str]) -> None:
     match = re.fullmatch(r"(\d+)([a-h]?)", token)
     names = [g.key for g in groups] + list(custom)
     if not match or not 1 <= int(match.group(1)) <= len(names):
-        ui.note(f"{token!r} isn't one of the numbers. Type a number from 1 to {len(names)}, like 8 or 6b.")
+        ui.note(f"{token!r} isn't one of the numbers. Type a number from 1 to {len(names)}, like 9 or 6b.")
         return
     name = names[int(match.group(1)) - 1]
     group = _group(name)

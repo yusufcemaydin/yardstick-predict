@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from pathlib import Path
 
 import jsonschema
@@ -250,6 +251,25 @@ def test_a_forecast_reads_the_conversation_only_with_the_conversation_feature(st
         numbers = model.rows[0].numbers
         assert ("session_tasks_before" in numbers) == reads and ("conversation_tokens" in numbers) == reads
         assert "project_tasks_before" in numbers  # the project's recent tasks are always read
+
+
+def test_a_forecast_starts_each_task_the_moment_it_is_asked_for(stub):
+    predictor, model = stub
+    predictor.config["features"] = ["prompt", "time"]
+    before = time.time()
+    answer(predictor, parse(request())[0])
+    after = time.time()
+    row = model.rows[0]
+    assert before <= row.started_at <= after
+    days = row.numbers["days_since_2020"]
+    assert (before - features.TREND_FROM) / 86_400 <= days <= (after - features.TREND_FROM) / 86_400
+    local = time.localtime(row.started_at)
+    assert row.numbers["hour_of_day"] == local.tm_hour + local.tm_min / 60
+    assert row.numbers["day_of_week"] == local.tm_wday
+    predictor.config["options"] = {"time": ["trend"]}  # the predictor's options decide which numbers come
+    model.rows.clear()
+    answer(predictor, parse(request())[0])
+    assert "days_since_2020" in model.rows[0].numbers and "hour_of_day" not in model.rows[0].numbers
 
 
 def test_numbers_that_json_cant_hold_become_null(stub):

@@ -47,6 +47,8 @@ The [request schema](../schemas/forecast-request.v1.json) and the [answer schema
 
 A field that isn't needed may also be `null`. That means the same as leaving it out. Any other value of the wrong kind, such as `[]` for `extra` or `""` for `skills`, is an `invalid_request`.
 
+When the predictor has the `time` feature, each task is forecast as if it starts the moment the request is read.
+
 ## The answer
 
 ```json

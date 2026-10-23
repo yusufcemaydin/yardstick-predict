@@ -8,6 +8,8 @@ started the task, its similar past tasks and the project's recent tasks. These c
 - skills: the skills known before the task runs, embedded by their descriptions: the ones its prompt
   invokes, and the ones used earlier in the conversation.
 - benchmarks: public facts about each AI model, such as its prices and context size.
+- time: when the task started: the days since 1 January 2020, and the hour of the day and the day of the
+  week. It costs nothing.
 - llm: an AI model reads each task before it starts and describes the work.
 
 Developers can add their own features with register_feature(). A text feature is embedded like the
@@ -24,6 +26,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -36,6 +39,7 @@ BUILT_IN = {
     "context": "the end of the conversation before the prompt, embedded",
     "skills": "the skills the prompt invokes or the conversation used before it, embedded by their descriptions",
     "benchmarks": "public facts about each AI model: prices, context size, longest answer and release date",
+    "time": "when the task started: the days since 1 January 2020, and the hour of the day and the day of the week",
     "llm": "an AI model reads each task before it starts and describes the work",
 }
 DEFAULT = ("prompt", "conversation", "context")
@@ -45,6 +49,12 @@ CONTEXT_CHARS = 1_500
 SKILLS_CHARS = 4_000
 LEVELS = {"minimal": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5, "ultra": 5}
 """Effort levels in order. As one scale, a level with few tasks can learn from the levels next to it."""
+TREND_FROM = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
+"""1 January 2020 at midnight UTC, in seconds since 1970: the day the time feature's trend counts days from.
+
+It must never change after a release. A saved model learned from days counted from this day, and would read
+days counted from any other day wrong.
+"""
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _CUSTOM: dict[str, tuple[str, Callable[[TaskInfo], object]]] = {}
@@ -71,6 +81,9 @@ class TaskInfo:
     extra: dict = field(default_factory=dict)
     llm: dict = field(default_factory=dict)
     """What an AI model said about the task before it ran, when the predictor uses LLM analysis."""
+    started_at: float | None = None
+    """When the task started, in seconds since 1970. A forecast's task starts the moment it's asked for. None
+    when it isn't known."""
 
     @classmethod
     def of(cls, task: Task, skill_options: list[str] | None = None, llm: dict | None = None) -> TaskInfo:
@@ -90,6 +103,7 @@ class TaskInfo:
             skills=known_skills([s for s in (task.prior_skills or "").split("\n") if s], task.prompt, skill_options),
             project=task.project,
             llm=llm or {},
+            started_at=task.started_at,
         )
 
 
@@ -150,6 +164,15 @@ MENU = (
         "Model facts",
         "public facts about each AI model",
         (Option("facts", "prices, context size, longest answer and release date"),),
+    ),
+    Group(
+        "time",
+        "Time",
+        "when the task started",
+        (
+            Option("trend", "days since 1 January 2020"),
+            Option("clock", "hour of day and day of week, in your time zone"),
+        ),
     ),
     Group(
         "llm",
@@ -249,14 +272,20 @@ def number(value: object) -> float | None:
     return found if math.isfinite(found) else None
 
 
-def numbers(chosen: list[str], info: TaskInfo, table: dict | None) -> dict[str, float]:
-    """The number features of a task: the ones always used, then the chosen ones."""
+def numbers(chosen: list[str], info: TaskInfo, table: dict | None, config: dict | None = None) -> dict[str, float]:
+    """The number features of a task: the ones always used, then the chosen ones.
+
+    `table` holds the public facts about each AI model, for the benchmarks feature. `config` is the predictor's
+    settings, for each feature's options. Without them, a feature uses all its options.
+    """
     found = shape(text("prompt", info))  # the prompt as training reads it, however long the one sent
     if info.effort in LEVELS:
         found["effort_level"] = float(LEVELS[info.effort])
     for name in chosen:
         if name == "benchmarks":
             found.update(benchmarks.facts(table or {}, info.model))
+        elif name == "time":
+            found.update(time_numbers(info.started_at, options(config or {}, "time")))
         elif name == "llm":
             from . import llm
 
@@ -286,6 +315,29 @@ def shape(prompt: str) -> dict[str, float]:
         "prompt_lines": math.log1p(prompt.count("\n") + 1),
         "prompt_asks": float(prompt.rstrip().endswith("?")),
     }
+
+
+def time_numbers(started_at: float | None, chosen: list[str]) -> dict[str, float]:
+    """When a task started, as the time feature's options in `chosen` describe it. Nothing without a start time.
+
+    "trend" is the days since TREND_FROM, with the time of day as a fraction, the same in every time zone.
+    "clock" is the hour of the day, minutes included, so 13:45 is 13.75, and the day of the week, 0 for
+    Monday, both in this computer's time zone, summer time included.
+    """
+    started = number(started_at)
+    if started is None:
+        return {}
+    found: dict[str, float] = {}
+    if "trend" in chosen:
+        found["days_since_2020"] = (started - TREND_FROM) / 86_400
+    if "clock" in chosen:
+        try:
+            local = time.localtime(started)
+        except (OverflowError, OSError, ValueError):
+            return found  # a moment too far off for this computer's clock to name
+        found["hour_of_day"] = local.tm_hour + local.tm_min / 60
+        found["day_of_week"] = float(local.tm_wday)
+    return found
 
 
 # Skills -------------------------------------------------------------------------------------------------
