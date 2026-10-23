@@ -240,6 +240,18 @@ def test_your_own_text_features_see_each_rows_model_effort_and_agent(stub, voyag
     assert sorted(sent) == sorted(["Add a login page", *setups])  # each text is sent once, the prompt too
 
 
+def test_a_forecast_reads_the_conversation_only_with_the_conversation_feature(stub):
+    predictor, model = stub
+    tasks, _, _ = parse(request(session="s1", conversation_tokens=40_000, origin="person"))
+    for chosen, reads in ((["prompt"], False), (["prompt", "conversation"], True)):
+        predictor.config["features"] = chosen
+        model.rows.clear()
+        answer(predictor, tasks)
+        numbers = model.rows[0].numbers
+        assert ("session_tasks_before" in numbers) == reads and ("conversation_tokens" in numbers) == reads
+        assert "project_tasks_before" in numbers  # the project's recent tasks are always read
+
+
 def test_numbers_that_json_cant_hold_become_null(stub):
     predictor, model = stub
     curve = {"direct": {"mu": 1.0, "sigma": 0.5}, "work": {"mu": 4.0, "sigma": 1.0}}
@@ -340,7 +352,7 @@ def test_a_free_model_costs_nothing_and_a_model_with_no_price_has_no_cost(stub, 
     assert by_model["free-until-long-prompts"]["usd"] is None and by_model["unlisted-model"]["usd"] is None
 
 
-def test_a_task_llm_analysis_couldnt_read_gets_the_verdict_of_the_version_without_it(stub, monkeypatch):
+def test_a_task_llm_analysis_couldnt_read_gets_the_verdict_of_the_model_without_it(stub, monkeypatch):
     predictor, _ = stub
     predictor.config["features"] = ["prompt", "llm"]
     predictor.save_config()

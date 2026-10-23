@@ -51,7 +51,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     assert "Forecasts are on for claude-opus-5-5" in out and 'yardstick-predict predict "Add a login page' in out
     assert default_name() == "default"  # the first predictor is the default
     predictor = Predictor("default")
-    assert predictor.config["features"] == ["prompt", "context"]
+    assert predictor.config["features"] == ["prompt", "conversation", "context"]
     assert predictor.config["embedding"]["model"] == "voyage-4"
     assert predictor.config["model"]["type"] == "xgboost"
     assert len(predictor.embedded("prompt")) == 180
@@ -84,7 +84,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
 
     code, out = run(capsys, "status", "--json")
     status = json.loads(out)["predictors"][0]
-    assert status["tasks"] == 180 and status["features"] == ["prompt", "context"]
+    assert status["tasks"] == 180 and status["features"] == ["prompt", "conversation", "context"]
     assert status["report"]["windows"] == 6  # three for each of the two AI models
 
 
@@ -550,14 +550,19 @@ def test_a_model_made_by_an_older_version_is_trained_again_on_refresh(capsys, re
     assert run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "", *ONE_WINDOW)[0] == 0
     predictor = Predictor("default")
     path = predictor.model_dir / "model.json"
-    path.write_text(json.dumps({**json.loads(path.read_text()), "format": 2}))
+    path.write_text(json.dumps({**json.loads(path.read_text()), "format": model_types.BUILT_IN_FORMAT - 1}))
     assert pipeline.outdated(predictor)
+    # Its settings are from before the conversation was a feature to choose, when every predictor read it.
+    predictor.config["format"] = 1
+    predictor.save_config()
 
     code, out = run(capsys, "predict", "--model", "claude-opus-5-5", "--prompt", "fix the api")
     assert code == 1  # a forecast from it would read the wrong features
 
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "made by an older version" in out and not pipeline.outdated(predictor)
+    assert Predictor("default").config["features"] == ["prompt", "conversation"]
+    assert "session_tasks_before" in json.loads(path.read_text())["numbers"]  # so it still reads the conversation
 
 
 # Quick stand-ins, for tests of the command itself ------------------------------------------------------
@@ -767,6 +772,23 @@ def test_an_empty_predictor_file_gets_a_plain_reason_not_a_traceback(capsys):
     assert main([]) == 0 and "empty or broken" in capsys.readouterr().out  # the list a program gets
 
 
+def test_a_predictor_saved_before_the_conversation_was_a_feature_keeps_it():
+    from yardstick_predict import store
+
+    embedding = {"model": "voyage-4", "dimensions": 256}
+    old = Predictor.create("old", [], embedding, features=["prompt", "context", "llm"])
+    old.config["format"] = 1  # as every version before saved its settings, when every predictor read it
+    old.save_config()
+    Predictor.create("new", [], embedding, features=["prompt", "context"])
+    again = Predictor("old")
+    assert again.config["features"] == ["prompt", "conversation", "context", "llm"]
+    assert pipeline.chosen_features(again) == ["prompt", "conversation", "context", "llm"]
+    assert Predictor("new").config["features"] == ["prompt", "context"]  # chosen without it, so it stays out
+    again.save_config()
+    saved = json.loads((again.dir / "predictor.json").read_text())
+    assert saved["format"] == store.FORMAT and saved["features"] == again.config["features"]
+
+
 def test_settings_are_saved_in_one_step(monkeypatch):
     from yardstick_predict import files, pipeline, store
 
@@ -901,7 +923,8 @@ def test_the_help_names_the_default_features(capsys):
     with pytest.raises(SystemExit):
         main(["create", "--help"])
     text = " ".join(capsys.readouterr().out.split())
-    assert "Default: context." in text and "the prompt with context, voyage-4" in text
+    assert "Default: conversation and context." in text
+    assert "the prompt with conversation and context, voyage-4" in text
 
 
 def test_yes_in_a_terminal_asks_nothing(capsys, monkeypatch, few, ready, quick):
@@ -909,7 +932,7 @@ def test_yes_in_a_terminal_asks_nothing(capsys, monkeypatch, few, ready, quick):
     monkeypatch.setattr("builtins.input", lambda question="": pytest.fail(f"It asked: {question}"))
     monkeypatch.setattr(cli.getpass, "getpass", lambda question="": pytest.fail("It asked for a key"))
     assert main(["create", "--yes", *quick, "--archive", f"claude-code={few}"]) == 0
-    assert Predictor("default").config["features"] == ["prompt", "context"]  # the defaults
+    assert Predictor("default").config["features"] == ["prompt", "conversation", "context"]  # the defaults
     session = ClaudeSession(few, "more", START + 90 * 86400)
     session.prompt("one more task")
     session.reply(5)

@@ -200,10 +200,10 @@ def _usable_texts(model, chosen: list[str]) -> list[str]:
     With fewer, the model sees no similar tasks for it, so embedding it would cost tokens for nothing.
     A model type of your own gets every text feature, since only it knows what it uses.
     """
-    from .model import MIN_NEIGHBORS, Choice, Model
+    from .model import MIN_NEIGHBORS, Model, WithoutLLM
 
     names = [name for name in chosen if features.is_text(name)]
-    if not isinstance(model, (Model, Choice)):
+    if not isinstance(model, (Model, WithoutLLM)):
         return names
     return [name for name in names if name in model.pools and len(model.pools[name][0]) >= MIN_NEIGHBORS]
 
@@ -300,8 +300,8 @@ def answer(
 ) -> dict:
     """Forecast every task on every model it lists. `model` is the predictor's model, when it's loaded already.
 
-    What came before each task, in its project and its conversation, comes from the predictor's tasks plus
-    `recent`: tasks read from the records just now, newer than the last refresh.
+    What came before each task, in its project and, with the conversation feature, in its conversation, comes
+    from the predictor's tasks plus `recent`: tasks read from the records just now, newer than the last refresh.
     """
     from .model import Features
 
@@ -316,7 +316,7 @@ def answer(
     labels = _llm_labels(predictor, tasks, chosen) if any(served for _, _, served, _ in pairs) else {}
     without = getattr(model, "served_without_llm", None)
     if "llm" in chosen and callable(without):
-        # A task LLM analysis couldn't read is forecast by the version without it, which had its own test.
+        # A task LLM analysis couldn't read is forecast by the model without it, which had its own test.
         unread = {task.id for task in tasks if not _read(labels.get(task.id))}
         pairs = [
             (task, name, *(without(name, task.effort or None) if served and task.id in unread else (served, reason)))
@@ -346,7 +346,14 @@ def answer(
     rows = []
     for row, ((task, _), info) in enumerate(zip(served_pairs, infos)):
         before = past.numbers(
-            task.project, task.session, now, task.origin, task.conversation_tokens, info.agent, task.prompt
+            task.project,
+            task.session,
+            now,
+            task.origin,
+            task.conversation_tokens,
+            info.agent,
+            task.prompt,
+            conversation="conversation" in chosen,
         )
         rows.append(
             Features(

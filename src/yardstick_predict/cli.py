@@ -463,14 +463,7 @@ def print_report(meta: dict) -> None:
         tested = result["tasks_tested"]
         label = ui.bold(name) + " " * (pad - len(name))
         if result["served"]:
-            notes = ["forecasts on", f"tested on {tested:,} tasks"]
-            if "conversation" in result:
-                notes.append(
-                    "uses the conversation so far" if result["conversation"] else "leaves the conversation out"
-                )
-            if "llm" in result:
-                notes.append("uses LLM analysis" if result["llm"] else "leaves LLM analysis out")
-            ui.line(f"{label}   {flag('ok')}" + ui.join(notes))
+            ui.line(f"{label}   {flag('ok')}" + ui.join(["forecasts on", f"tested on {tested:,} tasks"]))
             scores = [(names[t], result[t]) for t in names if t in result]
             if scores:
                 better = [f"{n} {s['better_than_simple_rule']:.0%}" for n, s in scores]
@@ -1001,7 +994,7 @@ def _refresh(args, predictor: Predictor) -> int:
         ui.note("Training didn't finish last time. The model is out of date.")
     elif has_model and outdated(predictor):
         behind = True
-        ui.note("This model was made by an older version, which used fewer features. It needs training again.")
+        ui.note("This model was made by an older version, which trained it another way. It needs training again.")
     model_name = predictor.embedding_model
     key, _ = embeddings.find_key()
     from . import features
@@ -1467,7 +1460,7 @@ def bad_arguments(problem: BadArguments, argv: list[str]) -> int:
 def make_parser() -> argparse.ArgumentParser:
     from . import features
 
-    added = ", ".join(name for name in features.DEFAULT if name != features.REQUIRED) or "none"
+    added = " and ".join(name for name in features.DEFAULT if name != features.REQUIRED) or "none"
     parser = Parser(
         prog="yardstick-predict",
         description="Forecast how long a coding-agent task will take and what it will cost, before it runs.",
@@ -1498,8 +1491,8 @@ def make_parser() -> argparse.ArgumentParser:
     )
     create.add_argument(
         "--features",
-        help="The optional features, such as context,skills:named,benchmarks,llm. A feature alone gets all its "
-        f"options. Default: {added}.",
+        help="The optional features, such as conversation,context,skills:named,benchmarks,llm. A feature alone gets "
+        f"all its options. Default: {added}.",
     )
     create.add_argument(
         "--llm-provider",

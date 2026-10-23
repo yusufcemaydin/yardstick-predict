@@ -29,7 +29,7 @@ The numbers above are an example. Yours come from your own history.
 - **One fixed, versioned JSON format,** with published schemas, so any program in any language can call it.
 - **Runs on your computer.** Only the text you choose is sent: to Voyage to embed it and, if you turn on LLM analysis, to the AI model you pick.
 - **Shows the exact cost before spending anything,** and counts Voyage's free tokens.
-- **You choose the features:** the task, its similar past tasks and its history are always used. You can add the conversation, skills, public model facts, an AI model's read of each task, or your own.
+- **You choose the features,** and training uses exactly those. The task, its similar past tasks and the project's recent tasks are always used. You can add the conversation so far, the end of the conversation, skills, public model facts, an AI model's read of each task, or your own.
 - **Advanced settings** for experts: output heads, curve shape, loss, dropout, data split, and other model types.
 
 ## Install
@@ -77,19 +77,20 @@ Setup lists each feature with its options under it. Type a number to turn a feat
 |---|---|---|
 | Task | What the prompt means, how it's laid out (list items, file names, links, lines, whether it asks a question), the AI model, the effort level as a scale from low to max, the agent and who started it. | Always on |
 | Similar past tasks | What the past tasks closest in meaning really took: the closest one, the closest ten and the closest hundred, how much they varied, quick replies and real work apart, and closer, newer tasks counting more. Plus a first guess from the prompt's whole embedding. | Always on |
-| History | The project's last finished tasks, from any conversation; the conversation so far, such as how long its last task took; and how big the conversation has grown. | Always on |
-| `context`, Conversation | The last 1,500 characters of the conversation before the prompt, embedded, and compared with the prompt. | On |
+| Project history | The project's last finished tasks, from any conversation: what they took, and how long ago the last one finished. | Always on |
+| `conversation`, Conversation | The conversation so far, such as how long its last task took, and how big it has grown. With `context`, also how close the prompt is to the end of the conversation. It costs nothing and sends nothing anywhere. | On |
+| `context`, Context | The last 1,500 characters of the conversation before the prompt, embedded. | On |
 | `skills`, Skills | The skills known before the task runs, embedded by their descriptions. Options: `named`, the skills the prompt invokes, such as a typed `/review`, and `earlier`, the skills used earlier in the conversation. | Off |
 | `benchmarks`, Model facts | Public facts about each AI model from [OpenRouter's model list](https://openrouter.ai/models): prices, context size, longest answer and release date. They are the same for old and new models. | Off |
 | `llm`, LLM analysis | An AI model reads each task before it starts and describes the work. Options: `kind`, the kind of task and its expected size, and `description`, a few sentences on the work, embedded. | Off |
 | your own | Any text or number you compute from a task. See [Extend it](#extend-it). | — |
 
-The conversation tells a lot about a person's sessions and can mislead about a program's one-off runs. So training makes two versions, with and without the conversation, tests both, and each AI model uses the one that did better. The test report says which. With LLM analysis, each version is also tested without it, and a task that LLM analysis can't read is forecast without it.
+Training uses exactly the features you choose. The conversation tells a lot about a person's sessions and can mislead about a program's one-off runs, so a predictor that mostly forecasts programs' runs may forecast better without `conversation`. With LLM analysis, training also makes the same model without it, with a test of its own, for the tasks that LLM analysis can't read.
 
 Choose features at setup, or with flags. A feature named alone gets all its options:
 
 ```bash
-yardstick-predict create --yes --features context,skills:named,llm --llm-provider claude
+yardstick-predict create --yes --features conversation,context,skills:named,llm --llm-provider claude
 ```
 
 A predictor keeps its embedding model for good. To change its features, create a new predictor.
@@ -211,7 +212,7 @@ register_feature("project", "text", lambda info: info.project)
 ```
 
 ```bash
-yardstick-predict create --yes --plugin my_features --features context,words,project
+yardstick-predict create --yes --plugin my_features --features conversation,context,words,project
 ```
 
 `--plugin` takes a module in the current folder, as here, or the path of a `.py` file. The predictor remembers where the file is, so the plugin also loads when a forecast runs from another folder, as the status line's do.
@@ -240,7 +241,7 @@ To get the newest version:
 uv tool upgrade yardstick-predict
 ```
 
-Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed. When a new version reads new features, the next refresh trains the model again. Until then, the predictor gives no forecasts.
+Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed. When a new version reads new features or trains the model another way, the next refresh trains it again. Until then, the predictor gives no forecasts.
 
 To remove everything, uninstall the program, delete its folder and delete the Voyage key it kept:
 

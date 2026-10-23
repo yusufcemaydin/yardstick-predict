@@ -99,6 +99,24 @@ def test_a_new_conversation_gets_the_size_new_conversations_usually_start_at():
     assert past.numbers("app", "s1", START + 2_000, "person", 50_000)["conversation_tokens"] == math.log1p(50_000)
 
 
+def test_without_the_conversation_feature_only_the_project_is_described():
+    past = Past([task(1, START, seconds=120)])
+    with_it = past.numbers("app", "s1", START + 600, "person", 50_000)
+    assert {"session_tasks_before", "previous_seconds", "conversation_tokens"} <= set(with_it)
+    without = past.numbers("app", "s1", START + 600, "person", 50_000, conversation=False)
+    assert without == past.project_numbers("app", START + 600) and "project_seconds" in without
+
+
+def test_training_reads_the_conversation_only_with_the_conversation_feature():
+    predictor = Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256}, features=["prompt"])
+    tasks = [task(1, START), task(2, START + 600)]
+    later = pipeline.feature_rows(predictor, tasks, known=tasks)[1]
+    assert "session_tasks_before" not in later.numbers and later.numbers["project_tasks_before"] == math.log1p(1)
+    predictor.config["features"] = ["prompt", "conversation"]
+    later = pipeline.feature_rows(predictor, tasks, known=tasks)[1]
+    assert later.numbers["session_tasks_before"] == math.log1p(1) and "conversation_tokens" in later.numbers
+
+
 def test_a_forecast_reads_only_its_own_project_folders_new_tasks(tmp_path):
     records = tmp_path / "projects"
     archive = {"name": "claude-code", "format": "claude-code", "path": str(records)}

@@ -37,11 +37,12 @@ Every feature describes what's known before a task starts. Three are always used
 
 - **The task:** the prompt's meaning and its layout (how many list items, file names, links and lines it has, and whether it ends in a question), the AI model, the agent, who started it, and the thinking level, both as a label and as a step on one scale from low to max, so a level with few tasks can learn from the levels next to it.
 - **Similar past tasks:** see below.
-- **History:** the project's five most recent finished tasks, from any conversation: their typical time, tokens and cost, how often they were answered directly, how many came before and how long ago the last one finished. The conversation so far: how many tasks it had, and what its last finished task took. And the conversation's size in tokens when the task started. A person's conversation and a program's one-off run grow differently, so each has its own size number.
+- **Project history:** the project's five most recent finished tasks, from any conversation: their typical time, tokens and cost, how often they were answered directly, how many came before and how long ago the last one finished.
 
-These can be added:
+These can be added. The first two are on by default:
 
-- **`context`:** the last 1,500 characters of the conversation before the prompt. A longer cut made forecasts worse on real runs, and costs more. With it, the model also learns how close the prompt's meaning is to the conversation's, and finds past tasks similar in both.
+- **`conversation`:** the conversation so far: how many tasks it had, what its last finished task took and how long ago that was, and the conversation's size in tokens when the task started. A person's conversation and a program's one-off run grow differently, so each has its own size number. It costs nothing and sends nothing anywhere. With `context` too, the model also learns how close the prompt's meaning is to the conversation's, and finds past tasks similar in both. The conversation tells a lot about a person's sessions and can mislead about a program's one-off runs, so a predictor that mostly forecasts programs' runs may forecast better without it.
+- **`context`:** the last 1,500 characters of the conversation before the prompt. A longer cut made forecasts worse on real runs, and costs more.
 - **`skills`:** the skills known before the task runs: the ones its prompt invokes, such as a typed `/review`, and the ones used earlier in its conversation. Each comes with its description from its own `SKILL.md`. Its options can keep only one of the two kinds. The skills a task went on to use are in the records too, but a forecast can't know them, so the model doesn't learn from them.
 - **`benchmarks`:** public facts about each AI model from OpenRouter's model list: input, output and cache-read prices, context size, longest answer, release date, and whether it reasons. They're described the same way for old and new models. The list is downloaded at setup and at each refresh, and saved with the predictor.
 - **`llm`, LLM analysis:** an AI model reads each task's prompt and the end of the conversation before it, and reports the kind of task, how many files and steps it likely takes, whether it must run code or look things up, whether it continues earlier work, how clear it is, and its own guess of the minutes. With the description option it also writes a few sentences on the work, which are embedded like the prompt. It never sees how a task went. Each task is read once and the answer is saved.
@@ -71,7 +72,7 @@ Three choices keep the model honest when there's little data:
 
 A last step widens or narrows each AI model's curves by one factor, picked on the held-back tasks before the trees have seen them, by the same score the trees learn by. Then the starting curves are fitted again and every part is trained again, on all the tasks.
 
-**Two versions, one for each kind of work.** The conversation so far tells a lot about a person's sessions: tasks in one conversation tend to be alike. A program's one-off runs have no conversation, and their sizes mean something else. Trees shared by both learn the common pattern and misapply it to the other. So training makes two versions, with and without the conversation's inputs, and the test below scores both. Each AI model's forecasts use the version that did better, and the report says which. With LLM analysis, each version is also tested without it, and an AI model uses LLM analysis only when it did better with it. A task that LLM analysis can't read, such as when its AI model can't be reached, is forecast by the same version without it, and only if that version passed the test too.
+**One model, with the features you chose.** Training makes one model, which reads every feature the predictor has, and the test below judges it. With LLM analysis, training also makes the same model without it, and tests that one too. A task that LLM analysis can't read, such as when its AI model can't be reached, is forecast by the model without it, and only if that model passed the test too.
 
 ### Advanced settings
 
@@ -106,6 +107,6 @@ XGBoost needs a library called OpenMP. On a Mac, XGBoost looks for it only where
 ## 6. Speed
 
 - **Reading records** takes well under a minute for gigabytes of history. A refresh reads only what changed.
-- **Training** takes about a minute for a few thousand tasks, including the test of both versions, and two or three minutes with LLM analysis, which tests twice as many. On that much data, XGBoost's threads cost more time than they save, so it uses one, and up to four on very large histories.
+- **Training** takes under a minute for a few thousand tasks, test included, and about twice as long with LLM analysis, which also trains and tests the model without it. On that much data, XGBoost's threads cost more time than they save, so it uses one, and up to four on very large histories.
 - **A forecast** takes about half a second from the command line. Most of that is starting Python. Add one short request to Voyage for the embeddings, unless the cache already holds them, and with LLM analysis, one request to the AI model you picked. When Voyage can't be reached, a forecast says so within seconds.
 - **LLM analysis** reads past tasks once, in batches: several at a time with an API key, fewer through a subscription.

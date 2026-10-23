@@ -17,7 +17,8 @@ def test_flags_name_features_and_their_options():
     assert picked.features == ["prompt", "skills", "llm", "benchmarks"]
     assert picked.options == {"skills": ["named"], "llm": ["description"]}
     assert picked.llm == {"provider": "codex", "model": "codex-default"}
-    assert menu.from_flags(None).features == ["prompt", "context"]
+    assert menu.from_flags(None).features == ["prompt", "conversation", "context"]
+    assert menu.from_flags("context").features == ["prompt", "context"]  # a feature not named is left out
     assert menu.from_flags("").features == ["prompt"]
     assert menu.from_flags("llm").llm == {"provider": "anthropic", "model": "claude-opus-5-5"}
 
@@ -33,17 +34,17 @@ def test_flags_that_make_no_sense_say_why():
 
 def test_a_person_turns_features_and_options_on_and_off(monkeypatch, capsys):
     # Turn on one skills option and all of LLM analysis, turn the conversation off, then pay with Codex.
-    answers(monkeypatch, "5b 7", "4", "1", "", "4")
+    answers(monkeypatch, "6b 8", "4", "1", "", "4")
     picked = menu.ask()
     out = capsys.readouterr().out
-    assert picked.features == ["prompt", "skills", "llm"]
+    assert picked.features == ["prompt", "context", "skills", "llm"]
     assert picked.options == {"skills": ["earlier"], "llm": ["kind", "description"]}
     assert picked.llm == {"provider": "codex", "model": "codex-default"}
     assert "Task is always on" in out and "How should it be paid for?" not in out  # the prompt shows on input
 
 
 def test_a_key_paid_analysis_shows_each_models_price(monkeypatch, capsys):
-    answers(monkeypatch, "7", "", "1", "3")
+    answers(monkeypatch, "8", "", "1", "3")
     picked = menu.ask()
     out = capsys.readouterr().out
     assert picked.llm == {"provider": "anthropic", "model": "claude-haiku-5-5"}

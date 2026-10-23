@@ -1,8 +1,9 @@
 """The Features step of setup: each feature with its options under it, turned on and off by number.
 
 The first three features are always on: they cost nothing and send nothing anywhere. The others are
-choices, because they cost embedding tokens or send text to another company. LLM analysis also asks
-how it's paid for and which AI model reads the tasks.
+choices. Most cost embedding tokens or send text to another company. The conversation costs nothing, but
+it suits a person's sessions better than a program's one-off runs. LLM analysis also asks how it's paid
+for and which AI model reads the tasks.
 """
 
 from __future__ import annotations
@@ -66,8 +67,10 @@ def _group(name: str) -> features.Group | None:
 def ask(custom: dict[str, str] | None = None) -> Picked:
     """Show every feature with its options, and let a person turn them on and off until they press Enter."""
     groups = list(features.MENU)
-    on: dict[str, set[str]] = {g.key: set() for g in groups if not g.always}
-    on["context"] = {"meaning"}
+    # The features on by default start on, with all their options.
+    on: dict[str, set[str]] = {
+        g.key: {o.key for o in g.options} if g.key in features.DEFAULT else set() for g in groups if not g.always
+    }
     for name in custom or {}:
         on[name] = set()
     while True:
@@ -109,14 +112,14 @@ def _show(groups: list[features.Group], on: dict[str, set[str]], custom: dict[st
         for letter, option in zip("abcdefgh", () if always else options):
             ui.line(f"      {ui.accent(letter)}  {option.says.ljust(option_width)}{state(option.key in on[key])}")
     ui.line()
-    ui.note("Type a number to turn a feature on or off, or a number and a letter for one option, like 7 or 5b.")
+    ui.note("Type a number to turn a feature on or off, or a number and a letter for one option, like 8 or 6b.")
 
 
 def _toggle(token: str, groups: list[features.Group], on: dict[str, set[str]], custom: dict[str, str]) -> None:
     match = re.fullmatch(r"(\d+)([a-h]?)", token)
     names = [g.key for g in groups] + list(custom)
     if not match or not 1 <= int(match.group(1)) <= len(names):
-        ui.note(f"{token!r} isn't one of the numbers. Type a number from 1 to {len(names)}, like 7 or 5b.")
+        ui.note(f"{token!r} isn't one of the numbers. Type a number from 1 to {len(names)}, like 8 or 6b.")
         return
     name = names[int(match.group(1)) - 1]
     group = _group(name)

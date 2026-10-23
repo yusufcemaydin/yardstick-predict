@@ -122,7 +122,7 @@
               "string",
               "null"
             ],
-            "description": "The conversation the task is in, by its id in the agent's records. The forecast uses what its earlier tasks took."
+            "description": "The conversation the task is in, by its id in the agent's records. A predictor with the conversation feature uses what its earlier tasks took."
           },
           "conversation_tokens": {
             "type": [
@@ -130,7 +130,7 @@
               "null"
             ],
             "minimum": 0,
-            "description": "How big the conversation is so far, in tokens. 0, null or left out for a new one."
+            "description": "How big the conversation is so far, in tokens. 0, null or left out for a new one. A predictor with the conversation feature uses it."
           }
         }
       }

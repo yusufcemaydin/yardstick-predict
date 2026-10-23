@@ -1,9 +1,9 @@
 """Features: what the model knows about a task before it runs.
 
 Always used, at no cost: the prompt's meaning and layout, the AI model, the effort level, the agent, who
-started the task, its similar past tasks, the project's recent tasks and the conversation so far. These
-can be added:
+started the task, its similar past tasks and the project's recent tasks. These can be added:
 
+- conversation: the conversation so far: what its earlier tasks took and how big it is. It costs nothing.
 - context: the end of the conversation before the prompt, embedded.
 - skills: the skills known before the task runs, embedded by their descriptions: the ones its prompt
   invokes, and the ones used earlier in the conversation.
@@ -32,12 +32,13 @@ from .archives import TEXT_CHARS, Task, prompt_skills
 
 REQUIRED = "prompt"
 BUILT_IN = {
+    "conversation": "the conversation so far: what its earlier tasks took and how big it is",
     "context": "the end of the conversation before the prompt, embedded",
     "skills": "the skills the prompt invokes or the conversation used before it, embedded by their descriptions",
     "benchmarks": "public facts about each AI model: prices, context size, longest answer and release date",
     "llm": "an AI model reads each task before it starts and describes the work",
 }
-DEFAULT = ("prompt", "context")
+DEFAULT = ("prompt", "conversation", "context")
 TEXT = {"prompt", "context", "skills", "llm"}
 CONTEXT_CHARS = 1_500
 """How much of the conversation, from its end, the context feature embeds."""
@@ -122,10 +123,16 @@ MENU = (
         "the closest matches, how much they varied, and a first guess from the prompt's meaning",
         always=True,
     ),
-    Group("history", "History", "the project's recent tasks, the conversation so far and its size", always=True),
+    Group("history", "Project history", "the project's recent tasks, from any conversation", always=True),
+    Group(
+        "conversation",
+        "Conversation",
+        "the conversation so far, before each prompt",
+        (Option("so_far", "what its earlier tasks took and how big it is"),),
+    ),
     Group(
         "context",
-        "Conversation",
+        "Context",
         "the end of the conversation before each prompt",
         (Option("meaning", "its meaning, read by Voyage"),),
     ),

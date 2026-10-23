@@ -30,7 +30,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-BUILT_IN_FORMAT = 3
+BUILT_IN_FORMAT = 4
 """The format the built-in model saves in. A model in an older format has to be trained again, and one in a
 newer format needs a newer version of yardstick-predict. It's here so the command can check a saved model
 without loading XGBoost."""

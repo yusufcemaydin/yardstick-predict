@@ -29,6 +29,8 @@ _TASK_ROW = f"({', '.join(_COLUMNS)}) VALUES ({', '.join('?' for _ in _COLUMNS)}
 """A task's values, with each column named. A column added to an older dataset sits at the end, not in Task's order."""
 _TEXTS = ("prompt", "context", "skills", "prior_skills")
 """A task's texts. They take most of the room."""
+FORMAT = 2
+"""The format a predictor's settings are saved in. Settings in an older format are brought up to date when read."""
 
 
 def home() -> Path:
@@ -146,12 +148,28 @@ def _read_config(name: str, path: Path) -> dict:
             config = None
         embedding = config.get("embedding") if isinstance(config, dict) else None
         if isinstance(embedding, dict) and isinstance(config.get("archives"), list) and embedding.get("model"):
-            return config
+            return _current(config)
         why = "are empty or broken"
     raise BrokenPredictor(
         f"Predictor {name!r} can't be used: its settings in {path} {why}. Fix that file, "
         f"or delete the folder {path.parent} and create the predictor again."
     )
+
+
+def _current(config: dict) -> dict:
+    """Settings saved in an older format, as this version keeps them. The next save writes them so.
+
+    In format 1, the conversation so far wasn't a feature to choose. Every predictor read it, so one saved
+    then has the conversation feature.
+    """
+    if isinstance(config.get("format"), int) and config["format"] >= FORMAT:
+        return config
+    listed = config.get("features")
+    if isinstance(listed, list) and "conversation" not in listed:
+        at = 1 if listed[:1] == ["prompt"] else 0
+        config["features"] = [*listed[:at], "conversation", *listed[at:]]
+    config["format"] = FORMAT
+    return config
 
 
 class Predictor:
@@ -178,7 +196,7 @@ class Predictor:
             raise ValueError(f"A predictor called {name!r} already exists.")
         folder.mkdir(parents=True, exist_ok=True)
         config = {
-            "format": 1,
+            "format": FORMAT,
             "name": name,
             "created_at": time.time(),
             "embedding": embedding,

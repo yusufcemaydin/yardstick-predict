@@ -39,8 +39,8 @@ The [request schema](../schemas/forecast-request.v1.json) and the [answer schema
 | `tasks[].agent` | no | `claude-code` or `codex`. Default: the agent this model ran in most often. |
 | `tasks[].origin` | no | `program` when a program starts the task, `person` when a person types it. Default: `program`. |
 | `tasks[].project` | no | The project's folder name. The forecast uses the project's recent tasks from your records, and your own features get it too. |
-| `tasks[].session` | no | The conversation the task is in, by its id in the agent's records. The forecast uses what the conversation's earlier tasks took. |
-| `tasks[].conversation_tokens` | no | How big the conversation is so far, in tokens. 0 or left out for a new one. |
+| `tasks[].session` | no | The conversation the task is in, by its id in the agent's records. Used when the predictor has the `conversation` feature: the forecast uses what the conversation's earlier tasks took. |
+| `tasks[].conversation_tokens` | no | How big the conversation is so far, in tokens. 0 or left out for a new one. Used when the predictor has the `conversation` feature. |
 | `tasks[].extra` | no | Any values your own features need. They reach them as `info.extra`. Past tasks have no extra, so a feature should also work its value out from the task itself. |
 | `distribution` | no | `true` to get each forecast's full curve. Default: `false`. |
 | `predictor` | no | Which predictor to use. Default: your default predictor, set with `yardstick-predict default NAME`. |

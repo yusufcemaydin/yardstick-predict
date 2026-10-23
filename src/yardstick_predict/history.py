@@ -3,8 +3,8 @@
 A task's outcome is known only once it really finished, so each task only sees tasks that had finished
 when it started. These numbers come from the records alone: they cost nothing and send nothing anywhere.
 
-The project's numbers help every kind of task. The conversation's help a person's sessions, and the model
-tests, for each AI model, whether they help its tasks at all.
+The project's numbers are always used. The conversation's come with the conversation feature, which a
+predictor can leave out. They tell the most about a person's sessions.
 """
 
 from __future__ import annotations
@@ -78,20 +78,21 @@ class Past:
         conversation_tokens: int,
         agent: str = "",
         prompt: str = "",
+        conversation: bool = True,
     ) -> dict[str, float]:
-        """What the project and the conversation showed before a task that starts `at`.
+        """What the project showed before a task that starts `at`, and with `conversation`, what its conversation
+        showed and how big it was.
 
         A conversation of unknown size, such as a new one, gets the size a new conversation with this agent
         usually has at its first call, plus the prompt.
         """
+        found = self.project_numbers(project, at)
+        if not conversation:
+            return found
         if conversation_tokens <= 0:
             start = self.new_sizes.get(agent, self.new_size)
             conversation_tokens = start + len(prompt) // 4 if start else 0
-        return {
-            **self.project_numbers(project, at),
-            **self.session_numbers(session, at),
-            **size_numbers(conversation_tokens, origin),
-        }
+        return {**found, **self.session_numbers(session, at), **size_numbers(conversation_tokens, origin)}
 
     def project_numbers(self, project: str, at: float) -> dict[str, float]:
         """The project's last few finished tasks: their typical outcomes, how many came before, and how long ago."""

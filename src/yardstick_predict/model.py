@@ -21,10 +21,10 @@ the trees the embedding itself, which is many weak numbers the trees overfit. Th
 gets one say: a weighted sum of all its numbers, with the weights kept small, makes a first guess of
 each outcome, and the trees get that guess.
 
-The conversation a task is in tells a lot about a person's sessions, and can mislead about a program's
-one-off runs. So training makes two versions, with and without the conversation, tests both, and each
-AI model's forecasts use the version that did better. With LLM analysis, each version is also tested
-without it, and a task LLM analysis couldn't read is forecast by the same version without it.
+Training reads exactly the features it's given. With the conversation feature, a task with a prompt and a
+context also gets how close their meanings are, and the two side by side as one more embedding. With LLM
+analysis, training also makes the same model without it, tested on its own, to forecast the tasks LLM
+analysis couldn't read.
 
 The trees start from the simple rule: each AI model's own curve, the spread of its past tasks, at each
 effort level it ran at. A model with few tasks has its curve pulled toward the curve of all models, and an
@@ -110,9 +110,9 @@ CONVERSATION = (
     "minutes_since_previous",
     "conversation_tokens",
     "conversation_tokens_program",
-    "prompt_context_closeness",
 )
-"""Number features about the conversation a task is in. Each AI model uses them only if they did better on the test."""
+"""The number features the conversation feature brings, about the conversation a task is in. Rows with them
+also get how close each prompt is to its context, and the two side by side."""
 GUESSES = ("guess_seconds", "guess_tokens", "guess_usd", "guess_direct")
 GUESS_ALPHAS = (0.3, 3.0, 30.0, 300.0)
 """How hard the first guess's weights are pulled toward 0. Training picks the one that guesses best."""
@@ -121,11 +121,10 @@ GUESS_BLOCKS = 10
 FORMAT = BUILT_IN_FORMAT
 """The saved model's format. A model in an older format has to be trained again, and one in a newer
 format needs a newer version of yardstick-predict."""
-VERSIONS = {True: "conversation", False: "plain"}
-"""The two versions training makes: with the conversation's inputs, and without them. With LLM analysis,
-each is also made with what it said and without, as conversation-llm and plain-llm."""
 LLM = "llm"
 """The embedded feature LLM analysis writes. Its number features' names start with llm_."""
+WITHOUT_LLM = "without-llm"
+"""The folder, inside a model's own, that holds the same model without LLM analysis."""
 MIN_TASKS = 30
 """Fewer finished tasks than this, and there is nothing to train on."""
 MIN_PART_TASKS = 30
@@ -607,28 +606,38 @@ def _length_one(vector) -> np.ndarray:
     return vector / max(float(np.linalg.norm(vector)), 1e-9)
 
 
-def _with_conversation(rows: list[Features], use: bool, joint: bool) -> list[Features]:
-    """The rows as one version of the model sees them.
+def _reads_conversation(rows: list[Features]) -> bool:
+    """Whether the rows come with the conversation feature: its numbers about the conversation so far."""
+    return any(name in r.numbers for r in rows for name in CONVERSATION)
 
-    With the conversation, a row with both a prompt and a context also gets how close their meanings are,
-    and with `joint`, the two side by side as one more embedding to find similar past tasks by. Without the
-    conversation, its numbers are left out.
+
+def _with_conversation(rows: list[Features], use: bool, joint: bool) -> list[Features]:
+    """The rows as a model reads them: with the rest of the conversation's inputs, when it reads the conversation.
+
+    A row with both a prompt and a context also gets how close their meanings are, and with `joint`, the two
+    side by side as one more embedding to find similar past tasks by. Without the conversation, the rows stay
+    as they are.
     """
+    if not use:
+        return rows
     found = []
     for r in rows:
         numbers, vectors = dict(r.numbers), dict(r.vectors)
-        if use:
-            prompt, context = r.vectors.get("prompt"), r.vectors.get("context")
-            if prompt is not None and context is not None:
-                numbers["prompt_context_closeness"] = float(_length_one(prompt) @ _length_one(context))
-            if joint and prompt is not None:
-                other = _length_one(context) if context is not None else np.zeros(len(prompt), dtype=np.float32)
-                vectors[JOINT] = np.concatenate([_length_one(prompt), other])
-        else:
-            for name in CONVERSATION:
-                numbers.pop(name, None)
+        prompt, context = r.vectors.get("prompt"), r.vectors.get("context")
+        if prompt is not None and context is not None:
+            numbers["prompt_context_closeness"] = float(_length_one(prompt) @ _length_one(context))
+        if joint and prompt is not None:
+            other = _length_one(context) if context is not None else np.zeros(len(prompt), dtype=np.float32)
+            vectors[JOINT] = np.concatenate([_length_one(prompt), other])
         found.append(replace(r, numbers=numbers, vectors=vectors))
     return found
+
+
+def _prepared(rows: list[Features]) -> list[Features]:
+    """The rows as training reads them. With the conversation feature, the prompt and its context go side by
+    side when any row has a context."""
+    use = _reads_conversation(rows)
+    return _with_conversation(rows, use, use and _has_context(rows))
 
 
 def _read_by_llm(row: Features) -> bool:
@@ -637,7 +646,7 @@ def _read_by_llm(row: Features) -> bool:
 
 
 def _without_llm(rows: list[Features]) -> list[Features]:
-    """The rows as a version without LLM analysis sees them."""
+    """The rows as the model without LLM analysis sees them."""
     return [
         replace(
             r,
@@ -646,11 +655,6 @@ def _without_llm(rows: list[Features]) -> list[Features]:
         )
         for r in rows
     ]
-
-
-def _version(conversation: bool, llm: bool = False) -> str:
-    """A version's name: with the conversation or without, and with LLM analysis or without."""
-    return VERSIONS[conversation] + ("-llm" if llm else "")
 
 
 # The first guess: a weighted sum of the whole embedding --------------------------------------------------
@@ -868,7 +872,8 @@ class Model:
     # Features into numbers
 
     def prepare(self, rows: list[Features]) -> list[Features]:
-        """The rows as this version of the model reads them: with or without the conversation's inputs."""
+        """The rows as the model reads them: with the rest of the conversation's inputs, when it reads the
+        conversation."""
         return _with_conversation(rows, self.meta.get("conversation", False), JOINT in self.meta["text_fields"])
 
     def matrix(
@@ -1092,85 +1097,53 @@ class Model:
             np.save(folder / "guess-constants.npy", self.guess[1].astype(np.float64), allow_pickle=False)
 
 
-class Choice:
-    """The versions of the model and which one each AI model uses: with the conversation or without, and with
-    LLM analysis or without.
+class WithoutLLM:
+    """A model that reads LLM analysis, with the same model without it, for tasks LLM analysis couldn't read.
 
-    It reads like one model: forecast(), served(), save() and a meta dict, as model_types describes.
+    It reads like one model: forecast(), served(), save() and a meta dict, as model_types describes. Its meta is
+    the model's own. The model without LLM analysis has a test of its own, and a folder of its own inside the
+    model's: WITHOUT_LLM.
     """
 
-    def __init__(self, versions: dict[str, Model], meta: dict) -> None:
-        self.versions = versions
-        self.meta = meta
-
-    @classmethod
-    def made(cls, versions: dict[str, Model], uses: dict[str, str], without_llm: dict | None = None) -> Choice:
-        """`uses` names each AI model's version. `without_llm` names, for each AI model that uses LLM analysis,
-        its version without it, with that version's verdict."""
-        # What the command reads from model.json alone, such as the report and the effort levels, is the same
-        # in every version. What differs, such as the trees' inputs, stays in each version's own folder.
-        own = (
-            "parts",
-            "expected",
-            "direct",
-            "width_scale",
-            "numbers",
-            "text_fields",
-            "rich_fields",
-            "guess",
-            "conversation",
-            "llm",
-        )
-        first = next(iter(versions.values())).meta
-        meta = {k: v for k, v in first.items() if k not in own}
-        extra = {"without_llm": without_llm} if without_llm else {}
-        return cls(versions, {**meta, "format": FORMAT, "versions": sorted(versions), "uses": uses, **extra})
+    def __init__(self, model: Model, without: Model) -> None:
+        self.model = model
+        self.without = without
+        self.meta = model.meta
 
     @property
     def pools(self) -> dict:
-        """Every version's similar-task pools. A forecast embeds a text only when some version compares it."""
-        found: dict = {}
-        for version in self.versions.values():
-            found.update(version.pools)
-        return found
-
-    def _version_of(self, row: Features) -> str:
-        """The version that forecasts a row: its AI model's, or the one without LLM analysis when it has none."""
-        without = (self.meta.get("without_llm") or {}).get(row.model)
-        if without is not None and not _read_by_llm(row):
-            return without["version"]
-        return self.meta["uses"].get(row.model, next(iter(self.versions)))
+        """Both models' similar-task pools. A forecast embeds a text only when one of them compares it."""
+        return {**self.without.pools, **self.model.pools}
 
     def forecast(self, rows: list[Features]) -> list[dict]:
+        """Each row's forecast: by the model, or by the one without LLM analysis when LLM analysis couldn't read it."""
         found: list = [None] * len(rows)
-        picked = [self._version_of(r) for r in rows]
-        for name, version in self.versions.items():
-            mine = [i for i, chosen in enumerate(picked) if chosen == name]
+        read = [_read_by_llm(r) for r in rows]
+        for model, reads in ((self.model, True), (self.without, False)):
+            mine = [i for i, was in enumerate(read) if was == reads]
             if mine:
-                for i, result in zip(mine, version.forecast([rows[i] for i in mine])):
+                for i, result in zip(mine, model.forecast([rows[i] for i in mine])):
                     found[i] = result
         return found
 
     def served(self, model: str, effort: str | None = None) -> tuple[bool, str | None]:
-        return next(iter(self.versions.values())).served(model, effort)
+        return self.model.served(model, effort)
 
     def served_without_llm(self, model: str, effort: str | None = None) -> tuple[bool, str | None]:
         """Whether a task LLM analysis couldn't read is forecast on this AI model, and why not.
 
-        The version without LLM analysis forecasts it, so that version's test decides.
+        The model without LLM analysis forecasts it, so its own test decides.
         """
         served, reason = self.served(model, effort)
-        without = (self.meta.get("without_llm") or {}).get(model)
-        if without is None or (not served and reason != "not_accurate_enough"):
-            return served, reason  # an AI model that never uses it, an unknown one, or a level it never ran at
-        return without["served"], without["reason"]
+        if not served and reason != "not_accurate_enough":
+            return served, reason  # an unknown AI model, one with too few tasks, or a level it never ran at
+        return self.without.served(model, effort)
 
     def save(self, folder: Path) -> None:
         def write(staging: Path) -> None:
-            (staging / "model.json").write_text(json.dumps(self.meta, indent=1) + "\n")
-            for name, version in self.versions.items():
-                (staging / name).mkdir()
-                version.write(staging / name)
+            self.model.write(staging)
+            (staging / WITHOUT_LLM).mkdir()
+            self.without.write(staging / WITHOUT_LLM)
 
         _swap_in(folder, write)
 
@@ -1195,7 +1168,7 @@ def _swap_in(folder: Path, write) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
-def load(folder: Path) -> Model | Choice:
+def load(folder: Path) -> Model | WithoutLLM:
     """Load a saved model. Every file is plain JSON or plain numbers, so loading runs no code."""
     meta = json.loads((folder / "model.json").read_text())
     saved = meta.get("format")
@@ -1209,8 +1182,8 @@ def load(folder: Path) -> Model | Choice:
             "This predictor's model was trained by an older version of yardstick-predict. "
             "Train it again with: yardstick-predict refresh"
         )
-    if meta.get("versions"):
-        return Choice({name: _load_one(folder / name) for name in meta["versions"]}, meta)
+    if (folder / WITHOUT_LLM).is_dir():
+        return WithoutLLM(_load_one(folder), _load_one(folder / WITHOUT_LLM))
     return _load_one(folder)
 
 
@@ -1242,13 +1215,11 @@ def _load_one(folder: Path) -> Model:
 # Training -----------------------------------------------------------------------------------------------
 
 
-def train(tasks: list[Task], rows: list[Features], settings: dict | None = None) -> Model | Choice:
+def train(tasks: list[Task], rows: list[Features], settings: dict | None = None) -> Model | WithoutLLM:
     """Test on the newest tasks, then train the final model on all of them. `rows` match `tasks` one to one.
 
-    Both versions, with and without the conversation, are tested, and with LLM analysis each also without
-    it. Each AI model gets the one that did best, so the final model is that version, or a Choice of the
-    versions AI models use. An AI model that uses LLM analysis also keeps its version without it, for a task
-    LLM analysis couldn't read.
+    The model reads every feature the rows have. When LLM analysis read some of the tasks, the same model is
+    also tested and trained without it, for a task LLM analysis couldn't read, and the two come as a WithoutLLM.
     """
     settings = settings_for(settings)
     learnable = {t.id for t in usable(tasks)}
@@ -1265,77 +1236,28 @@ def train(tasks: list[Task], rows: list[Features], settings: dict | None = None)
             f"Training needs at least {MIN_TASKS} tasks with a known value for the "
             f"{' or '.join(settings['heads'])} head. This dataset has {known}."
         )
-    # Both versions, every test window and the final models share the similar-task numbers. They're worked
-    # out with the prompt and its context side by side; the version without the conversation doesn't read those.
-    joined = _with_conversation(eligible_rows, True, _has_context(eligible_rows))
-    similar = _similar_features(eligible, joined, settings["half_life_days"])
-    read = any(_read_by_llm(r) for r in eligible_rows)
-    picks = [(use, llm) for use in VERSIONS for llm in ((True, False) if read else (False,))]
-    reports = {pick: test(eligible, eligible_rows, settings, similar, *pick) for pick in picks}
-    uses = _choose(reports)
-    report = _combined(reports, uses)
+    # The test windows and the final models share the similar-task numbers. With the conversation feature,
+    # they're worked out with the prompt and its context side by side too.
+    similar = _similar_features(eligible, _prepared(eligible_rows), settings["half_life_days"])
+    model = _tested(eligible, eligible_rows, settings, similar)
+    if not any(_read_by_llm(r) for r in eligible_rows):
+        return model
+    # A task that LLM analysis couldn't read, as when its AI model couldn't be reached, is forecast by the same
+    # model without it. That one is tested too, so it gives forecasts only where it passed.
+    return WithoutLLM(model, _tested(eligible, eligible_rows, settings, similar, llm=False))
+
+
+def _tested(
+    tasks: list[Task], rows: list[Features], settings: dict, similar: dict[str, np.ndarray], llm: bool = True
+) -> Model:
+    """The final model, trained on all the tasks, with the verdicts of its test on the newest ones."""
+    report = test(tasks, rows, settings, similar, llm)
+    model = fit(tasks, rows, settings, similar, llm)
     served = {
         m: {"served": r["served"], "reason": r["reason"], "heads": r["heads"]} for m, r in report["models"].items()
     }
-    # A task that LLM analysis couldn't read, as when its AI model couldn't be reached, is forecast by the same
-    # version without it. So an AI model that uses LLM analysis keeps that version too, and that version's verdict.
-    fallbacks = {m: (use, False) for m, (use, llm) in uses.items() if llm}
-    finals = {}
-    for pick in sorted(set(uses.values()) | set(fallbacks.values()) or {(True, False)}, reverse=True):
-        final = fit(eligible, eligible_rows, settings, similar, *pick)
-        final.meta.update(report=report, served=served, trained_at=time.time(), tasks=len(eligible))
-        finals[_version(*pick)] = final
-    if len(finals) == 1:
-        return next(iter(finals.values()))
-    without = {m: {"version": _version(*pick), **_verdict(reports[pick], m)} for m, pick in fallbacks.items()}
-    return Choice.made(finals, {m: _version(*pick) for m, pick in uses.items()}, without)
-
-
-def _choose(reports: dict[tuple[bool, bool], dict]) -> dict[str, tuple[bool, bool]]:
-    """For each AI model, the version its forecasts use: the one that did best on the test.
-
-    A version is named by whether it uses the conversation, and LLM analysis. A version whose forecasts can
-    be given beats one whose can't. Otherwise the scores decide, head by head, each against the simplest
-    version's, and a tie goes to the version that uses less.
-    """
-    simplest = min(reports, key=sum)
-    uses: dict[str, tuple[bool, bool]] = {}
-    for model in sorted({m for r in reports.values() for m in r["models"]}):
-        tried = {pick: r["models"][model] for pick, r in reports.items() if model in r["models"]}
-        uses[model] = min(tried, key=lambda pick: _rank(tried[pick], tried.get(simplest), pick))
-    return uses
-
-
-def _rank(found: dict, simplest: dict | None, pick: tuple[bool, bool]) -> tuple:
-    """How a version did for one AI model, to sort the best first: given or not, its scores, then how much it uses."""
-    heads = [h for h in found["heads"] if simplest is not None and h in simplest["heads"]]
-    change = [found[h]["score"] / max(simplest[h]["score"], 1e-9) - 1 for h in heads]
-    return not found["served"], float(np.mean(change)) if change else 0.0, sum(pick)
-
-
-def _verdict(report: dict, model: str) -> dict:
-    """Whether a version's forecasts for an AI model passed its test, and why not."""
-    found = report["models"].get(model)
-    if found is None:
-        return {"served": False, "reason": "not_enough_data"}
-    return {"served": found["served"], "reason": found["reason"]}
-
-
-def _combined(reports: dict[tuple[bool, bool], dict], uses: dict[str, tuple[bool, bool]]) -> dict:
-    """The test report of the version each AI model uses, with whether it uses the conversation and LLM analysis."""
-    read = any(llm for _, llm in reports)
-    report = dict(reports[max(reports)])
-    report["models"] = {
-        model: {**reports[pick]["models"][model], "conversation": pick[0], **({"llm": pick[1]} if read else {})}
-        for model, pick in uses.items()
-        if model in reports[pick]["models"]
-    }
-    # The calibration counts cover every model at once, so they come from the version most test tasks use.
-    tasks = Counter()
-    for model, pick in uses.items():
-        tasks[pick] += report["models"].get(model, {}).get("tasks_tested", 0)
-    report["pit"] = reports[tasks.most_common(1)[0][0] if tasks else max(reports)]["pit"]
-    return report
+    model.meta.update(report=report, served=served, trained_at=time.time(), tasks=len(tasks))
+    return model
 
 
 def _defaults(tasks: list[Task], weight: np.ndarray | None = None) -> dict:
@@ -1384,7 +1306,6 @@ def fit(
     rows: list[Features],
     settings: dict,
     similar: dict[str, np.ndarray] | None = None,
-    conversation: bool = True,
     llm: bool = True,
 ) -> Model:
     """Fit every head on the tasks, oldest first.
@@ -1393,12 +1314,13 @@ def fit(
     against starting points fitted without them, since the trees haven't seen them either. Then every
     starting point is fitted again and every part refit, on all the tasks, with that number of rounds.
 
-    `similar` is what _similar_features gives for these tasks, when it was worked out before. With
-    `conversation`, the model reads the conversation's inputs; without it, it leaves them out. Without
-    `llm`, it leaves out what LLM analysis said.
+    `similar` is what _similar_features gives for these tasks, when it was worked out before. The model
+    reads the conversation's inputs when the rows come with the conversation feature. Without `llm`, it
+    leaves out what LLM analysis said.
     """
     settings = settings_for(settings)
-    rows = _with_conversation(rows, conversation, joint=conversation and _has_context(rows))
+    conversation = _reads_conversation(rows)
+    rows = _prepared(rows)
     if not llm:
         rows = _without_llm(rows)
     text_fields = [name for name in dict.fromkeys(n for r in rows for n in r.vectors) if name]
@@ -1785,7 +1707,6 @@ def test(
     rows: list[Features],
     settings: dict,
     similar: dict[str, np.ndarray] | None = None,
-    conversation: bool = True,
     llm: bool = True,
 ) -> dict:
     """Forecast each AI model's newest tasks window by window, each from the tasks before it, and judge each model.
@@ -1793,7 +1714,7 @@ def test(
     A window learns from the tasks on every AI model that had finished when it opens. A task that started
     earlier but was still running then hadn't shown its outcome yet. Only the window's own model's tasks are
     forecast in it. `similar` is what _similar_features gives for all the tasks, when it was worked out before.
-    `conversation` and `llm` say which version is tested, as fit takes them.
+    Without `llm`, the model tested leaves out what LLM analysis said, as fit does.
     """
     settings = settings_for(settings)
     least = min_tasks_to_test(settings)
@@ -1808,8 +1729,7 @@ def test(
             "min_tasks_to_test": least,
         }
     if similar is None:
-        joined = _with_conversation(rows, conversation, conversation and _has_context(rows))
-        similar = _similar_features(tasks, joined, settings["half_life_days"])
+        similar = _similar_features(tasks, _prepared(rows), settings["half_life_days"])
     finished = finish_times(tasks)
     scored, learned_from, tested_on = [], [], 0
     last: tuple[int, Model, list[Task]] | None = None
@@ -1824,7 +1744,7 @@ def test(
             train_tasks, train_rows = [tasks[i] for i in known], [rows[i] for i in known]
             # A task's similar tasks had all finished before it started, so before this window opened too.
             sliced = {name: found[known] for name, found in similar.items()}
-            last = (len(known), fit(train_tasks, train_rows, settings, sliced, conversation, llm), train_tasks)
+            last = (len(known), fit(train_tasks, train_rows, settings, sliced, llm), train_tasks)
         _, trial, train_tasks = last
         scored.append(_score_window(trial, train_tasks, [tasks[i] for i in part], [rows[i] for i in part]))
         learned_from.append(len(known))

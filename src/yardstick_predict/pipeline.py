@@ -488,14 +488,15 @@ def benchmark_table(predictor: Predictor) -> dict:
 def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | None = None) -> list:
     """Each task's features, as the model reads them.
 
-    What came before each task, in its project and its conversation, comes from `known`: by default every
-    task the predictor has. A task's vector counts only when it was made from the task's text as it is now.
-    One made from an older text, such as before a fuller copy of the task replaced it, describes another
-    task, so it's left out.
+    What came before each task, in its project and, with the conversation feature, in its conversation, comes
+    from `known`: by default every task the predictor has. A task's vector counts only when it was made from
+    the task's text as it is now. One made from an older text, such as before a fuller copy of the task
+    replaced it, describes another task, so it's left out.
     """
     from .model import Features
 
     chosen = chosen_features(predictor)
+    conversation = "conversation" in chosen
     names = [name for name in chosen if features.is_text(name)]
     stored = {name: predictor.get_embeddings(name) for name in names}
     hashes = {name: predictor.embedded(name).hashes for name in names}
@@ -511,7 +512,14 @@ def feature_rows(predictor: Predictor, tasks: list[Task], known: list[Task] | No
             if vector is not None and made_from == embeddings.text_hash(features.text(name, info)):
                 vectors[name] = vector
         before = past.numbers(
-            task.project, task.session, task.started_at, task.origin, task.context_tokens, task.agent, task.prompt
+            task.project,
+            task.session,
+            task.started_at,
+            task.origin,
+            task.context_tokens,
+            task.agent,
+            task.prompt,
+            conversation=conversation,
         )
         rows.append(
             Features(

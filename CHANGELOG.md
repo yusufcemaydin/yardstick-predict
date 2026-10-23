@@ -2,6 +2,19 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Training uses exactly the features you choose. It trains one model, not one for each mix of inputs, so it takes about 40% less time. Your predictors catch up by themselves: the next refresh trains the model again, even when it finds no new tasks. Until then, a predictor made with an older version gives no forecasts.
+
+### Changed
+
+- The conversation so far is now a feature of its own, `conversation`, on by default. It's what the conversation's earlier tasks took and how big the conversation has grown. With `context`, it also covers how close the prompt is to the end of the conversation, and past tasks found by both together. It costs nothing and sends nothing anywhere. Turn it off on the Features screen, or leave it out of `--features`. A predictor made with an older version keeps it.
+- Training makes one model, with the features you chose, and tests it. Before, it made a version with the conversation and one without, four with LLM analysis, and each AI model used whichever did better on the test.
+- With LLM analysis, training makes the model with it and the same model without it, for the tasks LLM analysis can't read. Each has its own test, as before.
+- The test report no longer says, for each AI model, whether it uses the conversation and LLM analysis. Every AI model uses the features you chose.
+- On the Features screen, the end of the conversation is now called Context, after its `context` flag, and History is called Project history.
+- Once this version saves a predictor's settings, an older version can't use that predictor: it doesn't know the `conversation` feature.
+
 ## [0.3.0] - 2026-10-22
 
 Forecasts learn from much more of what's known before a task starts, and records are read more accurately again. Your predictors catch up by themselves: the next refresh reads all your records again, once, embeds only the texts that changed, and trains the model again. Until then, a predictor made with an older version gives no forecasts. Training tests more versions of the model, so it takes longer: about a minute for a few thousand tasks, and two or three with LLM analysis.
@@ -187,6 +200,7 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.1.0...v0.2.0
