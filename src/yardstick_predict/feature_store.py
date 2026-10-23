@@ -22,8 +22,10 @@ a compaction merged it meanwhile, starts over once.
 
 Files deleted or broken by hand never crash anything. A missing or broken index is rebuilt from the files,
 with a note. A feature whose folder is gone has no rows. A file that can't be read is skipped, with a note
-naming it. Whatever is missing is then made again by the step that made it: an embedding comes back from the
-cache of vectors for free, and LLM analysis asks about the task again, with the cost shown first.
+naming it. Each file carries checksums of its data, so one changed on disk, as by a failing disk, is skipped
+too, rather than read wrong. Whatever is missing is then made again by the step that made it: an embedding
+comes back from the cache of vectors for free, and LLM analysis asks about the task again, with the cost
+shown first.
 """
 
 from __future__ import annotations
@@ -269,12 +271,18 @@ def _keys(feature: Feature) -> list[str]:
 
 
 def _encode(feature: Feature, table: pa.Table, last_part: int | None = None) -> bytes:
-    """The rows as a Parquet file that names its feature. A data file also says up to which part it merged."""
+    """The rows as a Parquet file that names its feature. A data file also says up to which part it merged.
+
+    Each page of the file carries a checksum of its data, so a reader notices a byte changed on disk, as by a
+    failing disk, instead of reading a wrong vector.
+    """
     meta = {"format": FORMAT, "id": feature.id, "kind": feature.kind, "made_with": feature.made_with}
     if last_part is not None:
         meta["last_part"] = last_part
     sink = pa.BufferOutputStream()
-    pq.write_table(table.replace_schema_metadata({_KEY: json.dumps(meta)}), sink, compression="zstd")
+    pq.write_table(
+        table.replace_schema_metadata({_KEY: json.dumps(meta)}), sink, compression="zstd", write_page_checksum=True
+    )
     return sink.getvalue().to_pybytes()
 
 
@@ -481,7 +489,13 @@ def _problem(feature: Feature, schema: pa.Schema, meta: dict | None) -> str | No
 
 
 def _load(feature: Feature, path: Path, columns, task_ids, lenient: bool, found: _Found) -> pa.Table | None:
-    """One file's rows, or None when they can't be read, with a note naming the file."""
+    """One file's rows, or None when they can't be read, with a note naming the file.
+
+    Every column this version knows is read, whichever `columns` are asked for, and each page's checksum is
+    checked when the file has them. So a file whose vectors can't be read, or changed since they were saved,
+    has none of its rows counted, even when only its task ids are asked for. A row without a vector counts as
+    missing too. Whatever needs them makes them again.
+    """
     try:
         raw = path.read_bytes()  # read whole and closed at once, so a compaction on Windows can replace it
     except FileNotFoundError:
@@ -494,12 +508,12 @@ def _load(feature: Feature, path: Path, columns, task_ids, lenient: bool, found:
         found.kept_back = True
         return None
     try:
-        parquet = pq.ParquetFile(pa.BufferReader(raw))
+        parquet = pq.ParquetFile(pa.BufferReader(raw), page_checksum_verification=True)
         meta = _meta(parquet.schema_arrow)
         problem = _problem(feature, parquet.schema_arrow, meta)
         if problem is None:
             # Only the columns this version knows, so a file with one more, from a newer version, still fits.
-            table = parquet.read(columns=columns or [column.name for column in _schema(feature)])
+            table = parquet.read(columns=[column.name for column in _schema(feature)])
     except Exception:  # anything a broken file can make Parquet raise
         meta, problem = None, "it isn't a Parquet file this version can read"
     if problem is not None:
@@ -513,9 +527,11 @@ def _load(feature: Feature, path: Path, columns, task_ids, lenient: bool, found:
     if path.name == "data.parquet":
         merged = (meta or {}).get("last_part")
         found.last_part = merged if isinstance(merged, int) and not isinstance(merged, bool) else 0
+    if feature.kind == EMBEDDING:
+        table = table.filter(pc.is_valid(table["vector"]))
     if task_ids is not None:
         table = table.filter(pc.is_in(table["task_id"], value_set=task_ids))
-    return table
+    return table.select(columns) if columns else table
 
 
 def _collect(feature: Feature, columns, task_ids, lenient: bool) -> _Found:
@@ -560,7 +576,10 @@ def _read(feature: Feature, columns: list[str] | None = None, task_ids=None) -> 
 
 
 def vector_hashes(feature: Feature, task_ids=None) -> dict[str, set[str]]:
-    """For each task, the hashes of the texts it has a vector for: only the tasks `task_ids` names, when given."""
+    """For each task, the hashes of the texts it has a vector for: only the tasks `task_ids` names, when given.
+
+    A task counts only when its vector reads, as vectors() reads it, so a vector a damaged file holds is made again.
+    """
     table = _read(feature, ["task_id", "text_hash"], task_ids).table
     found: dict[str, set[str]] = {}
     if table is None:
@@ -577,7 +596,6 @@ def vectors(feature: Feature, task_ids=None) -> dict[str, dict[str, np.ndarray]]
     found: dict[str, dict[str, np.ndarray]] = {}
     if table is None or table.num_rows == 0:
         return found
-    table = table.filter(pc.is_valid(table["vector"]))
     values = table["vector"].combine_chunks().flatten().to_numpy(zero_copy_only=False)
     values = values.reshape(-1, feature.dimensions)
     for row, (task_id, digest) in enumerate(zip(table["task_id"].to_pylist(), table["text_hash"].to_pylist())):

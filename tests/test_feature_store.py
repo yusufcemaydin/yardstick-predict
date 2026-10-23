@@ -211,6 +211,54 @@ def test_an_unreadable_file_is_skipped_with_a_note_and_the_listing_names_it(caps
     assert feature_store.stored()[0].unreadable == []
 
 
+def damage_the_vectors(path: Path) -> None:
+    """Change one byte inside the last page of a file's vectors, as a failing disk might. The rest of the file, its
+    task ids and text hashes too, still reads."""
+    raw = bytearray(path.read_bytes())
+    vectors = pq.ParquetFile(path).metadata.row_group(0).column(2)
+    first = vectors.dictionary_page_offset if vectors.has_dictionary_page else vectors.data_page_offset
+    raw[first + vectors.total_compressed_size - 10] ^= 0xFF  # inside the page's numbers, past its header
+    path.write_bytes(bytes(raw))
+
+
+def test_a_vector_that_cant_be_read_doesnt_count_as_stored(capsys):
+    feature_store.save_vectors(PROMPTS, [("t1", "h1", vector(1, 2, 3, 4))])
+    feature_store.save_vectors(PROMPTS, [("t2", "h2", vector(5, 6, 7, 8))])
+    # A part saved as before files had checksums, damaged where its vectors can't be read at all.
+    table = pa.table({"task_id": ["t3"], "text_hash": ["h3"], "vector": [[1.0, 0.0, 0.0, 0.0]], "saved_at": [1.0]})
+    meta = {"format": feature_store.FORMAT, "id": PROMPTS.id, "kind": "embedding", "made_with": PROMPTS.made_with}
+    unchecked = feature_store.folder() / PROMPTS.id / "part-3.parquet"
+    pq.write_table(
+        table.cast(feature_store._schema(PROMPTS)).replace_schema_metadata({b"yardstick": json.dumps(meta)}),
+        unchecked,
+        compression="zstd",
+    )
+    damaged = feature_store.folder() / PROMPTS.id / "part-2.parquet"
+    for path in (damaged, unchecked):
+        damage_the_vectors(path)
+        assert len(pq.read_table(path, columns=["task_id", "text_hash"])) == 1  # its ids and hashes still read
+    capsys.readouterr()
+    # A task counts as having a vector only when its vector reads, so whatever needs it makes it again.
+    assert feature_store.vector_hashes(PROMPTS) == {"t1": {"h1"}}
+    assert sorted(feature_store.vectors(PROMPTS)) == ["t1"]
+    said = capsys.readouterr().out
+    assert said.count(f"Skipped {damaged}") == 1 and said.count(f"Skipped {unchecked}") == 1
+    [listed] = feature_store.stored()
+    assert listed.tasks == 1 and listed.unreadable == ["part-2.parquet", "part-3.parquet"]
+
+
+def test_a_task_whose_vector_cant_be_read_is_embedded_again_from_the_cache(voyage):
+    predictor = _predictor(["prompt"])
+    predictor.add_tasks([_task(n, f"task {n}") for n in range(3)])
+    pipeline.run_embeddings(predictor, pipeline.plan_embeddings(predictor, KEY), KEY)
+    sent = len(voyage.requests)
+    damage_the_vectors(feature_store.folder() / predictor.embedding_feature("prompt").id / "data.parquet")
+    plan = pipeline.plan_embeddings(predictor, KEY)
+    assert sorted(task for task, _, _ in plan.items) == ["t0", "t1", "t2"] and plan.cost.tokens == 0
+    pipeline.run_embeddings(predictor, plan, KEY)
+    assert len(voyage.requests) == sent and sorted(predictor.get_embeddings("prompt")) == ["t0", "t1", "t2"]
+
+
 def test_a_file_of_another_feature_or_shape_is_skipped(capsys):
     feature_store.save_vectors(PROMPTS, [("t1", "h", vector(1, 2, 3, 4))])
     other = feature_store.embedding("context", "voyage-4", 4)
