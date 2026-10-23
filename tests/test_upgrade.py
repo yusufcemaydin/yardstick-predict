@@ -18,7 +18,7 @@ import pytest
 from test_cli import quick, quick_predictor  # noqa: F401 (quick is a fixture: a model type that trains at once)
 from test_forecast import schema
 
-from yardstick_predict import cli, embeddings, forecast, llm, model_0_3, model_types, pipeline, store
+from yardstick_predict import cli, embeddings, features, forecast, llm, model_0_3, model_types, pipeline, store
 from yardstick_predict import model as M
 from yardstick_predict.cli import main
 from yardstick_predict.store import Predictor
@@ -90,6 +90,21 @@ def test_a_model_saved_by_0_3_forecasts_exactly_as_0_3_did(saved_by_0_3, as_0_3_
     same(answered, KEPT["answer"])
     given = {(f["task"], f["model"]) for f in answered["forecasts"] if f["seconds"] is not None}
     assert {("read", "claude-opus-5-5"), ("unread", "claude-opus-5-5"), ("read", "gpt-6.1-sol")} <= given
+
+
+@pytest.mark.parametrize("listed", [True, False])
+@pytest.mark.parametrize("kind", ["number", "text"])
+def test_a_model_saved_by_0_3_gets_the_conversation_whatever_plugin_takes_its_name(
+    saved_by_0_3, as_0_3_forecast, monkeypatch, kind, listed
+):
+    # 0.3 gave every model the conversation's numbers, and let a plugin name a feature of its own conversation.
+    # Today a plugin's feature of that name turns the built-in one off, but only for models trained today.
+    monkeypatch.setattr(features, "_CUSTOM", {})
+    features.register_feature("conversation", kind, lambda info: 2.0 if kind == "number" else "a summary")
+    if listed:  # the predictor chose the plugin's feature in 0.3
+        saved_by_0_3.config["features"] = ["prompt", "context", "llm", "conversation"]
+    assert not features.built_in("conversation", pipeline.chosen_features(saved_by_0_3))
+    same(ask_what_0_3_was_asked(saved_by_0_3), KEPT["answer"])
 
 
 def test_todays_rows_carry_every_number_and_embedding_a_model_saved_by_0_3_reads(saved_by_0_3):

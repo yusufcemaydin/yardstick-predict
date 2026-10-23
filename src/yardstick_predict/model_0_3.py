@@ -19,6 +19,9 @@ Each version is a Model as this version knows it, and reads a row as 0.3 did:
   as 0.3 did.
 - 0.3 also took the conversation's numbers out of the rows a version without the conversation read. That
   version never names them, so leaving them in changes nothing.
+- 0.3 gave every model the conversation's numbers, even with a plugin that named a feature of its own
+  conversation. Today that plugin's feature turns the built-in one off, so a forecast gives a model 0.3 saved
+  the conversation's numbers whatever plugin is loaded: see saved_by_0_3.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ import json
 from pathlib import Path
 
 from .model import Features, Model, _load_one, _read_by_llm, _swap_in
+from .model_types import PREVIOUS_FORMAT
 
 
 class Choice:
@@ -99,3 +103,9 @@ def load(folder: Path, meta: dict) -> Model | Choice:
     if meta.get("versions"):
         return Choice({name: _load_one(folder / name) for name in meta["versions"]}, meta)
     return _load_one(folder)
+
+
+def saved_by_0_3(model) -> bool:
+    """Whether a loaded model is one 0.3 saved: its versions, or the one version 0.3 saved alone. Such a model gets
+    the conversation's numbers whatever plugin is loaded, as 0.3 gave them."""
+    return isinstance(model, (Choice, Model)) and model.meta.get("format") == PREVIOUS_FORMAT

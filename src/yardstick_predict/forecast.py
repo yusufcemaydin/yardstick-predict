@@ -211,6 +211,15 @@ def _usable_texts(model, chosen: list[str]) -> list[str]:
     return [name for name in names if name in model.pools and len(model.pools[name][0]) >= MIN_NEIGHBORS]
 
 
+def _saved_by_0_3(model) -> bool:
+    """Whether the model was saved by 0.3. 0.3 gave every model the conversation's numbers, and let a plugin name a
+    feature of its own conversation. Today such a plugin's feature turns the built-in one off, but only for models
+    trained today: one 0.3 saved still gets the conversation's numbers it learned from, as 0.3 gave them."""
+    from . import model_0_3  # a model saved by 0.3. This goes when model_0_3 does.
+
+    return model_0_3.saved_by_0_3(model)
+
+
 def _embed(predictor: Predictor, items: list[tuple[int, str, str]]) -> dict[str, dict[int, np.ndarray]]:
     """Embed each row's texts with the predictor's own embedding model.
 
@@ -361,6 +370,7 @@ def answer(
     if served_pairs:
         newer = {t.id: t for t in recent or []}
         past = Past([t for t in predictor.tasks(texts=False) if t.id not in newer] + list(newer.values()))
+    conversation = features.built_in("conversation", chosen) or _saved_by_0_3(model)
     rows = []
     for row, ((task, _), info) in enumerate(zip(served_pairs, infos)):
         before = past.numbers(
@@ -371,7 +381,7 @@ def answer(
             task.conversation_tokens,
             info.agent,
             task.prompt,
-            conversation=features.built_in("conversation", chosen),
+            conversation=conversation,
         )
         rows.append(
             Features(
