@@ -2261,7 +2261,13 @@ def remake_lines(feature, users: list[Predictor], remade) -> list[str]:
     if feature.kind == "llm":
         how = {"provider": feature.made_with.get("provider"), "model": str(feature.made_with.get("model"))}
         found = [f"{who}, for {remade.tasks:,} task{'' if remade.tasks == 1 else 's'}."]
-        if remade.analyses > remade.tasks:
+        if remade.analyses_least < remade.analyses:
+            found.append(
+                "They ask for different parts of the analysis, so a task can be read more than once: from "
+                f"{remade.analyses_least:,} to {remade.analyses:,} readings in all when they refresh one at a time, "
+                "depending on which goes first. Below is the most."
+            )
+        elif remade.analyses > remade.tasks:
             found.append("They ask for different parts of the analysis, so their tasks are read once for each.")
         if how["provider"] in llm.PROVIDERS and remade.analyses:
             found += analysis_lines(remade.analyses, how, remade.tasks)

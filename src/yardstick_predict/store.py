@@ -7,6 +7,7 @@ and LLM answers, live in the feature store next to it, shared by every predictor
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import astuple, dataclass, fields
@@ -107,12 +109,17 @@ def name_lock(name: str, wait: bool = True):
 
     A delete holds it until the predictor's folder is gone, and setup while it makes the folder and saves the
     settings. So a setup of a new predictor with the same name waits for the delete, and the delete never removes
-    what setup makes. It sits beside the predictors' folders, as predictors/.NAME.lock, readable only by you, so it
-    stays when the folder goes. It's never deleted: a command waiting for it would then hold a lock no other sees.
+    what setup makes. It sits in the locks folder, outside the predictors folder and readable only by you, so it
+    stays when the predictor's folder goes, whatever the predictor is called. Its file is named by a hash of the
+    name, so any name gives a short file name. Names a folder can't tell apart, such as Work and work where letter
+    case doesn't count, share one lock. It's never deleted: a command waiting for it would then hold a lock no other
+    sees.
     """
-    root = private_home() / "predictors"
+    root = private_home() / "locks"
     root.mkdir(exist_ok=True)
-    return locks.held(root / f".{name}.lock", wait=wait)
+    folded = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", name).casefold())
+    digest = hashlib.sha256(folded.encode("utf-8", "surrogatepass")).hexdigest()[:32]
+    return locks.held(root / f"predictor-{digest}.lock", wait=wait)
 
 
 def predictor_names() -> list[str]:
@@ -210,8 +217,8 @@ def delete_predictor(name: str) -> bool:
     when the folder was gone already.
 
     Nothing outside the folder changes, except that a default setting naming the predictor is forgotten, and the
-    name's lock, an empty file beside the folder, stays: your records, the feature store and the other predictors
-    stay as they are. Nothing is ever deleted through a link:
+    name's lock, an empty file kept apart from the predictors' folders, stays: your records, the feature store and
+    the other predictors stay as they are. Nothing is ever deleted through a link:
     a folder that is itself a link to another folder has only the link deleted, and a link inside the folder goes
     without what it links to. It raises Busy while a setup or refresh of the predictor runs, and waits for a
     forecast that is reading its model. The settings go last, so a delete that stops halfway, as on a file another

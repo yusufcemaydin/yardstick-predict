@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import threading
 import time
@@ -434,17 +435,28 @@ def test_deleting_a_predictor_never_follows_a_link_out_of_its_folder(capsys, tmp
     assert not work.dir.exists() and everything(outside, other.dir) == before
 
 
-def asks_for_lock(monkeypatch, thread: list[threading.Thread], picked, ready: threading.Event) -> None:
+def asks_for_lock(
+    monkeypatch, thread: list[threading.Thread], picked, ready: threading.Event, refused: list[bool]
+) -> None:
     """Set `ready` as the thread in `thread` asks for a lock that `picked` picks out by its path and whether it's
-    shared, before it waits for it."""
+    shared. Just before, while the command that started the thread still waits for `ready`, it tries the lock
+    without waiting, and adds to `refused` whether another command held it then."""
     from contextlib import contextmanager
 
     real = locks.held
 
     @contextmanager
     def held(path, wait=True, shared=False):
-        if thread and threading.current_thread() is thread[0] and picked(Path(path), shared):
+        if not (thread and threading.current_thread() is thread[0] and picked(Path(path), shared)):
+            with real(path, wait, shared) as mine:
+                yield mine
+            return
+        with real(path, False, shared) as mine:
+            refused.append(not mine)
             ready.set()
+            if mine or not wait:
+                yield mine
+                return
         with real(path, wait, shared) as mine:
             yield mine
 
@@ -459,7 +471,8 @@ def test_a_setup_of_the_same_name_as_a_predictor_being_deleted_keeps_all_it_make
     setup: list[threading.Thread] = []
     codes: list[int] = []
     ready = threading.Event()
-    asks_for_lock(monkeypatch, setup, lambda path, shared: path.parent == folder.parent, ready)
+    refused: list[bool] = []
+    asks_for_lock(monkeypatch, setup, lambda path, shared: path.parent == store.home() / "locks", ready, refused)
     real_rmtree = shutil.rmtree
 
     def setting_up() -> None:
@@ -481,9 +494,47 @@ def test_a_setup_of_the_same_name_as_a_predictor_being_deleted_keeps_all_it_make
     assert main(["delete", "default", "--yes"]) == 0
     setup[0].join(120)
     assert not setup[0].is_alive() and codes == [0]
+    assert refused[:1] == [True]  # the delete held the name's lock as the setup first asked for it
     predictor = Predictor("default")
     assert predictor.count_tasks() == 40 and (predictor.model_dir / "model.json").is_file()
     assert predictor.prepared_path.is_file() and default_name() == "default"
+
+
+def test_each_name_has_a_lock_of_its_own_with_a_short_file_name():
+    for name in ("work", "é" * 200, "x" * 300):  # longer than a file's name can be
+        with store.name_lock(name) as mine, store.name_lock(name, wait=False) as again:
+            assert mine and not again
+        with store.name_lock(name), store.name_lock(f"{name}2", wait=False) as other:
+            assert other
+    # Names a folder can't tell apart, where letter case doesn't count, share one lock.
+    with store.name_lock("Work"), store.name_lock("work", wait=False) as other:
+        assert not other
+    files = list((store.home() / "locks").iterdir())
+    assert len(files) == 6 and all(len(path.name) == len(f"predictor-{'0' * 32}.lock") for path in files)
+
+
+def test_a_predictor_renamed_by_hand_or_beside_an_old_lock_folder_can_be_deleted(capsys):
+    work = Predictor.create("work", [], EMBEDDING)
+    work.close()
+    (work.dir.parent / ".work.lock").mkdir()  # where an older version kept the name's lock, now a folder
+    hidden = Predictor.create("hidden", [], EMBEDDING)
+    hidden.close()
+    hidden.dir.rename(hidden.dir.parent / ".locks")  # a name a lock folder might have
+    names = ["work", ".locks"]
+    if os.name != "nt":  # Windows' paths can't be this long unless long paths are turned on
+        renamed = Predictor.create("renamed", [], EMBEDDING)
+        renamed.close()
+        name = "a" * 250  # a folder's name can be 255 bytes long
+        renamed.dir.rename(renamed.dir.parent / name)
+        names.append(name)
+    assert predictor_names() == sorted(names)
+    with store.name_lock("other"):
+        for name in names:
+            code, out = run(capsys, "delete", name, "--yes")
+            assert code == 0 and not store.predictor_folder(name).exists()
+        with store.name_lock("other", wait=False) as mine:
+            assert not mine  # another name's lock stays where it was, held
+    assert predictor_names() == [] and (work.dir.parent / ".work.lock").is_dir()
 
 
 def test_a_broken_predictor_can_be_deleted(capsys):
@@ -630,7 +681,10 @@ def test_a_setup_that_starts_as_a_stored_feature_is_deleted_keeps_what_it_saves(
     setup: list[threading.Thread] = []
     codes: list[int] = []
     ready = threading.Event()
-    asks_for_lock(monkeypatch, setup, lambda path, shared: shared and path.parent == feature_store.folder(), ready)
+    refused: list[bool] = []
+    asks_for_lock(
+        monkeypatch, setup, lambda path, shared: shared and path.parent == feature_store.folder(), ready, refused
+    )
     real_save, real_delete = feature_store.save_answers, feature_store.delete
 
     def save_answers(*args, **kwargs):
@@ -658,6 +712,7 @@ def test_a_setup_that_starts_as_a_stored_feature_is_deleted_keeps_what_it_saves(
     assert main(["features", "delete", answers, "--yes"]) == 0
     setup[0].join(120)
     assert not setup[0].is_alive() and codes == [0]
+    assert refused[:1] == [True]  # the delete held the lock of the store's users as the setup first asked for it
     labels = Predictor("work").llm_labels()
     assert len(labels) == 40 and all(answer.get("description") for answer in labels.values())
 
@@ -727,6 +782,39 @@ def test_making_llm_answers_again_counts_an_analysis_for_each_set_of_parts_asked
     remade = json.loads(out)["remake"]
     assert code == 0 and (remade["tasks"], remade["analyses"]) == (6, 12)
     assert remade["usd"] == pytest.approx(llm.cost(12, how["model"]))
+
+
+def test_making_llm_answers_again_counts_the_fewest_and_the_most_readings(capsys, monkeypatch):
+    from test_embeddings import _task
+
+    how = {"provider": "anthropic", "model": "claude-opus-5-5"}
+    tasks = [_task(n, f"task {n}") for n in range(6)]
+    made = {}
+    for name, parts in (("kind", ["kind"]), ("described", ["description"]), ("both", ["kind", "description"])):
+        made[name] = Predictor.create(name, [], EMBEDDING, features=["prompt", "llm"], options={"llm": parts}, llm=how)
+        made[name].add_tasks(tasks)
+    answers = feature_store.answers(how["provider"], how["model"])
+    # When the one asking for both parts refreshes first, the other finds its parts saved. When it refreshes
+    # second, it has each task read again, for the part the first didn't ask for.
+    found = pipeline.remake(answers, [made["kind"], made["both"]])
+    assert (found.tasks, found.analyses_least, found.analyses) == (6, 6, 12)
+    # With all three, the last to refresh always finds its parts saved.
+    found = pipeline.remake(answers, list(made.values()))
+    assert (found.tasks, found.analyses_least, found.analyses) == (6, 6, 12)
+    assert found.usd == pytest.approx(llm.cost(12, how["model"]))
+    found = pipeline.remake(answers, [made["kind"], made["described"]])
+    assert (found.analyses_least, found.analyses) == (12, 12)  # whichever goes first, the other needs its own
+
+    feature_store.save_answers(answers, {"t0": {"kind": "feature", "by": "anthropic:claude-opus-5-5"}})
+    answering(monkeypatch, "n")
+    code, out = run(capsys, "features", "delete", answers.id)
+    assert "so a task can be read more than once: from 6 to 12 readings in all when they refresh one at a time" in out
+    assert "depending on which goes first. Below is the most." in out and "read once for each" not in out
+    assert "LLM analysis: 6 tasks, read 12 times in all, with Claude Opus 5.5, about $0.10 at list price." in out
+    monkeypatch.setattr(command, "interactive", lambda: False)
+    code, out = run(capsys, "features", "delete", answers.id, "--yes", "--json")
+    remade = json.loads(out)["remake"]
+    assert code == 0 and (remade["tasks"], remade["analyses_least"], remade["analyses"]) == (6, 6, 12)
 
 
 def test_a_stored_feature_no_predictor_uses_goes_without_any_cost(capsys, monkeypatch):

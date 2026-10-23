@@ -7,6 +7,7 @@ import shutil
 import time
 from collections.abc import Callable
 from dataclasses import astuple, dataclass, field, fields
+from functools import cache
 from pathlib import Path
 
 from . import benchmarks, embeddings, features, locks, model_types
@@ -751,9 +752,15 @@ class Remake:
     """How many tasks get it again: the ones each predictor learns from that have its text, or that LLM analysis
     reads. A task several predictors share counts once."""
     analyses: int = 0
-    """For LLM answers: how many times LLM analysis reads a task, which is what it costs. A task is read once for
-    each different set of parts the predictors ask for, such as the kind of task or a description. Predictors that
-    ask for the same parts share one reading of each task."""
+    """For LLM answers: the most times LLM analysis reads the tasks when the predictors refresh one at a time, which
+    is what it costs then, at most. A refresh has a task read when the answer saved so far lacks a part it asks for,
+    such as the kind of task or a description. Predictors that ask for the same parts share one reading of each
+    task. Like every estimate here, it counts each reading as answered: a task the AI model won't answer is tried
+    again later."""
+    analyses_least: int = 0
+    """For LLM answers: the fewest times LLM analysis reads the tasks when the predictors refresh one at a time.
+    It's fewer than the most when a predictor that asks for more parts can refresh first, so that the others find
+    their parts already saved."""
     texts: int = 0
     """For embeddings: how many different texts are embedded again."""
     cached: int = 0
@@ -774,20 +781,22 @@ def remake(feature, predictors: list[Predictor]) -> Remake:
     from .store import llm_answers
 
     if feature.kind == feature_store.LLM:
-        # The first predictor to ask for a set of parts has its tasks read, and saves the answers. Another that
-        # asks for the same parts finds them. One that asks for other parts has its tasks read again.
-        asked: dict[tuple[str, ...], set[str]] = {}
+        # The sets of parts the predictors ask for about each task. How many readings a task takes depends on which
+        # of them refreshes first, so it's counted both ways: the fewest and the most.
+        asked: dict[str, set[frozenset[str]]] = {}
         for predictor in predictors:
-            parts = tuple(llm.parts(features.options(predictor.config, "llm")))
-            asks = analysis_plan(predictor.tasks(), predictor.config, {}, predictor.config.get("max_tasks"))
-            asked.setdefault(parts, set()).update(ask.id for ask in asks)
-        analyses = sum(len(ids) for ids in asked.values())
+            parts = frozenset(llm.parts(features.options(predictor.config, "llm")))
+            for ask in analysis_plan(predictor.tasks(), predictor.config, {}, predictor.config.get("max_tasks")):
+                asked.setdefault(ask.id, set()).add(parts)
+        readings = [_readings(frozenset(sets)) for sets in asked.values()]
+        least, most = sum(low for low, _ in readings), sum(high for _, high in readings)
         provider, model = feature.made_with.get("provider"), str(feature.made_with.get("model"))
         billed = provider in llm.PROVIDERS and llm.PROVIDERS[provider].billed
         return Remake(
-            tasks=len(set().union(*asked.values())),
-            analyses=analyses,
-            usd=llm.cost(analyses, model) if billed else None,
+            tasks=len(asked),
+            analyses=most,
+            analyses_least=least,
+            usd=llm.cost(most, model) if billed else None,
         )
     field, model = feature.made_with.get("field"), str(feature.made_with.get("model"))
     items: list[tuple[str, str, str]] = []
@@ -806,6 +815,18 @@ def remake(feature, predictors: list[Predictor]) -> Remake:
         usd=plan.cost.list_usd if model in embeddings.MODELS else None,
         exact=plan.cost.exact,
     )
+
+
+@cache
+def _readings(sets: frozenset[frozenset[str]], saved: frozenset[str] | None = None) -> tuple[int, int]:
+    """The fewest and the most times LLM analysis reads a task, when predictors asking for these sets of parts
+    each refresh once, one at a time, in any order, and every reading is answered. `saved` holds the parts of the
+    task's answer saved so far, None when there's no answer. A refresh has the task read when there's no answer or
+    it lacks a part the refresh asks for, and saves the parts it asked for with the others."""
+    after = [_readings(sets, (saved or frozenset()) | parts) for parts in sets if saved is None or not parts <= saved]
+    if not after:
+        return 0, 0
+    return 1 + min(low for low, _ in after), 1 + max(high for _, high in after)
 
 
 def features_without_values(predictor: Predictor, rows: list) -> list[str]:
