@@ -23,12 +23,12 @@ go one after another, each with up to 1,000 texts, and one takes a few seconds. 
 payment method. An account without one may get only 10,000 tokens a minute, and then embedding waits for
 Voyage's limits and takes far longer."""
 
-LLM_SECONDS_PER_TASK = {"anthropic": 1.0, "openai": 1.0, "claude": 2.0, "codex": 3.0}
-"""About how long LLM analysis takes for each task, by the way it's paid. Rough figures, not measured: that
-needs a key or a subscription. An answer runs to about 200 tokens a task, written at about 50 tokens a second.
-An API key sends 8 tasks in a request and 4 requests at once. A subscription sends 20 in a request, 2 at once,
-through the Claude Code or Codex command, which takes a few seconds to start each time. Codex's own model
-thinks before it answers, so it's the slowest."""
+LLM_SECONDS_PER_TASK = {"anthropic": 1.0, "openai": 1.0, "claude": 2.0, "codex": 1.2}
+"""About how long LLM analysis takes for each task, by the way it's paid. The ChatGPT subscription's figure was
+measured once, through Codex, over a few thousand tasks. The others are rough figures: an answer runs to about
+200 tokens a task, written at about 50 tokens a second. An API key sends 8 tasks in a request and 4 requests at
+once. A subscription sends 20 in a request, 2 at once, through the Claude Code or Codex command, which takes a
+few seconds to start each time."""
 
 TRAIN_SECONDS_PER_MODEL = 1.5
 TRAIN_SECONDS_PER_TASK = 0.00035

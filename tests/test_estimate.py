@@ -68,10 +68,10 @@ def test_each_step_takes_what_its_constants_say():
     )
     assert found.memory == estimate.MEMORY_BASE + estimate.MEMORY_PER_TASK * 400 + estimate.MEMORY_PER_TEXT_BYTE * texts
 
-    # A subscription is slower than an API key, and Codex's own model the slowest.
+    # A subscription is slower than an API key.
     paid = {name: estimate.of(tasks, {**config, "llm": {"provider": name}}, 0, 0, 400) for name in llm.PROVIDERS}
     seconds = {name: found.steps["LLM analysis"] for name, found in paid.items()}
-    assert seconds["anthropic"] == seconds["openai"] < seconds["claude"] < seconds["codex"]
+    assert seconds["anthropic"] == seconds["openai"] < min(seconds["claude"], seconds["codex"])
 
     # Without LLM analysis, nothing to embed and only the newest 100 tasks to learn from, training is all.
     plain = estimate.of(tasks, {"features": ["prompt"], "max_tasks": 100}, tokens=0, vectors=0, asks=0)
