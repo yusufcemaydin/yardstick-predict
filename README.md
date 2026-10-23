@@ -2,8 +2,8 @@
 
 **Know how long a coding-agent task will take, and what it will cost, before it runs.**
 
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/yusufcemaydin/yardstick-predict/blob/main/LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://github.com/yusufcemaydin/yardstick-predict/blob/main/pyproject.toml)
 
 yardstick-predict learns from your own past Claude Code and Codex runs. Give it a prompt and an AI model, and it forecasts the expected seconds, tokens and dollars. It's built for orchestrators: programs that run many coding agents and decide which model runs each task, what runs side by side, and what fits a budget or a usage limit.
 
@@ -35,8 +35,10 @@ The numbers above are an example. Yours come from your own history.
 ## Install
 
 ```bash
-uv tool install git+https://github.com/yusufcemaydin/yardstick-predict
+uv tool install git+https://github.com/yusufcemaydin/yardstick-predict@v0.3.0
 ```
+
+This installs the newest release, 0.3.0. The main branch holds work in progress.
 
 You need [uv](https://docs.astral.sh/uv/), a fast tool that installs Python programs. yardstick-predict runs on macOS, Linux and Windows, with Python 3.12 or newer. uv fetches that Python if you don't have it, and everything else comes with the install.
 
@@ -110,7 +112,7 @@ It sends each task's prompt and the end of the conversation before it to the AI 
 With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price; with Claude Haiku 5.5, about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session, so these calls never show up in the records your predictor learns from. An API key needs the providers' own libraries:
 
 ```bash
-uv tool install --reinstall 'yardstick-predict[llm] @ git+https://github.com/yusufcemaydin/yardstick-predict'
+uv tool install --reinstall 'yardstick-predict[llm] @ git+https://github.com/yusufcemaydin/yardstick-predict@v0.3.0'
 ```
 
 ## Forecasts in Claude Code
@@ -167,7 +169,7 @@ print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minu
 - **`reason`** appears only when a forecast isn't given. Then the numbers are `null` and it says why: `unknown_model`, `not_enough_data` or `not_accurate_enough`.
 - **`"distribution": true`** adds each forecast's full curve, so a program can work out any chance or any range.
 
-One request can hold up to 1,000 tasks, each on up to 50 models. The format is fixed and versioned: within version 1, fields may be added but are never renamed or removed. Schemas for the [request](schemas/forecast-request.v1.json) and the [answer](schemas/forecast-response.v1.json) let a program check every answer. [The format](docs/format.md) explains every field.
+One request can hold up to 1,000 tasks, each on up to 50 models. The format is fixed and versioned: within version 1, fields may be added but are never renamed or removed. Schemas for the [request](https://github.com/yusufcemaydin/yardstick-predict/blob/main/schemas/forecast-request.v1.json) and the [answer](https://github.com/yusufcemaydin/yardstick-predict/blob/main/schemas/forecast-response.v1.json) let a program check every answer. [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md) explains every field.
 
 ## How it tests itself
 
@@ -220,7 +222,7 @@ yardstick-predict create --yes --plugin my_features --features conversation,cont
 
 A text feature is embedded like the prompt. A number feature goes to the model as it is. Your function gets the task's prompt, context, skills, project, model, thinking level and agent, from past records when training and from the request when forecasting. It also gets when the task started, as `info.started_at`, in seconds since 1970: a forecast's task starts the moment you ask. A request can also carry an `"extra"` object for your features, which reaches them as `info.extra`. Past tasks have no extra, so a feature should also work its value out from the task itself. Training says so when one of your features had no value for any past task.
 
-A plugin can also add a model type with `yardstick_predict.model_types.register_model_type(name, train, load)`, then use it with `--model-type`. [`model_types.py`](src/yardstick_predict/model_types.py) describes what a model type provides.
+A plugin can also add a model type with `yardstick_predict.model_types.register_model_type(name, train, load)`, then use it with `--model-type`. [`model_types.py`](https://github.com/yusufcemaydin/yardstick-predict/blob/main/src/yardstick_predict/model_types.py) describes what a model type provides.
 
 ## Commands
 
@@ -236,11 +238,13 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 
 ## Update or remove it
 
-To get the newest version:
+To get the newest version, install the newest release. It replaces the version you have:
 
 ```bash
-uv tool upgrade yardstick-predict
+uv tool install git+https://github.com/yusufcemaydin/yardstick-predict@v0.3.0
 ```
+
+If you added the `llm` extra for LLM analysis, run the `[llm]` command from that section instead. Otherwise the upgrade leaves the extra out.
 
 Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed. When a new version reads new features or trains the model another way, the next refresh trains it again. Until then, the predictor gives no forecasts.
 
@@ -287,14 +291,14 @@ An account without a payment method gets low limits, such as a few requests and 
 
 ## Documentation
 
-- [How it works](docs/how-it-works.md): the data, the features, the model and the test.
-- [The format](docs/format.md): every field of the request and the answer.
-- [What's next](docs/features.md): what's planned.
+- [How it works](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/how-it-works.md): the data, the features, the model and the test.
+- [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md): every field of the request and the answer.
+- [What's next](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/features.md): what's planned.
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome. See the [contributing guide](CONTRIBUTING.md) and the [security policy](SECURITY.md).
+Bug reports, ideas and pull requests are welcome. See the [contributing guide](https://github.com/yusufcemaydin/yardstick-predict/blob/main/CONTRIBUTING.md) and the [security policy](https://github.com/yusufcemaydin/yardstick-predict/blob/main/SECURITY.md).
 
 ## License
 
-[Apache License 2.0](LICENSE).
+[Apache License 2.0](https://github.com/yusufcemaydin/yardstick-predict/blob/main/LICENSE).
