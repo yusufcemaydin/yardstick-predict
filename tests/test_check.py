@@ -80,6 +80,24 @@ def test_leaving_a_feature_out_removes_exactly_its_numbers_and_vectors(name):
     assert M.has_feature(row, name) and not M.has_feature(after, name)
 
 
+@pytest.mark.parametrize("kind", ["number", "text"])
+@pytest.mark.parametrize("name", ["time", "conversation"])
+def test_a_plugins_own_time_or_conversation_feature_is_left_out_as_its_own(name, kind, monkeypatch):
+    # A plugin may keep a feature named like a built-in one added after 0.3.0. Its own feature takes the name.
+    monkeypatch.setattr(features, "_CUSTOM", {})
+    features.register_feature(name, kind, lambda info: 2.0 if kind == "number" else "a summary")
+    vector = np.full(4, 0.5, dtype=np.float32)
+    row = M.Features("claude-opus-5-5", "high", "claude-code", "person", 40, {"prompt": vector}, {"prompt_lines": 0.7})
+    if kind == "number":
+        row.numbers[name] = 2.0
+    else:
+        row.vectors[name] = vector
+    after = M.without([row], name)[0]
+    assert M.has_feature(row, name) and not M.has_feature(after, name)
+    assert set(row.numbers) - set(after.numbers) == ({name} if kind == "number" else set())
+    assert set(row.vectors) - set(after.vectors) == ({name} if kind == "text" else set())
+
+
 def test_each_feature_leaves_out_the_numbers_the_pipeline_really_gives_it():
     listing = {
         "data": [

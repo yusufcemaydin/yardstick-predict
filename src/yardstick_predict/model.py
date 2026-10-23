@@ -665,8 +665,11 @@ def _parts(name: str) -> tuple[frozenset[str], frozenset[str], str | None]:
     The conversation brings its numbers, and the model adds how close each prompt is to its context and the two
     side by side. Benchmarks and time bring their numbers, and LLM analysis numbers whose names start with llm_,
     with its description's vector. The context, the skills and your own features are a vector or a number of
-    their own name.
+    their own name, and so is a plugin's own feature named time or conversation, which takes that name from the
+    built-in one.
     """
+    if name in features.LATER and not features.built_in(name, [name]):
+        return frozenset({name}), frozenset({name}), None
     if name == "conversation":
         return frozenset({*CONVERSATION, CLOSENESS}), frozenset({JOINT}), None
     if name == LLM:
