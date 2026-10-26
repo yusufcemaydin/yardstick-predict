@@ -31,6 +31,8 @@ uv run ruff check src tests
 uv run ruff format src tests
 ```
 
+[How it works](docs/how-it-works.md) explains the data, the model and the test. A change to the model must keep passing the test on real runs, not just the unit tests. Say in your pull request how it did.
+
 ## Libraries and known vulnerabilities
 
 `uv.lock` pins every library the tests and the release builds use. A new release of a library gets into it only once it has been out for 7 days, as `exclude-newer` in `pyproject.toml` says. A bad release is usually found and pulled by then. So `uv lock --upgrade` picks the newest releases that are at least 7 days old.
@@ -50,8 +52,6 @@ uv audit --locked --preview-features audit
 ```
 
 When it finds one, upgrade the library to the release that fixes it, as above.
-
-[How it works](docs/how-it-works.md) explains the data, the model and the test. A change to the model must keep passing the test on real runs, not just the unit tests. Say in your pull request how it did.
 
 ## Keep private data out
 
@@ -122,6 +122,8 @@ Code that's minified, obfuscated or generated without its source will be closed 
 ## AI-written changes
 
 You can use AI tools to write your change. You're still responsible for it. Read it, test it, and be ready to explain it.
+
+[AGENTS.md](AGENTS.md) holds the rules for AI coding agents working here: how to check a change and how to write what people read. Claude Code reads it through `CLAUDE.md`. Codex reads it as it is.
 
 ## Releasing
 
