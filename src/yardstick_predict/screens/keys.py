@@ -194,8 +194,9 @@ def columns() -> int:
 
 
 def notes(texts: list[str]) -> list[str]:
-    """Plain lines under a menu, dimmed and broken to fit the terminal, so none of them wraps on its own."""
-    return [f"  {ui.dim(part)}" for text in texts for part in ui.wrapped(text, 2)]
+    """Plain lines under a menu, dimmed and broken to fit the terminal, so none of them wraps on its own. A line's
+    own color codes go, so they never count toward its width: the whole line is dim anyway."""
+    return [f"  {ui.dim(part)}" for text in texts for part in ui.wrapped(ui.plain(text), 2)]
 
 
 def redraw(lines: list[str], drawn: int) -> int:

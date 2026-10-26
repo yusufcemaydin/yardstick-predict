@@ -360,6 +360,17 @@ def test_a_long_menu_shows_6_at_a_time_and_turns_the_page(capsys, monkeypatch):
     assert keys.choose(rows) == 12
 
 
+def test_the_keys_line_under_a_list_breaks_only_where_it_must(capsys, monkeypatch):
+    from yardstick_predict.screens import checklist
+
+    monkeypatch.setenv("COLUMNS", "80")
+    monkeypatch.setenv("FORCE_COLOR", "1")  # the dots between the keys are colored, and that takes no room
+    pressing(monkeypatch, keys.ENTER)
+    checklist.tick([keys.Choice("claude-opus-5-5  high"), keys.Choice("claude-opus-5-5  max")])
+    out = plain(capsys.readouterr().out)
+    assert "↑↓ move · enter forecast this one · space tick several · esc go back" in out
+
+
 @pytest.mark.parametrize("width", [80, 45])
 def test_menus_cut_long_names_to_fit(capsys, monkeypatch, width):
     from yardstick_predict.screens import checklist
