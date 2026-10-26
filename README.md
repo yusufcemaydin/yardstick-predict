@@ -68,7 +68,7 @@ yardstick-predict create --express
 yardstick-predict
 ```
 
-The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. When a newer version of yardstick-predict is out, it says so under the box, with the command that updates it. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Estimate asks for a task. Then it asks which AI models: the ones with enough data or any from a list, 6 to a page, numbered on from page to page. Enter forecasts the line you're on. To forecast several, tick them with space first. After the forecasts you choose what's next. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
+The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. When a newer version of yardstick-predict is out, it says so under the box, with the command that updates it the way you installed it: with uv, pipx or pip. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Estimate asks for a task. Then it asks which AI models: the ones with enough data or any from a list, 6 to a page, numbered on from page to page. Enter forecasts the line you're on. To forecast several, tick them with space first. After the forecasts you choose what's next. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
 When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The check compares forecasts with each feature and without it. It shows what helped for each AI model and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice: say no, and setup trains with the features you picked.
 
@@ -267,13 +267,21 @@ uv tool upgrade yardstick-predict
 
 If you installed 0.3.0 or an earlier version from GitHub, switch to PyPI once with `uv tool install 'yardstick-predict@latest'`. After that, the upgrade command above gets each new release.
 
+If you added the `llm` extra before 0.5.0, the upgrade may warn that the package has no extra named `llm`. That's fine: its libraries come with every install now. To stop the warning, install once more with `uv tool install --force yardstick-predict`.
+
 Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed. When a new version reads new features or trains the model another way, the next refresh trains it again. Until then, a model the previous version trained keeps forecasting as it did. A model from an older version gives no forecasts until it's trained again.
 
 From 0.4 on, going back to an older version is safe too. It reads what it can of a predictor that a newer version saved, and never changes it: it skips any feature it doesn't know, with a note, and it won't refresh that predictor.
 
 To remove one predictor, run `yardstick-predict delete NAME`. Your records, the feature store and your other predictors stay.
 
-To remove everything, uninstall the program, delete its folder and delete the Voyage key it kept:
+To remove everything, first take the forecasts out of Claude Code, if you added them. Otherwise Claude Code keeps trying to run yardstick-predict once it's gone:
+
+```bash
+yardstick-predict claude-code remove
+```
+
+If you added them for one folder with `--here`, also run `yardstick-predict claude-code remove --here` in that folder. Then uninstall the program, delete its folder and delete the Voyage key it kept:
 
 ```bash
 uv tool uninstall yardstick-predict
@@ -289,7 +297,7 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 - **The cache of embeddings holds no text.** For each text it keeps a one-way hash and the text's vector, in the same private folder.
 - **Only the text you choose is sent,** over an encrypted connection: to Voyage to embed it, and with LLM analysis, each task's prompt and the end of its conversation to the AI model you pick.
 - **Your Voyage key** is read from `VOYAGE_API_KEY` or kept in your computer's password store. yardstick-predict never writes it to a file of its own.
-- **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face, at one fixed version, and OpenRouter's model list if you use benchmarks. The home screen also reads yardstick-predict's public page on PyPI at most once a day, to say when a newer version is out. Set `YARDSTICK_NO_UPDATE_CHECK` to turn that off.
+- **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face, at one fixed version, and OpenRouter's model list if you use benchmarks. The home screen also reads yardstick-predict's public page on PyPI at most once a day, to say when a newer version is out. To turn that off, set `YARDSTICK_NO_UPDATE_CHECK` or `DO_NOT_TRACK`. Adding `"update_check": false` to `settings.json` in the yardstick folder works too.
 - **Saved models are plain JSON and plain numbers.** Loading one runs no code.
 - **Plugins are code you choose to run.** yardstick-predict only imports the modules you name.
 

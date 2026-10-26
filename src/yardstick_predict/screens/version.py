@@ -3,7 +3,8 @@
 The home screen asks. What PyPI said last is kept in the yardstick folder, so the screen shows it at once. A
 new look at PyPI runs in the background once the last one is a day old, so the screen never waits for it,
 and what it finds shows from the next screen on. It sends PyPI nothing but the request for the package's
-public page. Set YARDSTICK_NO_UPDATE_CHECK to turn it off.
+public page. YARDSTICK_NO_UPDATE_CHECK or DO_NOT_TRACK turns it off, and so does "update_check": false in the
+yardstick folder's settings.json. The line names the update command for the way it was installed.
 """
 
 from __future__ import annotations
@@ -11,8 +12,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 import time
+from pathlib import Path
 
 from .. import __version__
 
@@ -20,7 +23,8 @@ URL = "https://pypi.org/pypi/yardstick-predict/json"
 CHECK_EVERY = 24 * 3600
 """Seconds between two looks at PyPI."""
 OFF = "YARDSTICK_NO_UPDATE_CHECK"
-UPGRADE = "uv tool upgrade yardstick-predict"
+SETTING = "update_check"
+"""The setting that turns the check off when it's false."""
 
 _looking = False
 """Whether this session has started a look at PyPI already."""
@@ -30,7 +34,7 @@ def notice() -> str | None:
     """The line saying a newer version is out, from what PyPI said last, or None. It starts a new look at PyPI in
     the background when the last one is a day old."""
     global _looking
-    if os.environ.get(OFF):
+    if not wanted():
         return None
     saved = _saved()
     if not _looking and time.time() - _number(saved.get("at")) >= CHECK_EVERY:
@@ -38,8 +42,32 @@ def notice() -> str | None:
         threading.Thread(target=check, daemon=True).start()
     latest = saved.get("latest")
     if isinstance(latest, str) and newer(latest, __version__):
-        return f"yardstick-predict {latest} is out. You have {__version__}. Update with: {UPGRADE}"
+        return f"yardstick-predict {latest} is out. You have {__version__}. Update with: {upgrade_command()}"
     return None
+
+
+def wanted() -> bool:
+    """Whether to look for a newer version: not when YARDSTICK_NO_UPDATE_CHECK or DO_NOT_TRACK says no, nor when the
+    settings say "update_check": false."""
+    from .. import store
+
+    if os.environ.get(OFF) or os.environ.get("DO_NOT_TRACK", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    return store.settings().get(SETTING) is not False
+
+
+def upgrade_command(prefix: str | None = None) -> str:
+    """How to update yardstick-predict the way it was installed: with uv, pipx or pip. `prefix` is the folder of
+    the Python it runs in."""
+    place = Path(prefix or sys.prefix)
+    parts = [part.lower() for part in place.parts]
+    folder = place.parent.name.lower()
+    uv_tools = os.environ.get("UV_TOOL_DIR")
+    if (uv_tools and place.parent == Path(uv_tools)) or ("uv" in parts and folder == "tools"):
+        return "uv tool upgrade yardstick-predict"
+    if "pipx" in parts and folder == "venvs":
+        return "pipx upgrade yardstick-predict"
+    return "pip install --upgrade yardstick-predict"
 
 
 def check() -> None:

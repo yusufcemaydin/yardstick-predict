@@ -59,9 +59,18 @@ def styled() -> bool:
     return sys.platform != "win32" or _windows_colors()
 
 
+def codes_work() -> bool:
+    """Whether the terminal acts on the codes that move the cursor and clear lines, which menus redraw with. A
+    Windows console needs them turned on, which this does. A dumb terminal has none."""
+    if os.environ.get("TERM") == "dumb":
+        return False
+    return sys.platform != "win32" or _windows_colors()
+
+
 @lru_cache(maxsize=1)
 def _windows_colors() -> bool:
-    """Turn on color codes in a Windows console. Windows Terminal has them on already."""
+    """Turn on the codes for color and for moving the cursor in a Windows console. Windows Terminal has them on
+    already."""
     try:
         import ctypes
 

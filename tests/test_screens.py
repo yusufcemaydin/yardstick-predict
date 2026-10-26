@@ -480,7 +480,7 @@ def test_the_home_screen_says_when_a_newer_version_is_out(capsys, monkeypatch):
     pressing(monkeypatch, keys.ESC)
     assert main([]) == 0
     out = plain(capsys.readouterr().out)
-    upgrade = "Update with: uv tool upgrade yardstick-predict"
+    upgrade = f"Update with: {version.upgrade_command()}"
     assert f"yardstick-predict 99.0.0 is out. You have {__version__}. {upgrade}" in " ".join(out.split())
     assert asked == [1]  # PyPI is asked at most once a day
 
@@ -504,6 +504,29 @@ def test_the_check_can_be_turned_off(capsys, monkeypatch):
     pressing(monkeypatch, keys.ESC)
     assert main([]) == 0
     assert not asked and not (store.home() / "update-check.json").exists()
+
+
+def test_the_notice_names_the_update_command_for_the_way_it_was_installed(monkeypatch):
+    monkeypatch.delenv("UV_TOOL_DIR", raising=False)
+    uv = version.upgrade_command("/Users/me/.local/share/uv/tools/yardstick-predict")
+    windows_uv = version.upgrade_command("C:/Users/me/AppData/Roaming/uv/data/tools/yardstick-predict")
+    pipx = version.upgrade_command("/Users/me/.local/pipx/venvs/yardstick-predict")
+    assert uv == windows_uv == "uv tool upgrade yardstick-predict"
+    assert pipx == "pipx upgrade yardstick-predict"
+    assert version.upgrade_command("/Users/me/project/.venv") == "pip install --upgrade yardstick-predict"
+    monkeypatch.setenv("UV_TOOL_DIR", "/opt/tools")
+    assert version.upgrade_command("/opt/tools/yardstick-predict") == "uv tool upgrade yardstick-predict"
+
+
+def test_the_check_is_off_with_do_not_track_or_the_setting(monkeypatch):
+    monkeypatch.delenv(version.OFF, raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
+    assert version.wanted()
+    monkeypatch.setenv("DO_NOT_TRACK", "1")
+    assert not version.wanted()
+    monkeypatch.delenv("DO_NOT_TRACK")
+    store.save_setting("update_check", False)
+    assert not version.wanted()
 
 
 def test_versions_compare_by_their_numbers():
@@ -809,3 +832,68 @@ def test_setup_suggests_main_for_the_first_model(monkeypatch):
     assert cli.ask_name([]) == "main" and asked == ["Name this predictor: [main]"]
     asked = typing(monkeypatch, "", "work")  # a later one gets no name it could clash with
     assert cli.ask_name(["main"]) == "work" and asked == ["Name this predictor:", "Name this predictor:"]
+
+
+# Windows ---------------------------------------------------------------------------------------------------------
+
+
+class FakeConsole:
+    """A stand-in for Windows' keyboard reader, msvcrt, that gives these characters in turn."""
+
+    def __init__(self, *typed: str) -> None:
+        self.typed = list(typed)
+
+    def kbhit(self) -> bool:
+        return bool(self.typed)
+
+    def getwch(self) -> str:
+        return self.typed.pop(0)
+
+
+@pytest.mark.parametrize(
+    ("typed", "key"),
+    [
+        (("\xe0", "H"), keys.UP),
+        (("\x00", "P"), keys.DOWN),  # the arrows on the number pad
+        (("\xe0", "M"), keys.RIGHT),
+        (("\xe0", "K"), keys.LEFT),
+        (("\r",), keys.ENTER),
+        (("\x1b",), keys.ESC),
+        ((" ",), keys.SPACE),
+        (("7",), "7"),
+        (("\xe0", "G"), ""),  # Home, which no menu uses
+    ],
+)
+def test_windows_keys_are_read_as_menus_name_them(monkeypatch, typed, key):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeConsole(*typed))
+    assert keys._windows_key() == key
+
+
+def test_windows_ctrl_c_stops_and_a_wait_for_a_second_digit_ends(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeConsole("\x03"))
+    with pytest.raises(KeyboardInterrupt):
+        keys._windows_key()
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeConsole())
+    assert keys._windows_key(timeout=0.05) == ""  # no second digit came
+
+
+def test_esc_stops_a_long_step_on_windows_but_an_arrow_doesnt(monkeypatch):
+    import sys
+
+    monkeypatch.setattr(keys, "_terminal", lambda: "windows")
+    console = FakeConsole("\xe0", "H")
+    monkeypatch.setitem(sys.modules, "msvcrt", console)
+    with keys.watching() as watch:
+        watch.stop_if_asked()  # an arrow key: it goes on
+        console.typed.append("\x1b")
+        with pytest.raises(keys.Stopped):
+            watch.stop_if_asked()
+
+
+def test_a_terminal_that_cant_move_the_cursor_gets_numbered_menus(monkeypatch):
+    monkeypatch.setenv("TERM", "dumb")
+    assert not ui.codes_work() and keys._terminal() is None

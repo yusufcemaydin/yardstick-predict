@@ -40,9 +40,11 @@ def reader() -> Callable[..., str] | None:
 
 
 def _terminal() -> str | None:
-    """How this terminal passes single key presses: windows or posix. None when it can't."""
+    """How this terminal passes single key presses: windows or posix. None when it can't, or when it can't redraw
+    a menu in place: a dumb terminal, or an old Windows console whose cursor codes won't turn on. Those get the
+    menus numbered, to type a number in."""
     try:
-        if not sys.stdin.isatty():
+        if not sys.stdin.isatty() or not ui.codes_work():
             return None
         if os.name == "nt":
             import msvcrt  # noqa: F401

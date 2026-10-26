@@ -50,7 +50,7 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 - There is no Status choice. The `status` command stays for anyone who wants the long report.
 - When a choice finishes, you come back to this screen.
 - With no model yet, the header says No models yet and Add New comes first, with one line on what setup needs.
-- When a newer version is out on PyPI, a line under the box says so, with the command that updates it. PyPI is asked at most once a day, in the background. The screen never waits for it. Its answer is kept in `~/.yardstick/update-check.json` and shows from the next screen on. `YARDSTICK_NO_UPDATE_CHECK` turns it off.
+- When a newer version is out on PyPI, a line under the box says so, with the command that updates it. PyPI is asked at most once a day, in the background. The screen never waits for it. Its answer is kept in `~/.yardstick/update-check.json` and shows from the next screen on. It names the update command for the way yardstick-predict was installed: uv, pipx or pip. `YARDSTICK_NO_UPDATE_CHECK`, `DO_NOT_TRACK` or `"update_check": false` in `settings.json` turns it off.
 - Draw the box with Unicode when the terminal supports it and with plain characters otherwise. Leave the box out under 50 columns.
 
 ## 2. How menus work
@@ -60,7 +60,7 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 - Every line fits the terminal at any width. A long hint or name is cut short. A long note is broken onto more lines. A line that wrapped on its own would break the redraw in place.
 - A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then its time, tokens and cost, each with its range beside it.
 - Build it with the standard library only: `termios` and `tty` on macOS and Linux, `msvcrt` on Windows. No new dependency.
-- When a terminal cannot pass single key presses, fall back to typing the number.
+- When a terminal cannot pass single key presses, fall back to typing the number. So do a dumb terminal (`TERM=dumb`) and an old Windows console where the codes that move the cursor can't be turned on.
 
 ## 3. Estimate
 
