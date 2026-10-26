@@ -287,6 +287,120 @@ def test_forecasts_show_six_to_a_page(capsys, monkeypatch, quick, ready):
     assert "1. Tested AI models    8 AI models: passed the test" in out  # too many to name on one line
 
 
+# Fitting the terminal -----------------------------------------------------------------------------------------
+
+LONG_NAME = "a-very-long-model-name-for-testing-12345"
+"""A model name as long as one can be: 40 characters."""
+
+
+def widest(out: str) -> int:
+    """The widest line a person sees, with each redraw of a menu counted as its own line."""
+    return max(ui.width(line) for line in plain(out).replace("\r", "\n").split("\n"))
+
+
+def test_a_long_menu_shows_6_at_a_time_and_turns_the_page(capsys, monkeypatch):
+    rows = [keys.Choice(f"model {number}", "updated 1 hour ago") for number in range(12)] + [keys.Choice("Back")]
+    pressing(monkeypatch, keys.RIGHT, "1")
+    assert keys.choose(rows) == 6  # the first on the second page
+    out = plain(capsys.readouterr().out)
+    assert "Page 1 of 3, 13 in all" in out and "Page 2 of 3, 13 in all" in out and "turn the page" in out
+    assert "model 6" not in out.split("Page 1 of 3")[0]  # the first page shows 6
+    pressing(monkeypatch, keys.UP, keys.ENTER)  # up from the first goes round to Back, on the last page
+    assert keys.choose(rows) == 12
+
+
+@pytest.mark.parametrize("width", [80, 45])
+def test_menus_cut_long_names_to_fit(capsys, monkeypatch, width):
+    from yardstick_predict.screens import checklist
+
+    monkeypatch.setenv("COLUMNS", str(width))
+    pressing(monkeypatch, keys.DOWN, keys.ENTER)
+    keys.choose([keys.Choice(f"{LONG_NAME} (default)", "updated 12 hours ago"), keys.Choice("Back")])
+    pressing(monkeypatch, keys.ENTER)
+    checklist.tick([keys.Choice(f"{LONG_NAME}  default", ui.yellow("⚠ failed the test"))] * 2)
+    assert widest(capsys.readouterr().out) < width
+
+
+@pytest.mark.parametrize("width", [80, 45])
+def test_the_home_screen_and_a_models_screen_fit_with_long_names(capsys, monkeypatch, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    made(LONG_NAME, served=tuple(f"claude-some-really-long-ai-model-name-{n}" for n in range(5)))
+    made("short")
+    pressing(monkeypatch, "3", "1", "2", keys.ESC, keys.ESC, keys.ESC)  # Models, the long one, Make default
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert widest(out) < width and "now the default" in plain(out)
+
+
+def test_the_update_summary_fits_with_a_long_name_and_folder(capsys, monkeypatch, quick, ready, records, tmp_path):
+    folder = tmp_path / "a" / "folder" / "of" / "records" / "with" / "a" / "path" / "long" / "enough" / "to" / "wrap"
+    history(folder, tasks=40, start=START)
+    monkeypatch.setenv("COLUMNS", "60")
+    assert main(["create", LONG_NAME, "--express", "--archive", f"claude-code={folder}", *quick]) == 0
+    new_work(folder)
+    capsys.readouterr()
+    monkeypatch.setattr(update, "apply", lambda job, key: pytest.fail("It went ahead"))
+    pressing(monkeypatch, "2", keys.DOWN, keys.ENTER, keys.ESC)  # Update, then Cancel
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert widest(out) < 60
+    assert re.search(r"\n  [^\n]*" + LONG_NAME + r"\n    Embed \d texts with Voyage", plain(out))  # its own line
+    assert re.search(r"…[^\n]*/to/wrap", plain(out))  # the folder is cut short at its start
+
+
+def test_the_forecast_table_cuts_a_long_ai_model_name_to_fit(capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "80")
+    made("main")
+    name = "claude-some-really-long-ai-model-name-for-testing"
+    forecasts = [
+        {
+            "model": name,
+            "effort": "default",
+            "seconds": 960.0,
+            "tokens": 23_000_000,
+            "usd": 7.42,
+            "distribution": curve(math.log(900), 1.2),
+            "reason": "not_accurate_enough",
+        }
+    ]
+    cli.show_forecasts("x", {"predictor": "main", "forecasts": forecasts})
+    out = capsys.readouterr().out
+    assert widest(out) < 80 and "claude-some-really" in out and "Failed the test: " + name in " ".join(out.split())
+
+
+def test_a_narrow_terminal_gets_each_forecast_as_a_block(capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "60")
+    made("main")
+    forecasts = [
+        {
+            "model": "claude-opus-5",
+            "effort": "xhigh",
+            "seconds": 240.0,
+            "tokens": 20_600_000,
+            "usd": 11.17,
+            "distribution": curve(math.log(220), 0.5),
+            "reason": "not_accurate_enough",
+        },
+        {"model": "claude-opus-5-5", "effort": "max", "seconds": 960.0, "tokens": 23_000_000, "usd": 7.42},
+    ]
+    cli.show_forecasts("x", {"predictor": "main", "forecasts": forecasts}, screen=True)
+    out = capsys.readouterr().out
+    assert widest(out) < 60 and "AI model" not in out  # no table: it wouldn't fit
+    text = plain(out)
+    assert re.search(r"claude-opus-5  ⚠  xhigh\n    time\s+4 min  \S+ to \S+ min\n    tokens\s+20\.6M", text)
+    assert re.search(r"claude-opus-5-5  max\n    time\s+16 min", text)  # names are never cut
+    assert "Beside each forecast is the range" in " ".join(text.split())
+
+
+def test_the_setup_features_screen_fits_80_columns(capsys, monkeypatch):
+    from yardstick_predict import menu
+
+    monkeypatch.setenv("COLUMNS", "80")
+    typing(monkeypatch, "")
+    menu.ask({})
+    assert widest(capsys.readouterr().out) < 80
+
+
 # A newer version ---------------------------------------------------------------------------------------------
 
 
@@ -328,7 +442,7 @@ def test_the_home_screen_says_when_a_newer_version_is_out(capsys, monkeypatch):
     assert main([]) == 0
     out = plain(capsys.readouterr().out)
     upgrade = "Update with: uv tool upgrade yardstick-predict"
-    assert f"yardstick-predict 99.0.0 is out. You have {__version__}. {upgrade}" in out
+    assert f"yardstick-predict 99.0.0 is out. You have {__version__}. {upgrade}" in " ".join(out.split())
     assert asked == [1]  # PyPI is asked at most once a day
 
 
@@ -460,7 +574,7 @@ def test_the_models_screen_shows_a_model_and_makes_it_the_default(capsys, monkey
     assert "Forecasts on for claude-opus-5-5 and claude-fable-5" in out
     assert "Learns from: prompt text, LLM analysis" in out
     assert "2. Make default  Use it when you don't pick one" in out and "3. Rename" in out
-    assert "llm is now the default. Estimate and Claude Code's status line use it." in out
+    assert "llm is now the default." in out and "Estimate and Claude Code's status line use it." in out
     assert default_name() == "llm"
     assert "llm (default)" in out.split("llm is now the default")[1]  # the screen shows it at once
 

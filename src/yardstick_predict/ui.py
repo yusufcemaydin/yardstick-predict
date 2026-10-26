@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -114,6 +115,25 @@ def yellow(text: str) -> str:
 def width(text: str) -> int:
     """How many columns a text takes on screen, leaving out color codes."""
     return len(_ANSI.sub("", text))
+
+
+def columns() -> int:
+    """How wide the terminal is, 80 when it doesn't say."""
+    return shutil.get_terminal_size((80, 24)).columns
+
+
+def cut(text: str, room: int) -> str:
+    """Text cut short to fit `room` columns, with a mark where it was cut. Text that fits keeps its colors. Text
+    that's cut loses them, so no color code is cut in two."""
+    if width(text) <= room:
+        return text
+    plain = _ANSI.sub("", text)
+    return plain[: max(room - 1, 0)].rstrip() + mark("wait") if room > 1 else plain[:room]
+
+
+def wrapped(text: str, lead: int = 2) -> list[str]:
+    """Plain text broken into lines that fit the terminal after `lead` columns, so none of them wraps on its own."""
+    return textwrap.wrap(text, max(columns() - lead - 1, 20)) or [""]
 
 
 def join(parts: list[str]) -> str:

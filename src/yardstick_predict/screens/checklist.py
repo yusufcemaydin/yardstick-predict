@@ -64,9 +64,9 @@ def _page(choices: list[keys.Choice], ticked: set[int], first: int, at: int | No
     for number, choice in enumerate(shown, start=1):
         place = first + number - 1
         box = ui.accent(ui.mark("ticked")) if place in ticked else ui.dim(ui.mark("unticked"))
-        name = f"{number}. {box} {ui.bold(choice.label) if place == at else choice.label}"
         lead = f"  {ui.accent(ui.mark('pick'))} " if place == at else "    "
-        found.append(keys.row(lead, name, pad - ui.width(choice.label), choice.hint))
+        extra = pad - ui.width(choice.label)
+        found.append(keys.row(lead, choice.label, extra, choice.hint, place == at, f"{number}. {box} "))
     return found
 
 

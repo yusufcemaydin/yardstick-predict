@@ -42,11 +42,15 @@ def model(name: str) -> str | None:
     config = predictor.config
     predictor.close()
     ui.out()
-    ui.line(ui.bold(name))
+    ui.line(ui.bold(ui.cut(name, ui.columns() - 3)))
     ui.line(ui.join([f"{tasks:,} task{'' if tasks == 1 else 's'}", listing.updated(name)]))
     served = facts["forecasts_for"]
-    ui.line(f"Forecasts on for {cli.in_words(served)}" if served else "No forecasts yet")
-    ui.line(f"Learns from: {listing.learns_from(config)}")
+    for text in (
+        f"Forecasts on for {cli.in_words(served)}" if served else "No forecasts yet",
+        f"Learns from: {listing.learns_from(config)}",
+    ):
+        for part in ui.wrapped(text):  # long lists of AI models or features are broken to fit
+            ui.line(part)
     ui.out()
     actions = ["update", "default", "rename", "back"]
     if default_name() == name:
@@ -58,7 +62,12 @@ def model(name: str) -> str | None:
         return name
     if action == "default":
         set_default(name)
-        ui.ok(f"{name} is now the default. Estimate and Claude Code's status line use it.")
+        for number, part in enumerate(ui.wrapped(f"{name} is now the default.", 4)):
+            if number == 0:
+                ui.ok(part)
+            else:
+                ui.line(f"  {part}")
+        note("Estimate and Claude Code's status line use it.")
         return name
     if action == "rename":
         return rename(name)
@@ -77,18 +86,18 @@ def rename(old: str) -> str:
     """Ask for a new name and give it. Returns the model's name afterwards, new or not."""
     from ..store import rename_predictor
 
-    ui.note("Use 1 to 40 lowercase letters, digits, dashes or underscores. Press Enter to keep the name.")
+    note("Use 1 to 40 lowercase letters, digits, dashes or underscores. Press Enter to keep the name.")
     while True:
         new = input(ui.prompt(f"New name for {old}:")).strip()
         if not new or new == old:
-            ui.note(f"It's still called {old}.")
+            note(f"It's still called {old}.")
             return old
         problem = name_problem(new)
         if problem:
-            ui.note(problem)
+            note(problem)
             continue
         if new in predictor_names():
-            ui.note(f"There's already a model called {new}. Pick another name.")
+            note(f"There's already a model called {new}. Pick another name.")
             continue
         was_default = default_name() == old
         try:
@@ -99,5 +108,17 @@ def rename(old: str) -> str:
         except OSError as error:
             ui.error(f"Couldn't rename {old}: {error.strerror or error}. Nothing changed.")
             return old
-        cli.say_renamed(old, new, was_default)
+        for number, part in enumerate(ui.wrapped(f"Renamed {old} to {new}.", 4)):
+            if number == 0:
+                ui.ok(part)
+            else:
+                ui.line(f"  {part}")
+        if was_default:
+            note(f"{new} is still the default.")
         return new
+
+
+def note(text: str) -> None:
+    """A note broken to fit the terminal, so a long model name never runs past its edge."""
+    for part in ui.wrapped(text):
+        ui.note(part)

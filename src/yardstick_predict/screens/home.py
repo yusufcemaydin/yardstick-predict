@@ -45,18 +45,24 @@ CHOICES = {
 def greet(names: list[str]) -> None:
     """The box at the top: the tool's name and version, what it does and your models."""
     columns = shutil.get_terminal_size((80, 24)).columns
+    boxed = columns >= NO_BOX_UNDER
+    # A line in the box has its edges and a space on each side. Without the box, two spaces before it.
+    room = columns - 1 - (4 if boxed else 2)
     lines = [f"{ui.accent(ui.mark('logo'))} {ui.bold('yardstick-predict')} {ui.dim(__version__)}"]
     lines += [f"  {part}" for part in textwrap.wrap(DESCRIPTION, 42)]
     lines.append("")
     found = listing.models()
     if found:
-        pad = max(ui.width(name) for name, _ in found)
+        widest = max(ui.width(when) for _, when in found)
+        pad = min(max(ui.width(name) for name, _ in found), max(room - 2 - 2 - widest, 8))
         lines.append(f"  {ui.bold('Your models')}")
-        lines += [f"  {name}{' ' * (pad - ui.width(name))}  {ui.dim(when)}" for name, when in found]
+        for name, when in found:
+            name = ui.cut(name, pad)  # a name too long for the terminal is cut short
+            lines.append(ui.cut(f"  {name}{' ' * (pad - ui.width(name))}  {ui.dim(when)}", room))
     else:
         lines.append("  No models yet")
     ui.out()
-    if columns < NO_BOX_UNDER:
+    if not boxed:
         for text in lines:
             ui.out(f"  {text}" if text else "")
     else:
@@ -64,10 +70,12 @@ def greet(names: list[str]) -> None:
     newer = version.notice()
     if newer:
         ui.out()
-        ui.line(ui.accent(newer))
+        for part in ui.wrapped(newer):
+            ui.line(ui.accent(part))
     if not names:
         ui.out()
-        ui.line("Add New reads your Claude Code and Codex chats. It needs a Voyage API key.")
+        for part in ui.wrapped("Add New reads your Claude Code and Codex chats. It needs a Voyage API key."):
+            ui.line(part)
 
 
 def box(lines: list[str]) -> None:

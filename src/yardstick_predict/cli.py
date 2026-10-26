@@ -1565,16 +1565,16 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     from .forecast import likely_range
 
     pad = max(len("AI model"), *(len(forecast["model"]) for forecast in result["forecasts"]))
-    rows, missing, previous, ranges, why = [], {}, None, False, {}
+    rows, missing, previous, ranges, why, blocks = [], {}, None, False, {}, []
     for forecast in result["forecasts"]:
         model = forecast["model"]
         seconds, tokens, usd = forecast["seconds"], forecast["tokens"], forecast["usd"]
         if seconds is None and tokens is None and usd is None:
             reason = REASONS.get(forecast.get("reason", ""), "no forecast")
-            missing.setdefault(model, f"{ui.bold(model.ljust(pad))}   {ui.dim(reason)}")
+            missing.setdefault(model, reason)
             continue
-        # A model forecast at several effort levels is named once, on its first row.
-        name = ui.bold(model.ljust(pad)) if model != previous else " " * pad
+        # A model forecast at several effort levels is named once, on its first row. The name is fitted below.
+        name = model if model != previous else ""
         previous = model
         warning = rough_warning(forecast)
         if warning:
@@ -1582,31 +1582,37 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
             title = "Few runs" if few else warning[0].upper() + warning[1:]
             who = f"{model} at {forecast.get('effort')} ({forecast.get('runs')})" if few else model
             why.setdefault(title, {})[who] = True
-        rows.append(
-            (
-                name,
-                ui.yellow(ui.mark("warn")) if warning else "",
-                forecast.get("effort", ""),
-                duration(seconds) if seconds is not None else ui.dim("-"),
-                short_tokens(tokens) if tokens is not None else ui.dim("-"),
-                money(usd) if usd is not None else ui.dim("-"),
-            )
+        mark = ui.yellow(ui.mark("warn")) if warning else ""
+        values = (
+            duration(seconds) if seconds is not None else ui.dim("-"),
+            short_tokens(tokens) if tokens is not None else ui.dim("-"),
+            money(usd) if usd is not None else ui.dim("-"),
         )
+        rows.append((name, mark, forecast.get("effort", ""), *values))
         spans = [likely_range(forecast.get("distribution"), target) for target in ("seconds", "tokens", "usd")]
+        words = ("", "", "")
         if any(spans):
             ranges = True
-            words = [span_words(span, show) for span, show in zip(spans, (duration, whole_tokens, short_money))]
+            words = tuple(span_words(span, show) for span, show in zip(spans, (duration, whole_tokens, short_money)))
             rows.append(("", "", "", *(ui.dim(word) for word in words)))
+        blocks.append((model, mark, forecast.get("effort", ""), values, words))
+    # A table needs room for every column. A terminal too narrow for it gets each forecast as a block of its own.
+    others = sum(max((ui.width(r[i]) for r in rows), default=0) + 2 for i in range(1, 6))
+    stacked = 2 + pad + others >= ui.columns()
+    rows = [(ui.bold(r[0].ljust(pad)) if r[0] else " " * pad, *r[1:]) for r in rows]
     if not screen:
         shown = prompt if len(prompt) <= 72 else prompt[:71].rstrip() + ui.mark("wait")
         ui.out()
         ui.line(ui.bold(shown))
     ui.out()
-    if rows:
+    if rows and not stacked:
         header = tuple(ui.dim(title) for title in ("AI model".ljust(pad), *FORECAST_COLUMNS))
         ui.table([header, *rows], align="lllrrr", gap=2)
-    for text in missing.values():
-        ui.line(text)
+    elif rows:
+        show_blocks(blocks)
+    for model, reason in missing.items():
+        # cut colors and all, only when it can't fit with them
+        ui.line(ui.cut(f"{ui.bold(ui.cut(model, pad).ljust(pad))}   {ui.dim(reason)}", ui.columns() - 3))
     too_few = result.get("too_few") or []
     if too_few:
         wrapped_note(f"Too few of your tasks to forecast: {in_words([f'{m} ({n:,})' for m, n in too_few])}.")
@@ -1619,7 +1625,8 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     if why:
         wrapped_note("Those are a rough guide. Plan with a wider margin there.")
     if ranges:
-        wrapped_note("Under each forecast is the range it lands in 9 times out of 10. Costs are at API prices.")
+        where = "Beside" if stacked else "Under"
+        wrapped_note(f"{where} each forecast is the range it lands in 9 times out of 10. Costs are at API prices.")
     named = f"model {predictor.name}" if screen else f"predictor {predictor.name}"
     footer = [
         "Learned from your own runs",
@@ -1640,6 +1647,19 @@ def wrapped_note(text: str) -> None:
     """A note broken to fit the terminal, so a long one never runs past its edge."""
     for part in textwrap.wrap(text, max(columns() - 4, 20)):
         ui.note(part)
+
+
+def show_blocks(blocks: list) -> None:
+    """Each forecast as a block of its own, for a terminal too narrow for the table: the AI model with its mark and
+    effort level, then its time, tokens and cost, each with its range after it."""
+    for number, (model, mark, effort, values, words) in enumerate(blocks):
+        if number:
+            ui.out()
+        name = ui.bold(ui.cut(model, ui.columns() - 16))
+        ui.line(f"{name}{f'  {mark}' if mark else ''}{f'  {effort}' if effort else ''}")
+        labels = ("time", "tokens", "cost")
+        rows = [(ui.dim(label), value, ui.dim(word)) for label, value, word in zip(labels, values, words)]
+        ui.table(rows, indent=4, align="lrl", gap=2)
 
 
 def rough_warning(forecast: dict) -> str | None:

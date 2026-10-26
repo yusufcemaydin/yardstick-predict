@@ -8,9 +8,7 @@ terminal that can't pass single key presses gets the choices numbered, and a num
 from __future__ import annotations
 
 import os
-import shutil
 import sys
-import textwrap
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -100,19 +98,29 @@ def _named(key: str) -> str:
     return {"k": UP, "j": DOWN, "q": ESC}.get(key, key)
 
 
+PAGE = 6
+"""How many choices a page of a long menu shows."""
+LONG = 9
+"""A menu with more choices than this shows them a page at a time."""
+
+
 def choose(choices: list[Choice], footer: list[str] | None = None, start: int = 0) -> int | None:
     """Show a menu and return the number of the choice made, from 0. None when Esc goes back.
 
-    `footer` lines go under the choices, such as which keys do what.
+    `footer` lines go under the choices, such as which keys do what. A menu of more than 9 choices shows 6 at a
+    time. The left and right arrows turn its page, and a number picks a choice on the page shown.
     """
     keys = reader()
     if keys is None:
         return _typed(choices)
     footer = footer if footer is not None else [hint("esc go back")]
+    paged = len(choices) > LONG
     at, drawn = start, 0
     while True:
-        drawn = _draw(choices, at, footer, drawn)
+        drawn = _draw(choices, at, footer, drawn, paged)
         key = keys()
+        first = at - at % PAGE if paged else 0
+        shown = min(PAGE, len(choices) - first) if paged else len(choices)
         if key == ENTER:
             return at
         if key == ESC:
@@ -121,9 +129,14 @@ def choose(choices: list[Choice], footer: list[str] | None = None, start: int = 
             at = (at - 1) % len(choices)
         elif key == DOWN:
             at = (at + 1) % len(choices)
-        elif key.isdigit() and 1 <= int(key) <= len(choices):
-            _draw(choices, int(key) - 1, footer, drawn)
-            return int(key) - 1
+        elif key == RIGHT and paged and first + PAGE < len(choices):
+            at = first + PAGE
+        elif key == LEFT and paged:
+            at = max(first - PAGE, 0)
+        elif key.isdigit() and 1 <= int(key) <= shown:
+            at = first + int(key) - 1
+            _draw(choices, at, footer, drawn, paged)
+            return at
 
 
 def hint(back: str) -> str:
@@ -131,19 +144,27 @@ def hint(back: str) -> str:
     return ui.join([f"{ui.mark('keys')} move", "enter choose", back])
 
 
-def _draw(choices: list[Choice], at: int, footer: list[str], drawn: int) -> int:
-    """Draw the menu with one choice picked, over the one drawn before when there was one. Returns its lines."""
-    return redraw([*_lines(choices, at), "", *notes(footer)], drawn)
+def _draw(choices: list[Choice], at: int, footer: list[str], drawn: int, paged: bool = False) -> int:
+    """Draw the menu with one choice picked, over the one drawn before when there was one. A long menu shows the
+    page holding the picked choice, and every page takes as many lines. Returns how many lines it drew."""
+    if not paged:
+        return redraw([*_lines(choices, at), "", *notes(footer)], drawn)
+    first = at - at % PAGE
+    pad = max(ui.width(choice.label) for choice in choices)
+    page = _lines(choices[first : first + PAGE], at - first, pad)
+    page += [""] * (PAGE - len(page))
+    count = -(-len(choices) // PAGE)
+    status = f"Page {first // PAGE + 1} of {count}, {len(choices)} in all"
+    return redraw([*page, "", *notes([status, *footer, f"{ui.mark('pages')} turn the page"])], drawn)
 
 
 def columns() -> int:
-    return shutil.get_terminal_size((80, 24)).columns
+    return ui.columns()
 
 
 def notes(texts: list[str]) -> list[str]:
     """Plain lines under a menu, dimmed and broken to fit the terminal, so none of them wraps on its own."""
-    room = max(columns() - 4, 20)
-    return [f"  {ui.dim(part)}" for text in texts for part in (textwrap.wrap(text, room) or [""])]
+    return [f"  {ui.dim(part)}" for text in texts for part in ui.wrapped(text, 2)]
 
 
 def redraw(lines: list[str], drawn: int) -> int:
@@ -162,25 +183,27 @@ def redraw(lines: list[str], drawn: int) -> int:
     return len(lines)
 
 
-def row(lead: str, name: str, pad: int, hint: str) -> str:
-    """A menu's line: what comes before the name, the name, and its hint lined up after it. A hint too long for the
-    terminal is cut short, so the line never wraps."""
-    room = columns() - 1 - ui.width(lead) - ui.width(name) - 2 - pad
-    if not hint or room < 4:
-        return f"{lead}{name}"
-    shown = hint if ui.width(hint) <= room else hint[: room - 1].rstrip() + ui.mark("wait")
-    return f"{lead}{name}{' ' * (pad + 2)}{ui.dim(shown)}"
+def row(lead: str, label: str, pad: int, hint: str, picked: bool = False, prefix: str = "") -> str:
+    """A menu's line: `lead`, `prefix` and the label, then its hint lined up `pad` spaces further on. Too long for
+    the terminal, the hint is cut short first, then the label, so the line never wraps. Picked, the label is bold."""
+    room = columns() - 1 - ui.width(lead) - ui.width(prefix)
+    if ui.width(label) > room:
+        label, hint = ui.cut(label, room), ""
+    shown = f"{lead}{prefix}{ui.bold(label) if picked else label}"
+    space = room - ui.width(label) - pad - 2
+    if not hint or space < 4:
+        return shown
+    return f"{shown}{' ' * (pad + 2)}{ui.dim(ui.cut(hint, space))}"
 
 
-def _lines(choices: list[Choice], at: int | None) -> list[str]:
+def _lines(choices: list[Choice], at: int | None, pad: int | None = None) -> list[str]:
     """Each choice on its own line, numbered, with what it does lined up after it and the one picked marked."""
-    pad = max(ui.width(choice.label) for choice in choices)
+    pad = max(ui.width(choice.label) for choice in choices) if pad is None else pad
     found = []
     for number, choice in enumerate(choices, start=1):
-        name = f"{number}. {choice.label}"
         lead = f"  {ui.accent(ui.mark('pick'))} " if number - 1 == at else "    "
-        shown = ui.bold(name) if number - 1 == at else name
-        found.append(row(lead, shown, pad - ui.width(choice.label), choice.hint))
+        extra = pad - ui.width(choice.label)
+        found.append(row(lead, choice.label, extra, choice.hint, number - 1 == at, f"{number}. "))
     return found
 
 

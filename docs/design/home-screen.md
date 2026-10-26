@@ -53,6 +53,9 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 ## 2. How menus work
 
 - Arrow keys and Enter, number keys jump to a choice, and Esc goes back or quits.
+- A menu of more than 9 choices shows 6 at a time. The left and right arrows turn its page.
+- Every line fits the terminal at any width. A long hint or name is cut short. A long note is broken onto more lines. A line that wrapped on its own would break the redraw in place.
+- A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then its time, tokens and cost, each with its range beside it.
 - Build it with the standard library only: `termios` and `tty` on macOS and Linux, `msvcrt` on Windows. No new dependency.
 - When a terminal cannot pass single key presses, fall back to typing the number.
 

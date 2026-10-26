@@ -10,14 +10,16 @@ from . import keys, listing
 def ask(work: list, key: str | None) -> bool:
     """Show what each model finds and does, with every cost and time, then ask once. True to go ahead."""
     ui.out()
-    ui.line(found_line(work))
+    for part in ui.wrapped(found_line(work)):
+        ui.line(part)
     ui.out()
     usd = seconds = disk = 0.0
     memory: list[str] = []
-    names = [job.predictor.name for job in work]
-    pad = max(len(name) for name in names)
-    for job in work:
-        lines, cost, found = block(job, key)
+    blocks = [(job, *block(job, key)) for job in work]
+    pad = max(len(job.predictor.name) for job in work)
+    # Each model's name goes before its lines when they fit beside it. A long name gets a line of its own.
+    beside = 2 + pad + 2 + max(ui.width(text) for _, lines, _, _ in blocks for text in lines) < ui.columns()
+    for job, lines, cost, found in blocks:
         usd += cost
         if found is not None:
             seconds += found.seconds
@@ -25,6 +27,11 @@ def ask(work: list, key: str | None) -> bool:
             note = estimate.memory_note(found, estimate.total_memory())
             if note:
                 memory.append(note)
+        if not beside:
+            ui.line(ui.bold(ui.cut(job.predictor.name, ui.columns() - 3)))
+            for text in lines:
+                ui.line(f"  {ui.cut(text, ui.columns() - 5)}")
+            continue
         for number, text in enumerate(lines):
             name = ui.bold(job.predictor.name.ljust(pad)) if number == 0 else " " * pad
             ui.line(f"{name}  {text}")
@@ -34,7 +41,8 @@ def ask(work: list, key: str | None) -> bool:
     their = "Their" if len(todo) > 1 else "Its"
     ui.line(f"{took[0].upper()}{took[1:]} in all. {their} data grows to {ui.size(disk)}.")
     for note in dict.fromkeys(memory):
-        ui.note(note)
+        for part in ui.wrapped(note):
+            ui.note(part)
     ui.out()
     label = "Update all" if len(todo) > 1 else f"Update {todo[0].predictor.name}"
     choices = [keys.Choice(label, ui.join([cli.money(usd), took])), keys.Choice("Cancel")]

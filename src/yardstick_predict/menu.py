@@ -110,7 +110,7 @@ def _show(
     groups: list[features.Group], on: dict[str, set[str]], custom: dict[str, str], verdicts: dict[str, dict]
 ) -> None:
     ui.heading("Features")
-    ui.note("What the predictor learns from. The first three are always on, cost nothing and send nothing anywhere.")
+    _note("What the predictor learns from. The first three are always on, cost nothing and send nothing anywhere.")
     ui.line()
     entries = [(g.title, g.says, g.always, g.key, g.options) for g in groups]
     entries += [(name, says, False, name, ()) for name, says in custom.items()]
@@ -123,14 +123,19 @@ def _show(
     for number, (title, says, always, key, options) in enumerate(entries, start=1):
         mark = ui.dim("always on") if always else state(bool(on[key]))
         ui.line(f"{ui.accent(str(number).rjust(2))}  {ui.bold(title.ljust(title_width))}{mark}")
-        ui.line(f"    {ui.dim(says)}")
-        said = check.summary(verdicts.get(key) or {})
-        if said:
-            ui.line(f"    {ui.dim(said)}")
+        for text in (says, check.summary(verdicts.get(key) or {})):
+            for part in ui.wrapped(text, 6) if text else []:  # broken to fit the terminal
+                ui.line(f"    {ui.dim(part)}")
         for letter, option in zip("abcdefgh", () if always else options):
             ui.line(f"      {ui.accent(letter)}  {option.says.ljust(option_width)}{state(option.key in on[key])}")
     ui.line()
-    ui.note("Type a number to turn a feature on or off, or a number and a letter for one option, like 9 or 6b.")
+    _note("Type a number to turn a feature on or off, or a number and a letter for one option, like 9 or 6b.")
+
+
+def _note(text: str) -> None:
+    """A note broken to fit the terminal."""
+    for part in ui.wrapped(text):
+        ui.note(part)
 
 
 def _toggle(token: str, groups: list[features.Group], on: dict[str, set[str]], custom: dict[str, str]) -> None:
@@ -159,7 +164,7 @@ def _toggle(token: str, groups: list[features.Group], on: dict[str, set[str]], c
 def ask_access() -> dict:
     """How LLM analysis is paid for, and which AI model reads the tasks."""
     ui.heading("LLM analysis")
-    ui.note("It sends each task's prompt and the end of the conversation before it to the AI model you pick.")
+    _note("It sends each task's prompt and the end of the conversation before it to the AI model you pick.")
     ui.line()
     ways = list(llm.PROVIDERS.values())
     ui.table([(ui.accent(str(n)), ui.bold(way.title), ui.dim(way.says)) for n, way in enumerate(ways, start=1)])

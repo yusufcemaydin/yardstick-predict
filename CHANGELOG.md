@@ -21,7 +21,7 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - `yardstick-predict refresh` in a terminal shows the same summary as Update and asks once. With `--yes` it asks nothing, as before.
 - Outside a terminal, a bare `yardstick-predict` prints one line per predictor, as before.
 - Setup suggests the name main for your first predictor instead of default. So no name looks like the `(default)` mark.
-- Menus and the forecast table fit an 80 column terminal. A line too long for it is cut short or broken to fit. So a menu redraws in place.
+- Menus and the forecast table fit the terminal at any width. A line too long for it is cut short or broken to fit. So a menu redraws in place. A menu of more than 9 choices, such as Models with many models, shows 6 at a time. A terminal too narrow for the forecast table gets each forecast as a block of its own, with its time, tokens and cost under its name.
 - Every progress bar keeps its step's label. Reading your records used to show a bar like `0 KB / 6.2 GB` with no word of what it was.
 
 ### Fixed

@@ -201,9 +201,17 @@ def where(work: list[Work], since: str) -> list[tuple[dict, dict]]:
             else:
                 facts = ui.join([changed, f"{ui.size(sum(size for size, _ in files.values()))} to read"])
                 unread.append((archive, files))
-        rows.append((listing.title(archive), ui.dim(short_path(archive))))
+        rows.append((listing.title(archive), short_path(archive)))
         rows.append(("", facts))
-    ui.table(rows, indent=4)
+    # A long folder is cut short at its start, where it's least telling, so each line fits the terminal.
+    widest = max(ui.width(title) for title, _ in rows)
+    room = ui.columns() - 1 - 4 - widest - 3
+    fitted = []
+    for title, facts in rows:
+        if title and ui.width(facts) > room:
+            facts = ui.mark("wait") + facts[-max(room - 1, 1) :]
+        fitted.append((title, ui.dim(facts) if title else facts))
+    ui.table(fitted, indent=4)
     return unread
 
 
