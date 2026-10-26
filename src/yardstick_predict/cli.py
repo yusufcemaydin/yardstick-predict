@@ -2994,6 +2994,64 @@ def main(argv: list[str] | None = None) -> int:
             ui.error(stop.code)
             return 1
         raise
+    except BrokenPipeError:
+        # The program reading the output stopped early, as head does. Nothing more can reach it, so nothing is said.
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
+        return 141
+    except Exception as error:
+        return crashed(error, args)
+
+
+DEBUG = "YARDSTICK_DEBUG"
+"""Set to also print the details of a crash, the traceback, where it happens."""
+ISSUES = "https://github.com/yusufcemaydin/yardstick-predict/issues"
+CRASH_FILE = "last-crash.txt"
+"""The file in the yardstick folder that keeps the details of the last crash."""
+
+
+def crashed(error: Exception, args) -> int:
+    """Something went wrong that the command didn't expect. Say so in a line, with where the details are kept and
+    where to report it, rather than a page of Python. A program that asked for JSON gets it as an error in JSON."""
+    import traceback
+
+    details = "".join(traceback.format_exception(error))
+    first = (str(error).strip().splitlines() or [""])[0]
+    what = f"Something went wrong that yardstick-predict didn't expect: {type(error).__name__}: {first}".rstrip(": ")
+    kept = keep_crash(details, args.command)
+    if getattr(args, "json", False):
+        print(json.dumps({"version": 1, "error": {"code": "internal_error", "message": ui.clean(what)}}, indent=2))
+        return 1
+    if os.environ.get(DEBUG) or kept is None:
+        print(details, end="", file=sys.stderr)
+    lines = [what]
+    if kept is not None:
+        lines.append(f"The details are in {kept}. They may hold text from your work. Read them before you share them.")
+    lines.append(f"Please report it at {ISSUES}")
+    ui.error("\n".join(lines))
+    return 1
+
+
+def keep_crash(details: str, command: str | None) -> Path | None:
+    """Save the details of a crash in the yardstick folder, over the last one's, and return where. None when they
+    can't be saved. They name the command, never what it was given, such as a prompt."""
+    from . import files
+
+    lines = [
+        f"yardstick-predict {__version__}, Python {sys.version.split()[0]}, {sys.platform}",
+        f"Command: {command or 'the home screen'}",
+        time.strftime("%Y-%m-%d %H:%M:%S %z"),
+        "",
+        details,
+    ]
+    try:
+        path = private_home() / CRASH_FILE
+        files.write_text(path, "\n".join(lines))
+    except OSError:
+        return None
+    return path
 
 
 if __name__ == "__main__":

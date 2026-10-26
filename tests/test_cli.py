@@ -696,6 +696,40 @@ def test_command_line_errors_reach_a_program_as_json(capsys, monkeypatch):
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "unknown_predictor"
 
 
+def test_an_unexpected_error_is_said_in_a_line_and_its_details_are_kept(capsys, monkeypatch):
+    from yardstick_predict import store
+
+    def broken(args):
+        raise RuntimeError("boom \x1b]0;a title\x07today")
+
+    monkeypatch.setattr(cli, "cmd_list", broken)
+    assert main(["list"]) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err and captured.out == ""  # no page of Python
+    said = " ".join(captured.err.split())
+    assert "Something went wrong that yardstick-predict didn't expect: RuntimeError: boom today" in said
+    kept = store.home() / cli.CRASH_FILE
+    assert f"The details are in {kept}. They may hold text from your work" in said
+    assert f"Please report it at {cli.ISSUES}" in said
+    details = kept.read_text()
+    assert "Traceback" in details and "RuntimeError" in details and "Command: list" in details
+    assert main(["list", "--json"]) == 1  # a program gets it in JSON
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error["code"] == "internal_error" and error["message"].endswith("RuntimeError: boom today")
+    monkeypatch.setenv(cli.DEBUG, "1")
+    assert main(["list"]) == 1
+    assert "Traceback" in capsys.readouterr().err  # the details where it happens, on request
+
+
+def test_output_no_one_reads_anymore_ends_quietly(capsys, monkeypatch):
+    def piped(args):
+        raise BrokenPipeError
+
+    monkeypatch.setattr(cli, "cmd_list", piped)
+    assert main(["list"]) == 141
+    assert capsys.readouterr().err == ""
+
+
 def test_choosing_a_predictor_has_its_own_error_codes(capsys, monkeypatch):
     request = {"version": 1, "predictor": "work", "tasks": [{"id": "a", "prompt": "fix it", "models": ["m"]}]}
     code, out = run(capsys, "predict", stdin=json.dumps(request), monkeypatch=monkeypatch)

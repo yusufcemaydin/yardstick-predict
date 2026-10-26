@@ -72,6 +72,8 @@ Open an issue and pick a form:
 
 Search the open issues first. Someone may have reported it already.
 
+When yardstick-predict meets an error it didn't expect, it says so in one line. It keeps the details, the Python traceback, in `last-crash.txt` in the yardstick folder, usually `~/.yardstick`. They name the command, never what it was given. Still, read them before you paste them into a report: they may hold text from your work. To see the details where it happens, run the command again with `YARDSTICK_DEBUG=1`.
+
 Security problems are different. Report them privately, as the [security policy](SECURITY.md) explains.
 
 ## Send a change

@@ -25,6 +25,8 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - Menus and the forecast table fit the terminal at any width. A line too long for it is cut short or broken to fit. So a menu redraws in place. A menu of more than 9 choices, such as Models with many models, shows 6 at a time. A terminal too narrow for the forecast table gets each forecast as a block of its own, with its time, tokens and cost under its name.
 - The report after training, in setup and in `status`, says how close the forecasts came on your newest tasks, in plain words. Not enough data covers an AI model whose forecasts weren't close enough and one with too few tasks to show it. The feature check's report says the same way what helped. `status` lists a predictor's features in a sentence, with no semicolons.
 - The Anthropic and OpenAI libraries come with every install. LLM analysis with an API key needs no second install. The `llm` extra is gone. An upgrade of an install that had it may warn that there's no extra named `llm`. That's harmless. `uv tool install --force yardstick-predict` stops it.
+- An error yardstick-predict didn't expect is said in one line, with where its details are kept and where to report it. It used to print a page of Python. The details go to `last-crash.txt` in the yardstick folder. `YARDSTICK_DEBUG=1` shows them where it happens too. A program that asked for JSON gets the error as `internal_error`.
+- Output sent to a program that stops reading early, such as `head`, ends quietly.
 - Every progress bar keeps its step's label. Reading your records used to show a bar like `0 KB / 6.2 GB` with no word of what it was.
 
 ### Fixed
