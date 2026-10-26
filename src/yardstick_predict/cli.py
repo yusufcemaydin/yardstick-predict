@@ -55,6 +55,39 @@ REASONS = {
 """Why an AI model in a person's table has no forecast, in plain words. A program gets the reason's code."""
 
 
+class CommandError(SystemExit):
+    """A command can't go on: a message for a person, and a code for a program that asked for JSON. It stops the
+    command as a SystemExit with the message does, so a person sees the message."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+
+
+def for_program(args, run) -> int:
+    """Run a command for a program that asked for JSON. What the command says on the way goes to the error stream,
+    so standard output holds the JSON answer alone. `run` fills the answer it's given and returns the exit code.
+    When the command can't go on, the answer is the error, with its code."""
+    answer: dict = {"version": 1}
+    stdout = sys.stdout
+    try:
+        sys.stdout = sys.stderr
+        code = run(answer)
+    except CommandError as error:
+        answer, code = {"version": 1, "error": {"code": error.reason, "message": error.message}}, 1
+    except BrokenPredictor as error:
+        answer, code = {"version": 1, "error": {"code": "broken_predictor", "message": str(error)}}, 1
+    except SystemExit as stop:
+        if not isinstance(stop.code, str):
+            raise
+        answer, code = {"version": 1, "error": {"code": "failed", "message": stop.code}}, 1
+    finally:
+        sys.stdout = stdout
+    print(json.dumps(answer, indent=2))
+    return code
+
+
 def interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -169,7 +202,8 @@ def damaged_usage_note(key: str | None) -> None:
 
 
 def get_key(model: str, can_ask: bool) -> str | None:
-    """Find a working key. A person can paste one, and it is saved in the computer's password store."""
+    """Find a working key. A person can paste one, and it is saved in the computer's password store. None when a
+    person pastes none. It stops the command when there's no key and none can be asked for, or when the key fails."""
     key, source = embeddings.find_key()
     pasted = False
     ui.heading("Voyage key")
@@ -183,17 +217,16 @@ def get_key(model: str, can_ask: bool) -> str | None:
         if not key:
             return None
     else:
-        ui.error(
+        raise CommandError(
+            "no_embedding_key",
             "No Voyage key found. Set VOYAGE_API_KEY, or run yardstick-predict in a terminal, without --yes or "
-            "--express, to paste one."
+            "--express, to paste one.",
         )
-        return None
     ui.working("Checking the key")
     try:
         embeddings.check_key(key, model)
     except embeddings.VoyageError as error:
-        ui.error(f"The key didn't work.\n{explain(error)}")
-        return None
+        raise CommandError("embedding_failed", f"The key didn't work.\n{explain(error)}") from None
     ui.ok("The key works.")
     if pasted:
         if embeddings.save_key(key):
@@ -240,10 +273,12 @@ def parse_archive(spec: str) -> dict:
     if "=" in spec:
         fmt, path = spec.split("=", 1)
         if fmt not in FORMATS:
-            raise SystemExit(f"Unknown record format {fmt!r}. Use one of: {', '.join(FORMATS)}.")
+            raise CommandError("invalid_request", f"Unknown record format {fmt!r}. Use one of: {', '.join(FORMATS)}.")
         path = os.path.abspath(os.path.expanduser(path))
         return {"name": os.path.basename(path.rstrip("/\\")) or "custom", "format": fmt, "path": path}
-    raise SystemExit(f"Can't read --archive {spec!r}. Use claude-code, codex, or FORMAT=PATH like codex=~/runs.")
+    raise CommandError(
+        "invalid_request", f"Can't read --archive {spec!r}. Use claude-code, codex, or FORMAT=PATH like codex=~/runs."
+    )
 
 
 def unique_names(archives: list[dict]) -> list[dict]:
@@ -299,7 +334,7 @@ def choose_features(can_ask: bool, args):
             return menu.from_flags(args.features, args.llm_provider, args.llm_model)
         return menu.ask(custom_features())
     except ValueError as error:
-        raise SystemExit(str(error)) from None
+        raise CommandError("invalid_request", str(error)) from None
 
 
 def custom_features() -> dict[str, str]:
@@ -393,8 +428,9 @@ def say_estimate(
         ui.note(memory)
 
 
-def analyze_with_progress(predictor: Predictor, asks: list) -> None:
-    """Run LLM analysis with a progress bar. When it can't run, training goes on without it."""
+def analyze_with_progress(predictor: Predictor, asks: list) -> tuple[int, str | None]:
+    """Run LLM analysis with a progress bar. When it can't run, training goes on without it. Returns how many tasks
+    it analyzed, and what went wrong, when something did."""
     from .pipeline import run_analysis
 
     ui.heading("LLM analysis")
@@ -403,11 +439,12 @@ def analyze_with_progress(predictor: Predictor, asks: list) -> None:
     if not answered and problem:
         ui.fail(problem)
         ui.note("Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again.")
-        return
+        return answered, problem
     missed = len(asks) - answered
     ui.ok(f"Analyzed {answered:,} tasks." + (f" {missed:,} weren't answered." if missed else ""))
     if problem:
         ui.note(f"{problem} A refresh tries the rest again, up to twice for a task it refused.")
+    return answered, problem
 
 
 NUMBER_FLAGS = {"dropout": "0.1", "test_share": "0.3", "validation_share": "0.15", "half_life": "30"}
@@ -423,9 +460,9 @@ def check_numbers(args) -> None:
         value = getattr(args, name, None)
         flag = "--" + name.replace("_", "-")
         if value is not None and not math.isfinite(value):
-            raise SystemExit(f"{flag} must be a number, such as {example}, not {value}.")
+            raise CommandError("invalid_request", f"{flag} must be a number, such as {example}, not {value}.")
     if getattr(args, "half_life", None) is not None and args.half_life < 0:
-        raise SystemExit("--half-life is a number of days: 0 or more. 0 counts every task alike.")
+        raise CommandError("invalid_request", "--half-life is a number of days: 0 or more. 0 counts every task alike.")
 
 
 def advanced_settings(args) -> dict:
@@ -452,7 +489,7 @@ def advanced_settings(args) -> dict:
     try:
         return model.settings_for(settings)
     except ValueError as error:
-        raise SystemExit(str(error)) from None
+        raise CommandError("invalid_request", str(error)) from None
 
 
 # Reports -----------------------------------------------------------------------------------------------
@@ -666,15 +703,17 @@ def pick_predictor(name: str | None) -> Predictor:
     names = predictor_names()
     if name:
         if name not in names:
-            raise SystemExit(f"There's no predictor called {name!r}. Your predictors: {', '.join(names) or 'none'}.")
+            message = f"There's no predictor called {name!r}. Your predictors: {', '.join(names) or 'none'}."
+            raise CommandError("unknown_predictor", message)
         return Predictor(name)
     if not names:
-        raise SystemExit("There's no predictor yet. Run yardstick-predict to create one.")
+        raise CommandError("no_predictor", "There's no predictor yet. Run yardstick-predict to create one.")
     chosen = default_name()
     if chosen is None:
-        raise SystemExit(
+        raise CommandError(
+            "no_default_predictor",
             f"You have several predictors and no default: {', '.join(names)}. Name one with --predictor, "
-            "or choose a default with: yardstick-predict default NAME"
+            "or choose a default with: yardstick-predict default NAME",
         )
     return Predictor(chosen)
 
@@ -720,20 +759,27 @@ def unknown_embedding(model: str) -> str:
 def cmd_create(args) -> int:
     from contextlib import ExitStack
 
-    # Setup takes locks as it goes, and holds them until it's done.
-    with ExitStack() as held:
-        return _create(args, held)
+    def create(answer: dict) -> int:
+        # Setup takes locks as it goes, and holds them until it's done.
+        with ExitStack() as held:
+            return _create(args, held, answer)
+
+    if getattr(args, "json", False):
+        return for_program(args, create)
+    return create({})
 
 
-def _create(args, held) -> int:
+def _create(args, held, answer: dict) -> int:
     """Set up a new predictor: read the records, choose the features, then embed, analyze and train. `held` keeps
-    the locks it takes until it's done."""
-    from . import model_types
+    the locks it takes until it's done. `answer` is filled with what a program reads: the predictor, what it costs
+    and what was done."""
+    from . import model_types, spending
 
     if args.express:
         args.yes = True
-    # With --yes or --express it asks nothing, even in a terminal. Every choice takes its default.
-    can_ask = interactive() and not args.yes
+    # With --yes or --express it asks nothing, even in a terminal. Every choice takes its default. Nor does a
+    # program that asked for JSON.
+    can_ask = interactive() and not args.yes and not getattr(args, "json", False)
     existing = predictor_names()
     if can_ask:
         ui.out()
@@ -741,42 +787,57 @@ def _create(args, held) -> int:
     name = args.name or (ask_name(existing) if can_ask else None)
     if name is None:
         if "default" in existing:
-            raise SystemExit("Give the new predictor a name, like: yardstick-predict create work")
+            raise CommandError("invalid_request", "Give the new predictor a name, like: yardstick-predict create work")
         name = "default"
     problem = name_problem(name)
     if problem:
-        raise SystemExit(problem)
+        raise CommandError("invalid_request", problem)
     if name in existing:
-        raise SystemExit(already_exists(name))
+        raise CommandError("predictor_exists", already_exists(name))
     first = not existing
     make_default = first or (
         can_ask and ui.ask("Make it your default predictor? Commands use it when they name none.", False)
+    )
+    answer.update(
+        predictor=name,
+        done=False,
+        default=bool(make_default),
+        found_tasks=0,
+        cost=None,
+        analyzed=0,
+        embedded=0,
+        trained=False,
+        learned_from=None,
+        forecasts_for=[],
+        notes=[],
     )
     try:
         # Each plugin is saved by where it was found, so it loads the same from any folder later.
         plugins = [model_types.find_plugin(plugin) for plugin in args.plugin]
         model_types.load_plugins(plugins)
     except model_types.PluginError as error:
-        raise SystemExit(f"{error} Nothing was read or spent.") from None
+        raise CommandError("plugin_failed", f"{error} Nothing was read or spent.") from None
     model_settings = advanced_settings(args)
     try:
         model_types.get(model_settings.get("type", "xgboost"))
     except (ValueError, ImportError, AttributeError) as error:
-        raise SystemExit(f"{error} Nothing was read or spent.") from None
+        raise CommandError("invalid_request", f"{error} Nothing was read or spent.") from None
     if args.embedding is not None and args.embedding not in embeddings.MODELS:
-        raise SystemExit(f"{unknown_embedding(args.embedding)} Nothing was read or spent.")
+        raise CommandError("invalid_request", f"{unknown_embedding(args.embedding)} Nothing was read or spent.")
     from .model import MIN_TASKS
 
     # The built-in model needs 30 tasks it can learn from. A model type from a plugin sets its own needs.
     built_in = model_settings.get("type", "xgboost") == "xgboost"
     least = MIN_TASKS if built_in else 1
     if args.max_tasks is not None and args.max_tasks < least:
-        raise SystemExit(f"Use --max-tasks {least} or more. Training needs at least {least} tasks.")
+        raise CommandError(
+            "invalid_request", f"Use --max-tasks {least} or more. Training needs at least {least} tasks."
+        )
 
     ui.heading("Your past runs")
     archives = unique_names(choose_archives(can_ask, args.archive))
     if not archives:
-        raise SystemExit("No records to learn from. Add a folder with --archive FORMAT=PATH.")
+        raise CommandError("no_records", "No records to learn from. Add a folder with --archive FORMAT=PATH.")
     ui.working("Reading your records. A big history takes a minute")
     from . import features, llm
     from .pipeline import (
@@ -798,15 +859,17 @@ def _create(args, held) -> int:
         ui.ok(f"Read {total:,} tasks from {counts[0][0]}.")
     else:
         ui.ok(f"Read {total:,} tasks: " + ui.join([f"{source} {count:,}" for source, count in counts]))
+    answer["found_tasks"] = len(found.new_tasks)
     if not found.new_tasks:
-        raise SystemExit("Found no finished tasks in those records.")
+        raise CommandError("no_records", "Found no finished tasks in those records.")
     from .pipeline import learnable
 
     ready = len(learnable(found.new_tasks, args.max_tasks))
     if built_in and ready < least:
-        raise SystemExit(
+        raise CommandError(
+            "not_enough_data",
             f"Only {ready} of those tasks can be learned from. Training needs at least {least}. "
-            "Nothing was spent. Add more records, or try again after more runs."
+            "Nothing was spent. Add more records, or try again after more runs.",
         )
     picked = choose_features(can_ask, args)
     chosen, settings = picked.features, picked.config()
@@ -849,7 +912,7 @@ def _create(args, held) -> int:
             else:
                 ui.note(f"Type a number from 1 to {len(options)}.")
     if model_name not in embeddings.MODELS:
-        raise SystemExit(unknown_embedding(model_name))
+        raise CommandError("invalid_request", unknown_embedding(model_name))
 
     key = get_key(model_name, can_ask)
     if not key:
@@ -887,6 +950,8 @@ def _create(args, held) -> int:
             ui.note("For the check, it reads only your newest tasks. If it helps, you can have it read the rest after.")
         if "description" in features.options(settings, "llm"):
             ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
+    described = len(asks) if asks and "description" in features.options(settings, "llm") else 0
+    answer["cost"] = spending.cost_of(settings, model_name, plan, asks, described).as_json()
     checked = len(chosen) - 1 if checking else 0  # every feature but the prompt
     say_estimate(
         found.new_tasks, {**settings, "model": model_settings, "max_tasks": limit}, plan, asks, checked=checked
@@ -922,11 +987,11 @@ def _create(args, held) -> int:
     with name_lock(name):
         folder.mkdir(parents=True, exist_ok=True)
         if not held.enter_context(locks.held(folder / "refresh.lock", wait=False)):
-            raise SystemExit(f"A predictor called {name!r} is being set up by another command.")
+            raise CommandError("busy", f"A predictor called {name!r} is being set up by another command.")
         try:
             predictor = Predictor.create(name, archives, embedding, **config)
         except ValueError:
-            raise SystemExit(already_exists(name)) from None
+            raise CommandError("predictor_exists", already_exists(name)) from None
         # The dataset closes as setup ends, before the predictor's lock goes. Otherwise it stays open until Python
         # tidies up, and Windows can't delete an open file, as a delete in the same program, such as a test, would.
         held.callback(predictor.close)
@@ -936,20 +1001,24 @@ def _create(args, held) -> int:
     warning = refresh_benchmarks(predictor)
     if warning:
         ui.note(warning)
+        answer["notes"].append(warning)
     if asks:
-        analyze_with_progress(predictor, asks)
+        answer["analyzed"], problem = analyze_with_progress(predictor, asks)
+        if problem:
+            answer["notes"].append(problem)
         plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
-    if plan.items and not embed_with_progress(predictor, plan, key):
-        return 1
+    if plan.items:
+        answer["embedded"] = embed_with_progress(predictor, plan, key)
     if checking:
         stop = check_and_choose(predictor, key)
         if stop is not None:
             return stop
     model = train_and_report(predictor, train)
-    if model is None:
-        return 1
     default_when_ready(predictor)
     say_how_to_use(model, name)
+    answer.update(
+        done=True, trained=True, learned_from=model.meta.get("tasks"), forecasts_for=served_models(model.meta["report"])
+    )
     return 0
 
 
@@ -983,7 +1052,9 @@ def default_when_ready(predictor: Predictor) -> None:
         predictor.save_config()
 
 
-def embed_with_progress(predictor: Predictor, plan, key: str) -> bool:
+def embed_with_progress(predictor: Predictor, plan, key: str) -> int:
+    """Embed what the plan holds with a progress bar, and return how many texts went to Voyage. When Voyage stops
+    it, it stops the command: what was embedded so far is saved."""
     from .pipeline import run_embeddings
 
     ui.heading("Embedding")
@@ -999,17 +1070,17 @@ def embed_with_progress(predictor: Predictor, plan, key: str) -> bool:
     except embeddings.VoyageError as error:
         if "free token" in error.detail.lower() or "payment" in error.detail.lower():
             embeddings.set_free_tokens(key, "used")
-        ui.error(
+        raise CommandError(
+            "embedding_failed",
             f"{explain(error)}\nWhat was embedded so far is saved. "
-            f"Run yardstick-predict refresh --predictor {predictor.name} to finish."
-        )
-        return False
+            f"Run yardstick-predict refresh --predictor {predictor.name} to finish.",
+        ) from None
     ui.ok(f"Embedded {seen['total']:,} texts." if seen["total"] else "Embedded.")
-    return True
+    return seen["total"]
 
 
 def train_and_report(predictor: Predictor, train):
-    """Train, test and show how each AI model did. None when there's too little to train on."""
+    """Train, test and show how each AI model did. With too little to train on, it stops the command."""
     from .model import NotEnoughData
 
     ui.heading("Training")
@@ -1018,8 +1089,7 @@ def train_and_report(predictor: Predictor, train):
     try:
         model = train(predictor, lambda done, total: ui.progress(done, total, "steps"))
     except NotEnoughData as error:
-        ui.error(str(error))
-        return None
+        raise CommandError("not_enough_data", str(error)) from None
     ui.ok(f"Trained on {model.meta['tasks']:,} tasks.")
     for name in model.meta.get("features_without_values") or []:
         ui.note(
@@ -1208,8 +1278,8 @@ def check_and_choose(predictor: Predictor, key: str) -> int | None:
                 f"yardstick-predict refresh --predictor {predictor.name}"
             )
             return 0
-    if plan.items and not embed_with_progress(predictor, plan, key):
-        return 1
+    if plan.items:
+        embed_with_progress(predictor, plan, key)
     return None
 
 
@@ -1239,14 +1309,24 @@ def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
 
 
 def cmd_refresh(args) -> int:
+    if args.json:
+        return for_program(args, lambda answer: refresh(args, answer))
+    return refresh(args, {})
+
+
+def refresh(args, answer: dict) -> int:
+    """Add a predictor's new tasks, embed them and train it again. `answer` is filled with what a program reads:
+    what was found, what it costs, and what was done."""
     predictor = pick_predictor(args.predictor)
+    answer["predictor"] = predictor.name
     if predictor.newer:
         # A refresh would save the settings, the dataset and the model the way this older version does.
-        raise SystemExit(
+        raise CommandError(
+            "newer_version",
             f"{predictor.name} was saved by a newer version of yardstick-predict, so this version leaves it as it "
-            "is. Upgrade with: uv tool upgrade yardstick-predict"
+            "is. Upgrade with: uv tool upgrade yardstick-predict",
         )
-    if interactive() and not args.yes:
+    if interactive() and not args.yes and not args.json:
         from .screens import update
 
         predictor.close()
@@ -1254,20 +1334,20 @@ def cmd_refresh(args) -> int:
     # A predictor deleted just as this command found it isn't saved again, with none of its tasks.
     deleted = f"There's no predictor called {predictor.name!r} anymore: it was deleted."
     if gone(predictor):
-        raise SystemExit(deleted)
+        raise CommandError("unknown_predictor", deleted)
     from . import feature_store
 
     # Two refreshes at once could each train, and the slower one could save an older model over a newer one.
     with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
         if not mine:
-            raise SystemExit(
-                f"{predictor.name} is being set up or refreshed by another command. Try again when it's done."
+            raise CommandError(
+                "busy", f"{predictor.name} is being set up or refreshed by another command. Try again when it's done."
             )
         if gone(predictor):
-            raise SystemExit(deleted)
+            raise CommandError("unknown_predictor", deleted)
         # It reads the feature store to plan what to make, and saves to it, so no features delete runs meanwhile.
         with feature_store.writing():
-            return _refresh(args, predictor)
+            return _refresh(args, predictor, answer)
 
 
 BEHIND_NOTES = {
@@ -1286,16 +1366,38 @@ def gone(predictor: Predictor) -> bool:
     return not (predictor.dir / "predictor.json").is_file()
 
 
-def _refresh(args, predictor: Predictor) -> int:
-    from . import model_types
-    from .pipeline import load_plugins, plan_embeddings, plan_refresh, refresh_benchmarks, save_scan, scan, train
+def _refresh(args, predictor: Predictor, answer: dict) -> int:
+    from . import model_types, spending
+    from .pipeline import (
+        load_plugins,
+        model_meta,
+        plan_embeddings,
+        plan_refresh,
+        refresh_benchmarks,
+        save_scan,
+        scan,
+        train,
+    )
 
+    answer.update(
+        done=False,
+        up_to_date=False,
+        new_tasks=0,
+        changed_tasks=0,
+        removed_tasks=0,
+        cost=None,
+        analyzed=0,
+        embedded=0,
+        trained=False,
+        forecasts_for=trained_facts(predictor, model_meta(predictor))["forecasts_for"],
+        notes=[],
+    )
     try:
         load_plugins(predictor)
     except model_types.PluginError as error:
-        raise SystemExit(str(error)) from None
-    # With --yes it asks nothing, even in a terminal.
-    can_ask = interactive() and not getattr(args, "yes", False)
+        raise CommandError("plugin_failed", str(error)) from None
+    # With --yes it asks nothing, even in a terminal, and nor does a program that asked for JSON.
+    can_ask = interactive() and not getattr(args, "yes", False) and not getattr(args, "json", False)
     ui.heading(predictor.name)
     ui.note(f"Last updated {ago(predictor.config.get('refreshed_at'))}.")
     unknown_features_note(predictor)
@@ -1318,12 +1420,15 @@ def _refresh(args, predictor: Predictor) -> int:
     removed = getattr(found, "removed", [])
     if removed:
         ui.note(f"{len(removed):,} saved tasks aren't in their records anymore, so they're taken out.")
+    answer.update(new_tasks=len(found.new_tasks), changed_tasks=len(found.updated_tasks), removed_tasks=len(removed))
     model_name = predictor.embedding_model
     key, _ = embeddings.find_key()
     planned = plan_refresh(predictor, found, key)
     for text in BEHIND_NOTES.get(planned.behind if planned.model is not None else None, []):
         ui.note(text)
     everything, plan, asks = planned.tasks, planned.embed, planned.asks
+    cost = spending.cost_of(predictor.config, model_name, plan, asks, planned.described)
+    answer["cost"] = cost.as_json()
     if planned.up_to_date:
         # A record file that changed with nothing new in it, such as one that was only touched, isn't read
         # again next time. Nor is every file, after a new version of the reader read them all and found
@@ -1333,6 +1438,7 @@ def _refresh(args, predictor: Predictor) -> int:
             predictor.config["reader"] = found.reader
             predictor.save_config()
         ui.ok("Nothing new. The model is up to date.")
+        answer.update(done=True, up_to_date=True)
         return 0
     if plan.items:
         damaged_usage_note(key)
@@ -1364,23 +1470,26 @@ def _refresh(args, predictor: Predictor) -> int:
     warning = refresh_benchmarks(predictor)
     if warning:
         ui.note(warning)
+        answer["notes"].append(warning)
     if asks:
-        analyze_with_progress(predictor, asks)
+        answer["analyzed"], problem = analyze_with_progress(predictor, asks)
+        if problem:
+            answer["notes"].append(problem)
     # The plan priced above is what's left to embed now that the tasks are saved, so its counts are reused.
-    if plan.items and not embed_with_progress(predictor, plan, key):
-        return 1
+    if plan.items:
+        answer["embedded"] += embed_with_progress(predictor, plan, key)
     # Each text the plan above needed has its vector now, so this one pays only for the descriptions LLM
     # analysis just wrote.
     rest = plan_embeddings(predictor, key)
     if rest.items:
         key = key or get_key(model_name, can_ask)
-        if not key or not embed_with_progress(predictor, rest, key):
+        if not key:
             return 1
+        answer["embedded"] += embed_with_progress(predictor, rest, key)
     model = train_and_report(predictor, train)
-    if model is None:
-        return 1
     default_when_ready(predictor)
     say_how_to_use(model, predictor.name, full=False)
+    answer.update(done=True, trained=True, forecasts_for=served_models(model.meta["report"]))
     return 0
 
 
@@ -2831,6 +2940,11 @@ def make_parser() -> argparse.ArgumentParser:
         help=f"Take every default and go ahead without questions: all your records, the prompt with {added}, voyage-4.",
     )
     create.add_argument(
+        "--json",
+        action="store_true",
+        help="Answer in JSON, for programs. It asks nothing: without --yes it only says what it would do and cost.",
+    )
+    create.add_argument(
         "--features",
         help="The optional features, such as conversation,context,skills:named,benchmarks,time,llm. A feature alone "
         f"gets all its options. Default: {added}.",
@@ -2870,6 +2984,11 @@ def make_parser() -> argparse.ArgumentParser:
     refresh.add_argument("--predictor", help="Which predictor. Default: your default predictor.")
     refresh.add_argument(
         "--yes", action="store_true", help="Go ahead without asking anything, even when it costs money."
+    )
+    refresh.add_argument(
+        "--json",
+        action="store_true",
+        help="Answer in JSON, for programs. It asks nothing: without --yes it only says what it would do and cost.",
     )
 
     predict = commands.add_parser("predict", help="Forecast a task. Give it in quotes, or send a JSON request.")

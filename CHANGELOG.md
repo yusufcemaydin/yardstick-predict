@@ -15,6 +15,7 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - Update first says where the new work is and how much there is to read, from file sizes alone. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. It asks once. Cancel spends nothing and saves nothing. A second Update in the same session reads nothing again.
 - Models shows each model with its tasks, its forecasts and what it learns from. Choose Update, Make default, Rename or Delete. Delete says what goes and what stays. Then it asks, with Keep it first. Your records and the feature store stay.
 - Numbered menus on request, for screen readers. Set `YARDSTICK_NUMBERED_MENUS=1` or add `"numbered_menus": true` to `settings.json` in the yardstick folder. Every menu then lists its choices with numbers to type in. Nothing on screen redraws itself: there are no progress bars and no box on the home screen.
+- `create` and `refresh` answer a program in JSON with `--json`: what was found, what it costs at list price and what was done. They never ask anything then. Without `--yes` they only say what they'd do and what it costs. When they can't go on, the answer is an error with a code, such as `busy` or `embedding_failed`. [The format](docs/format.md#setup-and-refresh) lists every field.
 - `yardstick-predict rename OLD NEW` gives a predictor another name. The default stays the default, also when it was the default only because it was called default.
 
 ### Changed

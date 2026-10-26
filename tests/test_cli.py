@@ -380,6 +380,48 @@ def test_refresh_adds_only_new_tasks(capsys, records, ready):
     assert len(Predictor("default").embedded("prompt")) == 183
 
 
+def test_setup_and_refresh_answer_a_program_in_json(capsys, few, ready, quick):
+    # Without --yes, setup says what it would do and what it costs, and does nothing.
+    code, out = run(capsys, "create", "--json", "--archive", f"claude-code={few}", *quick)
+    answer = json.loads(out)  # standard output holds the answer alone: what setup says on the way went elsewhere
+    assert code == 2 and answer["done"] is False and answer["predictor"] == "default" and answer["found_tasks"] == 40
+    embedding = answer["cost"]["embedding"]
+    assert embedding["texts"] > 0 and embedding["model"] == "voyage-4" and answer["cost"]["analysis"] is None
+    assert answer["cost"]["usd"] == embedding["usd"] and predictor_names() == []
+    code, out = run(capsys, "create", "--yes", "--json", "--archive", f"claude-code={few}", *quick)
+    answer = json.loads(out)
+    assert code == 0 and answer["done"] and answer["trained"] and answer["default"]
+    assert answer["learned_from"] == 40 and answer["forecasts_for"] == ["claude-opus-5-5"]
+    assert answer["embedded"] > 0 and answer["notes"] == []
+    code, out = run(capsys, "refresh", "--json")
+    answer = json.loads(out)
+    assert code == 0 and answer["done"] and answer["up_to_date"] and not answer["trained"]
+    assert answer["forecasts_for"] == ["claude-opus-5-5"]
+
+    session = ClaudeSession(few, "brand-new", START + 90 * 86400)
+    for n in range(3):
+        session.prompt(f"new task {n}")
+        session.reply(5)
+    session.save(mtime=START)
+    code, out = run(capsys, "refresh", "--json")
+    answer = json.loads(out)
+    assert code == 2 and not answer["done"] and answer["new_tasks"] == 3
+    planned = answer["cost"]["embedding"]["texts"]  # their prompts, and the ends of the conversation before them
+    assert planned >= 3 and Predictor("default").count_tasks() == 40  # nothing saved without --yes
+    code, out = run(capsys, "refresh", "--yes", "--json")
+    answer = json.loads(out)
+    assert code == 0 and answer["done"] and answer["trained"] and answer["new_tasks"] == 3
+    assert answer["embedded"] == planned
+    assert Predictor("default").count_tasks() == 43
+
+    code, out = run(capsys, "refresh", "--json", "--predictor", "nope")
+    assert code == 1 and json.loads(out)["error"]["code"] == "unknown_predictor"
+    code, out = run(capsys, "create", "default", "--json", "--yes", "--archive", f"claude-code={few}", *quick)
+    assert code == 1 and json.loads(out)["error"]["code"] == "predictor_exists"
+    code, out = run(capsys, "create", "--json", "--yes", "--archive", f"claude-code={few}", *quick)
+    assert code == 1 and json.loads(out)["error"]["code"] == "invalid_request"  # a second one needs a name
+
+
 def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, records, ready, monkeypatch):
     trained: list[int] = []
     stop = {"now": False}
@@ -787,10 +829,13 @@ def test_status_reads_only_what_the_saved_model_says_about_itself(capsys, monkey
     assert json.loads(capsys.readouterr().out)["predictors"][0]["report"]["tested_on"] == 40
 
 
-def test_the_missing_key_error_goes_to_the_error_stream(capsys):
-    assert cli.get_key("voyage-4", can_ask=False) is None
+def test_the_missing_key_error_goes_to_the_error_stream(capsys, few):
+    assert main(["create", "--yes", "--archive", f"claude-code={few}"]) == 1
     captured = capsys.readouterr()
     assert "No Voyage key found" in captured.err and "No Voyage key found" not in captured.out
+    with pytest.raises(cli.CommandError) as stopped:
+        cli.get_key("voyage-4", can_ask=False)
+    assert stopped.value.reason == "no_embedding_key"  # a program that asked for JSON gets this code
 
 
 # Saved state -----------------------------------------------------------------------------------------------

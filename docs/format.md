@@ -142,3 +142,45 @@ The `shape` says which curve each part is. With `p` for `direct_probability`, `x
 The expected value of the whole curve is `p` times the direct part's plus `1 − p` times the work part's. It's the number in `seconds`, `tokens` or `usd`.
 
 Seconds, tokens and dollars are forecast as separate curves. They usually move together: a task that runs long usually uses more tokens too.
+
+## Setup and refresh
+
+`create --json` and `refresh --json` answer a program in JSON too, in version 1 of an answer of their own. They never ask anything. Without `--yes`, they only say what they'd do and what it costs. Then they exit with code 2. With `--yes` they do it. Then they exit with code 0. What they say on the way goes to the error stream. Standard output holds the answer alone.
+
+| Field | What it is |
+|---|---|
+| `predictor` | The predictor's name. |
+| `done` | `true` once it did what it said or found nothing to do. `false` when it only said what it would do. |
+| `up_to_date` | `refresh` only. `true` when there was nothing new. Then nothing changed. |
+| `new_tasks`, `changed_tasks`, `removed_tasks` | `refresh` only. The tasks it found since the last refresh, the saved ones that changed and the saved ones gone from their records. |
+| `found_tasks` | `create` only. How many finished tasks it found in your records. |
+| `default` | `create` only. Whether it's your default predictor, now or once it's trained. |
+| `cost.usd` | Every paid step together, worked out before anything is spent: at list price, in US dollars. `null` when the price of the AI model for LLM analysis isn't in yardstick's list. |
+| `cost.analysis` | LLM analysis: how many `tasks` it reads, the `model`, what it's `paid_with` and its `usd`. `anthropic` and `openai` mean an API key. `claude` and `codex` mean a subscription, which adds no bill. Its `usd` is `0` then. `null` when no task needs LLM analysis. |
+| `cost.embedding` | Voyage: how many `texts` go to it, each once, their `tokens`, whether that count is `exact`, the `model` and the `usd`. Voyage's free tokens aren't taken off. The descriptions LLM analysis writes count too. They make the count an estimate. |
+| `analyzed` | How many tasks LLM analysis read. |
+| `embedded` | How many texts went to Voyage. A text the cache of vectors holds costs nothing and isn't counted. |
+| `trained` | Whether it trained the model. |
+| `learned_from` | `create` only. How many tasks the model learned from. |
+| `forecasts_for` | The AI models that get forecasts now. |
+| `notes` | Plain words about anything that didn't stop it, such as model facts that didn't download. |
+
+When it can't go on, the answer has an `error` instead of these fields, with a `code` and a `message`. The exit code is 1:
+
+| Code | What it means |
+|---|---|
+| `invalid_request` | A flag or a name can't be used. The message says which. |
+| `no_predictor` | No predictor exists yet. |
+| `no_default_predictor` | There are several predictors and none is the default. Name one with `--predictor`. |
+| `unknown_predictor` | There's no predictor with that name. Or it was deleted meanwhile. |
+| `broken_predictor` | The predictor's settings file can't be read. |
+| `predictor_exists` | `create` only. A predictor with that name exists already. |
+| `newer_version` | A newer version of yardstick-predict saved the predictor. This version leaves it as it is. |
+| `busy` | Another command is setting it up or refreshing it. Try again when it's done. |
+| `plugin_failed` | A plugin couldn't be loaded. |
+| `no_records` | `create` only. There are no records to learn from. Or they hold no finished tasks. |
+| `not_enough_data` | Too few tasks to learn from. |
+| `no_embedding_key` | No Voyage key was found. |
+| `embedding_failed` | Voyage refused the key or stopped embedding. What was embedded is saved. The next refresh goes on from there. |
+| `internal_error` | Something went wrong that the tool didn't expect. Please report it. |
+| `failed` | Anything else that stopped it. The message says what. |

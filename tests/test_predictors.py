@@ -733,10 +733,10 @@ def test_a_stored_feature_isnt_deleted_while_a_command_that_saves_to_the_store_r
     real_refresh = command._refresh
     seen: list[tuple[int, str]] = []
 
-    def refresh(args, predictor):
+    def refresh(args, predictor, answer):
         # While the refresh runs, a program tries to delete a stored feature it may be saving to.
         seen.append(run(capsys, "features", "delete", answers, "--yes", "--json"))
-        return real_refresh(args, predictor)
+        return real_refresh(args, predictor, answer)
 
     monkeypatch.setattr(command, "_refresh", refresh)
     assert main(["refresh", "--yes"]) == 0

@@ -191,6 +191,44 @@ print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minu
 
 One request can hold up to 1,000 tasks, each on up to 50 models. The format is fixed and versioned: within version 1, fields may be added but are never renamed or removed. Schemas for the [request](https://github.com/yusufcemaydin/yardstick-predict/blob/main/schemas/forecast-request.v1.json) and the [answer](https://github.com/yusufcemaydin/yardstick-predict/blob/main/schemas/forecast-response.v1.json) let a program check every answer. [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md) explains every field.
 
+### Set up and refresh from a program
+
+`create` and `refresh` answer in JSON with `--json`. They never ask anything then. Without `--yes`, they only say what they'd do and what it costs. Then they exit with code 2. With `--yes`, they do it:
+
+```bash
+yardstick-predict refresh --yes --json
+```
+
+```json
+{
+  "version": 1,
+  "predictor": "main",
+  "done": true,
+  "up_to_date": false,
+  "new_tasks": 3,
+  "changed_tasks": 0,
+  "removed_tasks": 0,
+  "cost": {
+    "usd": 0.024028,
+    "analysis": {"tasks": 3, "model": "claude-opus-5-5", "paid_with": "anthropic", "usd": 0.024},
+    "embedding": {"texts": 6, "tokens": 462, "exact": false, "model": "voyage-4", "usd": 2.8e-05}
+  },
+  "analyzed": 3,
+  "embedded": 6,
+  "trained": true,
+  "forecasts_for": ["claude-opus-5-5"],
+  "notes": []
+}
+```
+
+- **`done`** is false when it only said what it would do.
+- **`cost`** is what it costs before anything is spent, at list price, in US dollars. Voyage's free tokens aren't taken off. LLM analysis paid by a subscription counts as 0.
+- **`analyzed`** and **`embedded`** say how many tasks LLM analysis read and how many texts went to Voyage.
+- **`forecasts_for`** lists the AI models that get forecasts now.
+- **`notes`** holds anything worth knowing that didn't stop it.
+
+When it can't go on, the answer is an `error` with a `code` and a `message`. The exit code is 1 then. [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md#setup-and-refresh) lists every field and code. It also says what `create --json` adds.
+
 ## How it tests itself
 
 A forecast you can't trust is worse than none, because a program acts on it. So before it gives any forecast, a predictor replays each AI model's newest 30% of tasks in three windows. Each window is forecast by a model trained only on the tasks that finished before it, on every AI model. So a model you used less lately is still tested on its own newest tasks. Then each AI model must pass three checks:
@@ -249,8 +287,8 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | Command | What it does |
 |---|---|
 | `yardstick-predict` | In a terminal, the home screen: Estimate, Update, Models and Add New. A program gets one line per predictor. |
-| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express`, or `--yes`, takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. |
-| `yardstick-predict refresh` | Adds new runs, embeds them and retrains. |
+| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express`, or `--yes`, takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. `--json` answers a program in JSON. |
+| `yardstick-predict refresh` | Adds new runs, embeds them and retrains. `--yes` for programs, with `--json` for an answer in JSON. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each predictor, its features with their coverage, the size of its prepared dataset and how close its forecasts came on your newest tasks. `--json` for programs. |
 | `yardstick-predict list` | Lists your predictors, one line each: features, how many tasks each learned from, when it was last trained and which AI models get forecasts. `--json` for programs. |
