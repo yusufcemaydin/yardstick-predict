@@ -252,6 +252,46 @@ def delete_predictor(name: str) -> bool:
     return True
 
 
+def rename_predictor(old: str, new: str) -> None:
+    """Give a predictor another name: its folder moves to the new name, with everything in it. The default stays
+    the default, also when it was found only by being called default or by being the only one.
+
+    It raises ValueError with a plain reason when the new name can't be used or is taken, and Busy while a setup
+    or refresh of the predictor runs. It waits for a forecast that is reading its model. Both names' locks are
+    held, so no setup of either name and no delete runs meanwhile.
+    """
+    problem = name_problem(new)
+    if problem:
+        raise ValueError(problem)
+    if new == old:
+        raise ValueError(f"It's called {old} already.")
+    source, target = predictor_folder(old), predictor_folder(new)
+    first, second = sorted([old, new])
+    with name_lock(first), name_lock(second):
+        if not (source / "predictor.json").is_file():
+            raise ValueError(f"There's no predictor called {old!r}.")
+        if target.exists() or is_link(target):
+            raise ValueError(f"There's already a predictor called {new}. Pick another name.")
+        was_default = default_name() == old
+        link = is_link(source)
+        refresh_lock, model_lock = (source / lock for lock in LOCKS)
+        with _lock(refresh_lock, wait=False, make=not link) as mine:
+            if not mine:
+                raise Busy(f"{old} is being set up or refreshed by another command. Try again when it's done.")
+            with _lock(model_lock, make=not link):  # a forecast holds it, shared, while it reads the model
+                if os.name != "nt":
+                    source.rename(target)
+        if os.name == "nt":
+            # Windows can't move a folder while a file in it is open, such as a lock that's held. So it moves once
+            # they're let go. A command that opened one meanwhile makes the move fail, and nothing changes.
+            source.rename(target)
+        predictor = Predictor(new)
+        predictor.config["name"] = new
+        predictor.save_config()
+        if was_default:
+            set_default(new)
+
+
 def being_refreshed(name: str) -> bool:
     """Whether another command is setting up or refreshing the predictor: it holds the predictor's refresh lock.
     Where the predictor's folder is a link, no lock file is made where it leads."""

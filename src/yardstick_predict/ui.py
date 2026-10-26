@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import shutil
 import sys
 import time
 from dataclasses import dataclass
@@ -22,10 +23,16 @@ _MARKS = {
     "bar": ("━", "#"),
     "rest": ("─", "-"),
     "dot": ("·", "-"),
+    "pick": ("›", ">"),
+    "logo": ("◆", "*"),
+    "keys": ("↑↓", "up and down"),
+    "box": ("╭╮╰╯─│", "++++-|"),
 }
 _ANSI = re.compile(r"\033\[[0-9;]*m")
 _transient = False
 """Whether the last thing printed was a line the next output replaces, like a progress bar."""
+_label: str | None = None
+"""What the step that's working says it does, so its progress bar keeps saying it."""
 
 LEFT_AFTER_SECONDS = 5.0
 """A progress bar says how long is left only once it has run this long..."""
@@ -114,7 +121,9 @@ def _clear() -> None:
 
 
 def out(text: str = "") -> None:
+    global _label
     _clear()
+    _label = None  # a step that printed a line of its own is done
     print(text, flush=True)
 
 
@@ -145,12 +154,13 @@ def fail(text: str) -> None:
 
 
 def working(text: str) -> None:
-    """Say what's happening. In a terminal, the next line printed replaces it."""
-    global _transient
+    """Say what's happening. In a terminal, the next line printed replaces it, and a progress bar keeps saying it."""
+    global _transient, _label
     if styled():
         _clear()
         print(f"  {dim(mark('wait') + ' ' + text)}", end="", flush=True)
         _transient = True
+        _label = text
     else:
         line(f"{text}...")
 
@@ -235,13 +245,19 @@ def progress(done: int, total: int, unit: str) -> None:
         bar = _bar = _Bar(total, unit, started=now, first=done, done=done, at=now)
     else:
         bar.move(done, now)
-    width = 28
-    filled = min(round(width * done / total), width) if total else width
-    track = accent(mark("bar") * filled) + dim(mark("rest") * (width - filled))
+    length = 28
+    filled = min(round(length * done / total), length) if total else length
+    track = accent(mark("bar") * filled) + dim(mark("rest") * (length - filled))
     counts = f"{size(done)} / {size(total)}" if unit == "bytes" else f"{done:,} / {total:,} {unit}"
     left = bar.left(now)
     tail = dim(f" {mark('dot')} {time_left(left)}") if left is not None else ""
-    print(f"\r\033[2K  {track}  {counts}{tail}", end="", flush=True)
+    shown = f"{track}  {counts}{tail}"
+    if _label:
+        # The step's own words stay in front of its bar, cut short so the line never wraps.
+        room = shutil.get_terminal_size((80, 24)).columns - 1 - 2 - width(shown) - 2
+        label = _label if len(_label) <= room else _label[: max(room - 1, 0)].rstrip() + mark("wait")
+        shown = f"{dim(label)}  {shown}" if room >= 8 else shown
+    print(f"\r\033[2K  {shown}", end="", flush=True)
     _transient = True
 
 

@@ -475,8 +475,8 @@ def test_setup_offers_the_check_and_trains_with_what_the_person_keeps(capsys, mo
     assert sum("Turn on or off" in question for question in asked) == 2
     saved = check.latest()
     helped = [name for name in saved if any(found["verdict"] == "helped" for found in saved[name].values())]
-    assert Predictor("default").config["features"] == ["prompt", *helped]
-    assert {entry["predictor"] for by_model in saved.values() for entry in by_model.values()} == {"default"}
+    assert Predictor("main").config["features"] == ["prompt", *helped]
+    assert {entry["predictor"] for by_model in saved.values() for entry in by_model.values()} == {"main"}
     assert "Trained on" in out and "Ready" in out
 
 
@@ -500,7 +500,7 @@ def test_llm_analysis_reads_a_sample_for_the_check_and_the_rest_once_it_helps(ca
     assert "For the check, LLM analysis read only a sample of your tasks. To read the rest:" in after
     assert "LLM analysis: 126 tasks with Codex's own model" in after
     assert sum("Analyze them now?" in question for question in asked) == 1
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "context", "llm"]
     assert len(predictor.llm_labels()) == 180 and len(predictor.embedded("llm")) == 180
     assert sum("How should it be paid for?" in question for question in asked) == 1  # not asked again
@@ -514,7 +514,7 @@ def test_llm_analysis_is_left_out_when_the_person_wont_have_it_read_the_rest(cap
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
     assert read == [54] and "LLM analysis is left out of this predictor." in out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt"] and "llm" not in predictor.config
     assert "llm" not in (predictor.config.get("options") or {}) and "Trained on" in out
 
@@ -537,7 +537,7 @@ def test_when_the_check_cant_test_any_ai_model_the_features_stay_as_chosen(capsy
     assert sum("Turn on or off" in question for question in asked) == 2 and "The features that helped" not in out
     # LLM analysis read a sample for the check. It still offers to read the rest, with its cost.
     assert read == [54, 126] and "To read the rest:" in out
-    assert Predictor("default").config["features"] == ["prompt", "conversation", "context", "llm"]
+    assert Predictor("main").config["features"] == ["prompt", "conversation", "context", "llm"]
 
 
 def test_a_feature_turned_on_after_the_check_shows_its_cost_first(capsys, monkeypatch, records, ready):
@@ -551,8 +551,8 @@ def test_a_feature_turned_on_after_the_check_shows_its_cost_first(capsys, monkey
     assert sum("Embed them and train the predictor now?" in question for question in asked) == 1
     # Once for the check, and once for the context of the tasks that have one.
     assert re.findall(r"Embedding ([\d,]+) tasks with voyage-4 uses", out) == ["180", "144"]
-    assert "Stopped. Your choice of features is kept." in out and "refresh --predictor default" in out
-    predictor = Predictor("default")
+    assert "Stopped. Your choice of features is kept." in out and "refresh --predictor main" in out
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "context"] and not (predictor.model_dir / "model.json").exists()
 
 

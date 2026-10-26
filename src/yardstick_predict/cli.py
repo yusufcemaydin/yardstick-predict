@@ -1,6 +1,6 @@
 """The yardstick-predict command.
 
-    yardstick-predict              Set up, or check for new runs and refresh.
+    yardstick-predict              In a terminal, the home screen: Estimate, Update, Models and Add New.
     yardstick-predict create       Create a predictor from your past runs.
     yardstick-predict refresh      Add new runs, embed them and retrain.
     yardstick-predict predict      Forecast a task: a table in a terminal, JSON for programs.
@@ -11,6 +11,7 @@
     yardstick-predict features     List each predictor's features: what's stored, and how many tasks each covers.
                                    features delete ID deletes a stored feature.
     yardstick-predict default      Show or choose the predictor used when a command names none.
+    yardstick-predict rename       Give a predictor another name.
 
 It only asks questions when a person runs it in a terminal. When a program runs it, it never asks.
 """
@@ -213,8 +214,8 @@ def get_key(model: str, can_ask: bool) -> str | None:
 
 
 def ask_name(existing: list[str]) -> str:
-    """A name for a new predictor. The first one is called 'default' unless you pick another name."""
-    suggestion = "" if "default" in existing else "default"
+    """A name for a new predictor. The first one is called main unless you pick another name."""
+    suggestion = "" if existing else "main"
     while True:
         reply = input(ui.prompt("Name this predictor:", f"[{suggestion}]" if suggestion else "")).strip()
         name = reply or suggestion
@@ -645,6 +646,10 @@ def pick_predictor(name: str | None) -> Predictor:
 
 
 def cmd_home(args) -> int:
+    if interactive():
+        from .screens import home
+
+        return home.run()
     names = predictor_names()
     if not names:
         ui.out(ui.bold("yardstick-predict"))
@@ -652,47 +657,21 @@ def cmd_home(args) -> int:
         ui.out(ui.dim("It learns from your own past Claude Code and Codex runs. Nothing leaves your computer except"))
         ui.out(ui.dim("the text you choose to embed, such as your prompts, and that goes only to Voyage."))
         ui.out()
-        if not interactive():
-            ui.out("No predictor yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express")
-            return 1
-        if ui.ask("There's no predictor yet. Create one now?", True):
-            return cmd_create(make_parser().parse_args(["create"]))
-        return 0
-    if not interactive():
-        for name in names:
-            try:
-                predictor = Predictor(name)
-            except BrokenPredictor as error:
-                ui.out(f"{name}: {error}")
-                continue
-            facts = [
-                f"{predictor.embedding_model} embeddings",
-                f"{predictor.count_tasks():,} tasks",
-                f"updated {ago(predictor.config.get('refreshed_at'))}",
-            ]
-            ui.out(f"{name}: {', '.join(facts)}")
-        return 0
-    code = 0
+        ui.out("No predictor yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express")
+        return 1
     for name in names:
-        # One predictor that's busy or broken doesn't keep the others from being checked.
         try:
-            done = cmd_refresh(argparse.Namespace(predictor=name, yes=False, ask_first=True))
+            predictor = Predictor(name)
         except BrokenPredictor as error:
-            ui.heading(name)
-            ui.error(str(error))
-            done = 1
-        except SystemExit as stop:
-            if not isinstance(stop.code, str):
-                raise
-            ui.heading(name)
-            ui.error(stop.code)
-            done = 1
-        code = max(code, done)
-    ui.out()
-    ui.out(
-        ui.join([ui.dim("New predictor: yardstick-predict create"), ui.dim("Default: yardstick-predict default NAME")])
-    )
-    return code
+            ui.out(f"{name}: {error}")
+            continue
+        facts = [
+            f"{predictor.embedding_model} embeddings",
+            f"{predictor.count_tasks():,} tasks",
+            f"updated {ago(predictor.config.get('refreshed_at'))}",
+        ]
+        ui.out(f"{name}: {', '.join(facts)}")
+    return 0
 
 
 def already_exists(name: str) -> str:
@@ -1220,6 +1199,11 @@ def cmd_refresh(args) -> int:
             f"{predictor.name} was saved by a newer version of yardstick-predict, so this version leaves it as it "
             "is. Upgrade with: uv tool upgrade yardstick-predict"
         )
+    if interactive() and not args.yes:
+        from .screens import update
+
+        predictor.close()
+        return update.run([predictor.name])
     # A predictor deleted just as this command found it isn't saved again, with none of its tasks.
     deleted = f"There's no predictor called {predictor.name!r} anymore: it was deleted."
     if gone(predictor):
@@ -1239,6 +1223,17 @@ def cmd_refresh(args) -> int:
             return _refresh(args, predictor)
 
 
+BEHIND_NOTES = {
+    "unfinished": ["Training didn't finish last time. The model is out of date."],
+    "outdated": ["This model was made by an older version, which trained it another way. It needs training again."],
+    "previous": [
+        "This model was made by the previous version. It still forecasts, and training it again brings",
+        "this version's improvements.",
+    ],
+}
+"""What a refresh says when the model is trained again even with nothing new, by the reason plan_refresh gives."""
+
+
 def gone(predictor: Predictor) -> bool:
     """Whether the predictor was deleted after this command found it. Its settings go last."""
     return not (predictor.dir / "predictor.json").is_file()
@@ -1246,20 +1241,7 @@ def gone(predictor: Predictor) -> bool:
 
 def _refresh(args, predictor: Predictor) -> int:
     from . import model_types
-    from .pipeline import (
-        analysis_plan,
-        chosen_features,
-        from_previous_version,
-        load_plugins,
-        model_meta,
-        model_ready,
-        outdated,
-        plan_embeddings,
-        refresh_benchmarks,
-        save_scan,
-        scan,
-        train,
-    )
+    from .pipeline import load_plugins, plan_embeddings, plan_refresh, refresh_benchmarks, save_scan, scan, train
 
     try:
         load_plugins(predictor)
@@ -1267,7 +1249,6 @@ def _refresh(args, predictor: Predictor) -> int:
         raise SystemExit(str(error)) from None
     # With --yes it asks nothing, even in a terminal.
     can_ask = interactive() and not getattr(args, "yes", False)
-    ask_first = getattr(args, "ask_first", False)
     ui.heading(predictor.name)
     ui.note(f"Last updated {ago(predictor.config.get('refreshed_at'))}.")
     unknown_features_note(predictor)
@@ -1290,38 +1271,13 @@ def _refresh(args, predictor: Predictor) -> int:
     removed = getattr(found, "removed", [])
     if removed:
         ui.note(f"{len(removed):,} saved tasks aren't in their records anymore, so they're taken out.")
-    has_model = model_ready(predictor)
-    meta = model_meta(predictor) if has_model else None
-    behind = bool(predictor.config.get("needs_training"))
-    if behind and has_model:
-        ui.note("Training didn't finish last time. The model is out of date.")
-    elif has_model and outdated(predictor, meta):
-        behind = True
-        ui.note("This model was made by an older version, which trained it another way. It needs training again.")
-    elif has_model and from_previous_version(predictor, meta):
-        behind = True
-        ui.note("This model was made by the previous version. It still forecasts, and training it again brings")
-        ui.note("this version's improvements.")
     model_name = predictor.embedding_model
     key, _ = embeddings.find_key()
-    from . import features
-    from .pipeline import embedding_items, price
-
-    chosen = chosen_features(predictor)
-    # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished.
-    updated = {task.id: task for task in found.updated_tasks}
-    everything = [updated.get(task.id, task) for task in predictor.tasks()] + found.new_tasks
-    # The new tasks count too: the feature store may have their vectors already, from another predictor.
-    ids = {task.id for task in everything}
-    have = {name: predictor.embedded(name, ids) for name in chosen if features.is_text(name)}
-    labels = predictor.llm_labels() if "llm" in chosen else None
-    pending = embedding_items(everything, chosen, have, predictor.config.get("max_tasks"), predictor.config, labels)
-    plan = price(pending, model_name, key)
-    asks = analysis_plan(everything, predictor.config, labels or {}, predictor.config.get("max_tasks"))
-    nothing_new = (
-        not found.new_tasks and not found.updated_tasks and not removed and not plan.items and not asks and not behind
-    )
-    if nothing_new and has_model:
+    planned = plan_refresh(predictor, found, key)
+    for text in BEHIND_NOTES.get(planned.behind if planned.model is not None else None, []):
+        ui.note(text)
+    everything, plan, asks = planned.tasks, planned.embed, planned.asks
+    if planned.up_to_date:
         # A record file that changed with nothing new in it, such as one that was only touched, isn't read
         # again next time. Nor is every file, after a new version of the reader read them all and found
         # nothing new.
@@ -1338,11 +1294,16 @@ def _refresh(args, predictor: Predictor) -> int:
     if asks:
         for text in analysis_lines(len(asks), predictor.config["llm"]):
             ui.line(text)
+    if planned.described:
+        from .llm import DESCRIPTION_TOKENS
+
+        tokens = planned.described * DESCRIPTION_TOKENS
+        ui.note(f"Its descriptions are embedded too: about {tokens:,} more tokens, priced as above.")
     dataset = predictor.dir / "dataset.sqlite"
     size = dataset.stat().st_size if dataset.is_file() else 0
     say_estimate(everything, predictor.config, plan, asks, found.new_tasks, size)
     if can_ask:
-        if not ui.ask("Refresh now? This adds the new tasks, embeds them and retrains.", not ask_first):
+        if not ui.ask("Refresh now? This adds the new tasks, embeds them and retrains.", True):
             ui.note("Keeping the current model.")
             return 0
     elif not args.yes:
@@ -2483,6 +2444,30 @@ def cmd_claude_code(args) -> int:
     return 0
 
 
+def cmd_rename(args) -> int:
+    """Give a predictor another name. The default stays the default."""
+    from .store import Busy, rename_predictor
+
+    names = predictor_names()
+    if args.old not in names:
+        raise SystemExit(f"There's no predictor called {args.old!r}. Your predictors: {', '.join(names) or 'none'}.")
+    was_default = default_name() == args.old
+    try:
+        rename_predictor(args.old, args.new)
+    except (ValueError, Busy) as error:
+        raise SystemExit(str(error)) from None
+    except OSError as error:
+        raise SystemExit(f"Couldn't rename {args.old}: {error.strerror or error}. Nothing changed.") from None
+    say_renamed(args.old, args.new, was_default)
+    return 0
+
+
+def say_renamed(old: str, new: str, was_default: bool) -> None:
+    ui.ok(f"Renamed {old} to {new}.")
+    if was_default:
+        ui.note(f"{new} is still the default.")
+
+
 def cmd_default(args) -> int:
     names = predictor_names()
     if not args.name:
@@ -2659,6 +2644,10 @@ def make_parser() -> argparse.ArgumentParser:
     default = commands.add_parser("default", help="Show or choose the predictor used when a command names none.")
     default.add_argument("name", nargs="?", help="The predictor to make the default.")
 
+    rename = commands.add_parser("rename", help="Give a predictor another name. The default stays the default.")
+    rename.add_argument("old", help="The predictor's name now.")
+    rename.add_argument("new", help="Its new name.")
+
     claude = commands.add_parser("claude-code", help="Show forecasts in Claude Code's status line, or stop.")
     claude.add_argument("action", choices=["install", "remove"], help="Add the status line, or take it out.")
     claude.add_argument("--here", action="store_true", help="Only for Claude Code sessions in this folder.")
@@ -2672,7 +2661,7 @@ look at your predictors, choose a default and take the status line out of Claude
 
 
 def needs_xgboost(args) -> bool:
-    # The bare command sets up or refreshes predictors only when a person runs it. Otherwise it lists them.
+    # In a terminal the bare command opens the home screen, where you can estimate and update. Otherwise it lists.
     return args.command in TRAINS_OR_FORECASTS or (args.command is None and interactive())
 
 
@@ -2692,6 +2681,7 @@ def main(argv: list[str] | None = None) -> int:
         "check": cmd_check,
         "features": cmd_features,
         "default": cmd_default,
+        "rename": cmd_rename,
         "claude-code": cmd_claude_code,
     }
     if args.command in ("features", "status"):

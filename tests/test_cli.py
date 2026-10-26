@@ -303,10 +303,10 @@ def test_bad_choices_get_a_plain_reason(capsys, records, ready):
 
 
 def test_a_new_predictor_is_named_first(monkeypatch):
-    replies = iter(["", "Not A Name", "default", "work"])
+    replies = iter(["", "", "Not A Name", "main", "work"])
     monkeypatch.setattr("builtins.input", lambda question="": next(replies))
-    assert cli.ask_name([]) == "default"  # the first predictor is called default unless you pick a name
-    assert cli.ask_name(["default"]) == "work"  # an empty, a bad and a taken name are each asked again
+    assert cli.ask_name([]) == "main"  # the first predictor is called main unless you pick a name
+    assert cli.ask_name(["main"]) == "work"  # an empty, a bad and a taken name are each asked again
 
 
 def test_commands_use_the_default_predictor_you_choose(capsys):
@@ -1057,18 +1057,21 @@ def test_a_plugin_in_the_current_folder_loads_from_any_folder_later(capsys, monk
         model_types.find_plugin("missing.py")
 
 
-def test_the_guided_refresh_says_a_predictor_is_busy_and_goes_on(capsys, monkeypatch):
+def test_update_all_says_a_predictor_is_busy_and_goes_on(capsys, monkeypatch):
     from yardstick_predict import locks
+    from yardstick_predict.screens import keys, update
 
     for name in ("busy", "free"):
         Predictor.create(name, [], {"model": "voyage-4", "dimensions": 256})
     checked = []
-    monkeypatch.setattr(cli, "_refresh", lambda args, predictor: checked.append(predictor.name) or 0)
+    monkeypatch.setattr(update, "update", lambda work: checked.extend(job.predictor.name for job in work) or 0)
+    pressed = ["2", "1", keys.ESC]  # Update, Update all, then quit
+    monkeypatch.setattr(keys, "reader", lambda: lambda: pressed.pop(0))
     monkeypatch.setattr(cli, "interactive", lambda: True)
     with locks.held(Predictor("busy").dir / "refresh.lock"):
-        assert main([]) == 1
+        assert main([]) == 0
     assert checked == ["free"]
-    assert "busy is being set up or refreshed by another command" in capsys.readouterr().err
+    assert "busy is being set up or updated by another command" in capsys.readouterr().out
 
 
 def test_ctrl_d_at_a_question_stops_cleanly(capsys, monkeypatch):

@@ -14,6 +14,7 @@ from . import benchmarks, embeddings, features, locks, model_types
 from .archives import (
     READER_VERSION,
     SETTLE_SECONDS,
+    Reading,
     Task,
     archive_path,
     completeness,
@@ -120,16 +121,83 @@ def _sizes(files: dict[str, tuple[int, float]]) -> int:
     return sum(size for size, _ in files.values())
 
 
-def scan(predictor: Predictor, now: float | None = None, on_progress: Callable[[int, int], None] | None = None) -> Scan:
+@dataclass
+class Reads:
+    """The record files a scan reads in one archive, found from their sizes and times without reading them."""
+
+    archive: dict
+    files: dict[str, tuple[int, float]]
+    chats: set[str] = field(default_factory=set)
+    """The conversations those files hold, by family: a session with its copies and helpers is one. Counted only
+    when asked for."""
+
+    @property
+    def size(self) -> int:
+        return _sizes(self.files)
+
+
+def to_read(predictor: Predictor, count_chats: bool = False) -> list[Reads]:
+    """What a scan of the predictor reads in each of its archives, one for each archive, with no files when nothing
+    in it changed.
+
+    Only sizes and times are compared. When any file changed, the first lines of the archive's files say which
+    conversation each belongs to, as families tells. A dataset read by an older version of the reader has every
+    record file read again. With `count_chats`, the conversations are counted then too.
+    """
+    known_files = predictor.known_files()
+    everything = predictor.config.get("reader") != READER_VERSION
+    found = []
+    for archive in predictor.config["archives"]:
+        current = record_files(archive)
+        changed = {path for path, state in current.items() if everything or known_files.get(path) != state}
+        family = families(archive, current) if changed and (count_chats or not everything) else {}
+        if changed and not everything:
+            # A file adds to tasks in the other files of its family, so when one changes, its family is read again.
+            touched = {family[path] for path in changed}
+            changed = {path for path in current if family[path] in touched}
+        chats = {family[path] for path in changed} if family else set()
+        found.append(Reads(archive, {path: current[path] for path in changed}, chats))
+    return found
+
+
+class Readings:
+    """The record files read in this session, the last reading of each archive, so a second look at the same
+    files reads none of them again. A reading of more files serves a look at fewer of them."""
+
+    def __init__(self) -> None:
+        self._kept: dict[tuple, tuple[dict[str, tuple[int, float]], Reading]] = {}
+
+    @staticmethod
+    def _which(archive: dict) -> tuple:
+        return archive["name"], archive["format"], str(archive_path(archive))
+
+    def get(self, archive: dict, files: dict[str, tuple[int, float]]) -> Reading | None:
+        """The reading kept of these files as they are now, or None when there's none."""
+        kept = self._kept.get(self._which(archive))
+        if kept is None or any(kept[0].get(path) != state for path, state in files.items()):
+            return None
+        return kept[1]
+
+    def put(self, archive: dict, files: dict[str, tuple[int, float]], reading: Reading) -> None:
+        self._kept[self._which(archive)] = (dict(files), reading)
+
+
+def scan(
+    predictor: Predictor,
+    now: float | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    reads: list[Reads] | None = None,
+    readings: Readings | None = None,
+) -> Scan:
     """Find tasks the dataset doesn't have yet, and stored tasks whose records changed.
 
     Only changed record files are read, each with its family, such as a session with its copies and helpers.
     A dataset read by an older version of the reader has every record file read again. `on_progress` is told
-    how many bytes of them are read, and how many there are.
+    how many bytes of them are read, and how many there are. `reads` are what to_read found, when it was asked
+    already. Files that `readings` holds aren't read again, and the ones read are added to it.
     """
     now = time.time() if now is None else now
     stored = _stored(predictor)
-    known_files = predictor.known_files()
     everything = predictor.config.get("reader") != READER_VERSION
     result = Scan(new_tasks=[], reader=READER_VERSION if everything else None)
     # A task can be in more than one archive, such as in a backup. Each copy is kept until one is picked.
@@ -138,26 +206,25 @@ def scan(predictor: Predictor, now: float | None = None, on_progress: Callable[[
     reread: set[str] = set()
     sessions: dict[str, set[str]] = {}
     # Every archive's changed files are found first, so the progress bar knows how much there is to read.
-    todo: list[tuple[dict, dict[str, tuple[int, float]]]] = []
-    for archive in predictor.config["archives"]:
-        current = record_files(archive)
-        changed = {path for path, state in current.items() if everything or known_files.get(path) != state}
-        if changed and not everything:
-            # A file adds to tasks in the other files of its family, so when one changes, its family is read again.
-            family = families(archive, current)
-            touched = {family[path] for path in changed}
-            changed = {path for path in current if family[path] in touched}
-        result.per_archive[archive["name"]] = 0
-        if changed:
-            todo.append((archive, {path: current[path] for path in changed}))
-    progress = _Bytes(sum(_sizes(files) for _, files in todo), on_progress)
+    reads = to_read(predictor) if reads is None else reads
+    todo = [(found.archive, found.files) for found in reads if found.files]
+    for found in reads:
+        result.per_archive[found.archive["name"]] = 0
+    unread = [(archive, files) for archive, files in todo if readings is None or readings.get(archive, files) is None]
+    progress = _Bytes(sum(_sizes(files) for _, files in unread), on_progress)
     progress.reach(0)
     for archive, files in todo:
-        start = progress.done
-        reading = read_records(archive, files, now, progress.read)
-        # The files the reader passed over count as read too, such as a helper's whose session is gone.
-        progress.reach(start + _sizes(files))
+        reading = readings.get(archive, files) if readings is not None else None
+        if reading is None:
+            start = progress.done
+            reading = read_records(archive, files, now, progress.read)
+            # The files the reader passed over count as read too, such as a helper's whose session is gone.
+            progress.reach(start + _sizes(files))
+            if readings is not None:
+                readings.put(archive, files, reading)
         for task in reading.tasks:
+            if task.source and task.source not in files:
+                continue  # a reading of more files than this scan needs holds other files' tasks too
             copies.setdefault(task.id, []).append(task)
         held |= reading.held
         reread |= set(files)
@@ -451,6 +518,59 @@ def plan_embeddings(predictor: Predictor, key: str | None) -> EmbedPlan:
     labels = predictor.llm_labels() if "llm" in chosen else None
     items = embedding_items(tasks, chosen, have, limit, predictor.config, labels)
     return price(items, predictor.embedding_model, key)
+
+
+@dataclass
+class Refresh:
+    """What a refresh does with what a scan found, worked out before anything is spent or saved."""
+
+    found: Scan
+    tasks: list[Task]
+    """Every task the predictor has once the scan is saved."""
+    embed: EmbedPlan
+    """The texts to embed, priced. The descriptions LLM analysis writes aren't in it, as they don't exist yet."""
+    asks: list
+    """The tasks LLM analysis reads."""
+    described: int
+    """How many descriptions LLM analysis writes. Each is embedded once it's written."""
+    model: dict | None
+    """What the saved model says about itself, or None without one."""
+    behind: str | None
+    """Why the model is trained again even with nothing new: unfinished when training didn't finish last time,
+    outdated when a version before the previous release made it, previous when the previous release did."""
+
+    @property
+    def up_to_date(self) -> bool:
+        """Whether there's nothing to do: nothing new or changed, nothing to embed or analyze, and a model that's
+        current."""
+        found = self.found
+        changed = found.new_tasks or found.updated_tasks or found.removed
+        return self.model is not None and not (changed or self.embed.items or self.asks or self.behind)
+
+
+def plan_refresh(predictor: Predictor, found: Scan, key: str | None) -> Refresh:
+    """What a refresh of the predictor does with what `found` holds, and what each step costs. Nothing is saved."""
+    meta = model_meta(predictor) if model_ready(predictor) else None
+    behind = None
+    if predictor.config.get("needs_training"):
+        behind = "unfinished"
+    elif meta is not None and outdated(predictor, meta):
+        behind = "outdated"
+    elif meta is not None and from_previous_version(predictor, meta):
+        behind = "previous"
+    chosen = chosen_features(predictor)
+    # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished.
+    updated = {task.id: task for task in found.updated_tasks}
+    everything = [updated.get(task.id, task) for task in predictor.tasks()] + found.new_tasks
+    # The new tasks count too: the feature store may have their vectors already, from another predictor.
+    ids = {task.id for task in everything}
+    have = {name: predictor.embedded(name, ids) for name in chosen if features.is_text(name)}
+    labels = predictor.llm_labels() if "llm" in chosen else None
+    limit = predictor.config.get("max_tasks")
+    pending = embedding_items(everything, chosen, have, limit, predictor.config, labels)
+    asks = analysis_plan(everything, predictor.config, labels or {}, limit)
+    described = len(asks) if asks and "description" in features.options(predictor.config, "llm") else 0
+    return Refresh(found, everything, price(pending, predictor.embedding_model, key), asks, described, meta, behind)
 
 
 def newest_that_fit(plan: EmbedPlan, tokens: int, more_per_task: int = 0) -> int:

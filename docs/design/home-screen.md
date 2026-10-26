@@ -1,6 +1,6 @@
 # Home screen and menus
 
-This is the agreed design for yardstick-predict's terminal screens. Cem approved it on 24 October 2026. Nothing here is built yet. Build it on this branch.
+This is the agreed design for yardstick-predict's terminal screens. Cem approved it on 24 October 2026. It's built on this branch.
 
 ## Why
 

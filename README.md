@@ -53,13 +53,13 @@ export VOYAGE_API_KEY=your-key
 yardstick-predict create --express
 ```
 
-**The guided way.** Run it and answer a few questions:
+**The guided way.** Run it with nothing after it:
 
 ```bash
 yardstick-predict
 ```
 
-It finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
+The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
 When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The check tests the model with each feature and without it, shows what helped for each AI model, and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice: say no, and setup trains with the features you picked.
 
@@ -71,7 +71,9 @@ yardstick-predict predict "Add a login page with tests"
 
 It shows the expected time, tokens and cost on each AI model your predictor covers, at each effort level you often use it at. `--model` and `--effort` name them yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
 
-Run `yardstick-predict` every week or so. It tells you how many new tasks it found, what embedding them costs and about how long a refresh takes, and asks before it refreshes.
+Every week or so, run `yardstick-predict` and choose Update. Before it reads anything, it says where your new work is and how much there is to read. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. It asks once. Cancel spends nothing and saves nothing. `yardstick-predict refresh` in a terminal shows the same summary. With `--yes` it asks nothing.
+
+Models lists your models with `(default)` after the default one. Choose one to update it, make it the default or rename it.
 
 ## Features the model learns from
 
@@ -236,7 +238,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 
 | Command | What it does |
 |---|---|
-| `yardstick-predict` | Sets up your first predictor, or finds new runs and offers to refresh. |
+| `yardstick-predict` | In a terminal, the home screen: Estimate, Update, Models and Add New. A program gets one line per predictor. |
 | `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express`, or `--yes`, takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. |
 | `yardstick-predict refresh` | Adds new runs, embeds them and retrains. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
@@ -247,6 +249,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | `yardstick-predict features` | Lists every feature of every predictor: whether the feature store keeps it, with what made it, how big it is and when it changed, or training works it out for free. Shows the share of each predictor's tasks it covers. `--json` for programs. |
 | `yardstick-predict features delete ID` | Deletes a stored feature. It says which predictors use it and what making it again costs, and asks first. `--yes` for programs. |
 | `yardstick-predict default [NAME]` | Shows or sets your default predictor: the one commands use when they name none. `--predictor NAME` picks another for one command. |
+| `yardstick-predict rename OLD NEW` | Gives a predictor another name. The default stays the default. |
 | `yardstick-predict claude-code install` | Shows forecasts in Claude Code's status line. `--here` for one folder, `remove` to turn it off. |
 
 ## Update or remove it

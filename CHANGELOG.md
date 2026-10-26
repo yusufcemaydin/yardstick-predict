@@ -2,6 +2,29 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+A bare `yardstick-predict` in a terminal opens a home screen with clear choices. It no longer refreshes every predictor at once behind a bar with no label.
+
+### Added
+
+- A home screen. Run `yardstick-predict` in a terminal with nothing after it. It greets you, lists your models with `(default)` after the default one and offers Estimate, Update, Models, Add New and Quit. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. It reads only your models' settings, so it opens at once. A terminal that can't pass single key presses gets the choices numbered, to type one in.
+- Estimate asks for a task and shows its forecast on your default model.
+- Update first says where the new work is and how much there is to read, from file sizes alone. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. It asks once. Cancel spends nothing and saves nothing. A second Update in the same session reads nothing again.
+- Models shows each model with its tasks, its forecasts and what it learns from. Choose Update, Make default or Rename.
+- `yardstick-predict rename OLD NEW` gives a predictor another name. The default stays the default, also when it was the default only because it was called default.
+
+### Changed
+
+- `yardstick-predict refresh` in a terminal shows the same summary as Update and asks once. With `--yes` it asks nothing, as before.
+- Outside a terminal, a bare `yardstick-predict` prints one line per predictor, as before.
+- Setup suggests the name main for your first predictor instead of default. So no name looks like the `(default)` mark.
+- Every progress bar keeps its step's label. Reading your records used to show a bar like `0 KB / 6.2 GB` with no word of what it was.
+
+### Fixed
+
+- The cost shown before an update now counts embedding the descriptions LLM analysis writes. A refresh used to embed them without having priced them.
+
 ## [0.4.0] - 2026-10-23
 
 Training uses exactly the features you choose, and setup can check which of them really help your forecasts. Embeddings and LLM answers are kept once, in a feature store all your predictors share, so a second predictor never pays for them again. A model trained by 0.3.0 keeps forecasting until you train it again: the next refresh does that, and brings this version's improvements. Releases now come from PyPI, so `uv tool install yardstick-predict` installs it.
@@ -231,6 +254,7 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.0...v0.2.1
