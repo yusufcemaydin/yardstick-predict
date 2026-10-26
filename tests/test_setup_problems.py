@@ -67,7 +67,8 @@ def test_commands_that_dont_train_or_forecast_work_without_xgboost(no_xgboost, c
 
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "Trained on 140 tasks" in out and "10% worse than the simple rule. They may be at most 2% worse." in out
+    squashed = " ".join(out.split())  # long lines are broken to fit the terminal
+    assert "Trained on 140 tasks" in out and "10% worse than the simple rule. They may be at most 2% worse." in squashed
     assert cli.main(["status", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["predictors"][0]["report"] == report
     assert cli.main(["default"]) == 0 and "Your default predictor is default" in capsys.readouterr().out

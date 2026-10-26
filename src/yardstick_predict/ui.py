@@ -122,6 +122,11 @@ def columns() -> int:
     return shutil.get_terminal_size((80, 24)).columns
 
 
+def plain(text: str) -> str:
+    """Text without its color codes."""
+    return _ANSI.sub("", text)
+
+
 def cut(text: str, room: int) -> str:
     """Text cut short to fit `room` columns, with a mark where it was cut. Text that fits keeps its colors. Text
     that's cut loses them, so no color code is cut in two."""

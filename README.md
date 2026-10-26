@@ -20,8 +20,7 @@ $ yardstick-predict predict "Add a login page with tests"
   gpt-6.1-sol      ⚠  xhigh            5 min          950k           $0.41
                               85 s to 14 min  269k to 2.7M  $0.12 to $1.17
 
-  ⚠ Few runs: claude-opus-5-5 at high (12).
-  ⚠ Failed the test: gpt-6.1-sol.
+  ⚠ Not enough data: claude-opus-5-5 at high and gpt-6.1-sol.
   Those are a rough guide. Plan with a wider margin there.
   Under each forecast is the range it lands in 9 times out of 10. Costs are at
   API prices.
@@ -35,7 +34,7 @@ The numbers above are an example. Yours come from your own history.
 
 - **Expected time, tokens and cost** for any task on any AI model and effort level you've used, with the full probability curve on request.
 - **Learns from records you already have.** Claude Code and Codex keep a record of every run. There's nothing to label.
-- **Tests itself before it forecasts.** It replays your newest tasks and gives programs forecasts only for AI models that pass. In a terminal, the others show too, marked ⚠ as a rough guide.
+- **Checks itself before it forecasts.** It replays your newest tasks as if they hadn't happened yet. Programs get forecasts only for AI models it forecast well. In a terminal, the others show too, marked ⚠ not enough data.
 - **One fixed, versioned JSON format,** with published schemas, so any program in any language can call it.
 - **Runs on your computer.** Only the text you choose is sent: to Voyage to embed it and, if you turn on LLM analysis, to the AI model you pick.
 - **Shows the exact cost before spending anything,** and counts Voyage's free tokens.
@@ -69,9 +68,9 @@ yardstick-predict create --express
 yardstick-predict
 ```
 
-The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. When a newer version of yardstick-predict is out, it says so under the box, with the command that updates it. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Estimate asks for a task. Then it asks which AI models: the ones that passed the test or any from a list, 6 to a page. Enter forecasts the line you're on. To forecast several, tick them with space first. After the forecasts you choose what's next. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
+The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. When a newer version of yardstick-predict is out, it says so under the box, with the command that updates it. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Estimate asks for a task. Then it asks which AI models: the ones with enough data or any from a list, 6 to a page, numbered on from page to page. Enter forecasts the line you're on. To forecast several, tick them with space first. After the forecasts you choose what's next. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
-When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The check tests the model with each feature and without it, shows what helped for each AI model, and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice: say no, and setup trains with the features you picked.
+When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The check compares forecasts with each feature and without it. It shows what helped for each AI model and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice: say no, and setup trains with the features you picked.
 
 **Then, before you start a task, ask what it will take:**
 
@@ -79,7 +78,7 @@ When you pick features beyond the three that are always on, setup offers to chec
 yardstick-predict predict "Add a login page with tests"
 ```
 
-It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. Under each forecast is the range it lands in 9 times out of 10. A forecast that failed the test or rests on few runs is marked ⚠ as a rough guide. `--model` and `--effort` name them yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
+It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. Under each forecast is the range it lands in 9 times out of 10. A forecast with not enough data behind it is marked ⚠ as a rough guide. The default effort level, which no one picks, isn't shown. `--model` and `--effort` name them yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
 
 Every week or so, run `yardstick-predict` and choose Update. Before it reads anything, it says where your new work is and how much there is to read. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. It asks once. Cancel spends nothing and saves nothing. `yardstick-predict refresh` in a terminal shows the same summary. With `--yes` it asks nothing.
 
@@ -252,10 +251,10 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express`, or `--yes`, takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. |
 | `yardstick-predict refresh` | Adds new runs, embeds them and retrains. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
-| `yardstick-predict status` | Shows each predictor, its features with their coverage, the size of its prepared dataset and how it did on its test. `--json` for programs. |
+| `yardstick-predict status` | Shows each predictor, its features with their coverage, the size of its prepared dataset and how close its forecasts came on your newest tasks. `--json` for programs. |
 | `yardstick-predict list` | Lists your predictors, one line each: features, how many tasks each learned from, when it was last trained and which AI models get forecasts. `--json` for programs. |
 | `yardstick-predict delete NAME` | Deletes a predictor: its settings, its dataset of tasks, its prepared dataset and its model. Your records and the feature store stay. In a terminal it says what goes and asks first. `--yes` for programs, with `--json` for an answer in JSON. |
-| `yardstick-predict check [NAME]` | Checks which of a predictor's features help its forecasts: it tests the model with each feature and without it. It's advice only and changes nothing. `--json` for programs. |
+| `yardstick-predict check [NAME]` | Checks which of a predictor's features help its forecasts: it compares forecasts with each feature and without it. It's advice only and changes nothing. `--json` for programs. |
 | `yardstick-predict features` | Lists every feature of every predictor: whether the feature store keeps it, with what made it, how big it is and when it changed, or training works it out for free. Shows the share of each predictor's tasks it covers. `--json` for programs. |
 | `yardstick-predict features delete ID` | Deletes a stored feature. It says which predictors use it and what making it again costs, and asks first. `--yes` for programs. |
 | `yardstick-predict default [NAME]` | Shows or sets your default predictor: the one commands use when they name none. `--predictor NAME` picks another for one command. |

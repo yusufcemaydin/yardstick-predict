@@ -1188,8 +1188,11 @@ def test_a_predictor_read_by_an_older_reader_reads_its_records_again_once(capsys
 
 def test_the_report_says_how_many_tasks_of_its_own_each_ai_model_needs(capsys):
     cli.print_report({"report": {"tested_on": 0, "min_tasks_to_test": 60, "models": {}}})
-    assert "Each AI model needs 60 of its own" in capsys.readouterr().out
+    assert "Each AI model needs 60 tasks of its own" in " ".join(capsys.readouterr().out.split())
     few = {"served": False, "reason": "not_enough_data", "tasks_tested": 0, "tasks": 12, "failed_checks": []}
     cli.print_report({"report": {"tested_on": 40, "min_tasks_to_test": 60, "models": {"claude-opus-5-5": few}}})
     out = capsys.readouterr().out
-    assert "Tested on each AI model's newest tasks, 40 in all" in out and "12 tasks, needs 60" in out
+    squashed = " ".join(out.split())
+    assert "How close its forecasts came on each AI model's newest tasks, 40 in all" in squashed
+    assert "not enough data, 12 tasks, needs 60" in squashed or "not enough data · 12 tasks, needs 60" in squashed
+    assert "test" not in out

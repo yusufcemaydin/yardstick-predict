@@ -293,10 +293,10 @@ def apply(job: Work, key: str | None) -> int:
     ui.ok(ui.join([f"{name} updated", words]))
     for model_name in served:
         if model_name not in job.before:
-            ui.note(f"  {model_name} forecasts are on now: it passed the test.")
+            ui.note(f"  {model_name} forecasts are on now: there's enough data.")
     for model_name in job.before:
         if model_name not in served:
-            ui.note(f"  {model_name} forecasts are off now: {off_because(report, model_name)}")
+            ui.note(f"  {model_name} forecasts are off now: not enough data.")
     return 0
 
 
@@ -314,20 +314,3 @@ def embed(predictor: Predictor, plan, key: str | None) -> bool:
         ui.note("What was embedded so far is saved. Update again to finish.")
         return False
     return True
-
-
-def off_because(report: dict, model_name: str) -> str:
-    """Why an AI model's forecasts turned off, in a few plain words."""
-    result = (report.get("models") or {}).get(model_name)
-    if not isinstance(result, dict):
-        return "none of its tasks are left to learn from."
-    if result.get("reason") == "not_enough_data":
-        return "too few of its tasks are left to test it."
-    failed = result.get("failed_checks") or []
-    if failed:
-        names = {"seconds": "time", "tokens": "tokens", "usd": "cost"}
-        try:
-            return cli.failed_check(failed[0], result, names, cli.thresholds(report))
-        except (KeyError, TypeError, ValueError):
-            pass
-    return "it didn't pass the test."

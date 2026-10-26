@@ -1,7 +1,7 @@
 """Estimate: forecast a task before you run it, one step at a time.
 
-Describe the task. Then pick the AI models: the ones that passed the test, or any you've used, from a list.
-Either way a checklist shows them 6 at a time. The forecasts show 6 at a time too, with the range each lands
+Describe the task. Then pick the AI models: the ones with enough data behind them, or any you've used, from a
+list. Either way a list shows them 6 at a time. The forecasts show 6 at a time too, with the range each lands
 in 9 times out of 10. After them you choose what's next: another page, another task, other AI models for the
 same task, or home.
 """
@@ -64,9 +64,9 @@ def describe() -> str:
 
 
 def status(model: str, effort: str | None, runs: dict, verdicts: dict) -> str:
-    """How sure a forecast for this AI model at this effort level can be, in a few words."""
+    """A warning when there's not enough data for this AI model at this effort level. Nothing when there is."""
     warning = cli.rough_warning({"reason": _reason(verdicts.get(model)), "runs": runs.get((model, effort))})
-    return ui.yellow(f"{ui.mark('warn')} {warning}") if warning else ui.green("passed the test")
+    return ui.yellow(f"{ui.mark('warn')} {warning}") if warning else ""
 
 
 def _reason(verdict: dict | None) -> str | None:
@@ -77,7 +77,8 @@ def _reason(verdict: dict | None) -> str | None:
 
 def pick(pairs: list, runs: dict, verdicts: dict, too_few: list) -> list | None:
     """Which AI models to forecast, at which effort levels. None goes back to the task."""
-    tested = [pair for pair in pairs if (verdicts.get(pair[0]) or {}).get("served")]
+    # Enough data means the AI model's forecasts held on your past tasks, at a level it ran at often.
+    tested = [pair for pair in pairs if not status(*pair, runs, verdicts)]
     names = list(dict.fromkeys(name for name, _ in tested))
     while True:
         ui.out()
@@ -85,7 +86,7 @@ def pick(pairs: list, runs: dict, verdicts: dict, too_few: list) -> list | None:
         ui.out()
         named = cli.in_words(names) if len(names) <= 3 else f"{len(names)} AI models"
         choices = [
-            keys.Choice("Tested AI models", f"{named}: passed the test" if names else "none passed yet"),
+            keys.Choice("AI models with enough data", named if names else "none yet"),
             keys.Choice("Choose from a list", f"every one you've used, {len(pairs)} in all"),
             keys.Choice("Back"),
         ]
@@ -93,14 +94,14 @@ def pick(pairs: list, runs: dict, verdicts: dict, too_few: list) -> list | None:
         if picked is None or picked == 2:
             return None
         if picked == 0 and not tested:
-            ui.note("No AI model passed the test yet. Choose from the list, where each one says how sure it is.")
+            ui.note("No AI model has enough data yet. Choose from the list, where each one says how sure it is.")
             continue
         shown = tested if picked == 0 else pairs
         rows = [keys.Choice(_label(pair, shown), status(*pair, runs, verdicts)) for pair in shown]
         notes = []
         if picked == 1 and too_few:
-            listed = cli.in_words([f"{name} ({count:,})" for name, count in too_few])
-            notes.append(f"Too few of your tasks to forecast: {listed}.")
+            listed = cli.in_words([f"{name} ({count:,} run{'' if count == 1 else 's'})" for name, count in too_few])
+            notes.append(f"Not enough data to forecast {listed}.")
         ui.out()
         ticked = checklist.tick(rows, notes=notes)
         if ticked is not None:
@@ -108,10 +109,10 @@ def pick(pairs: list, runs: dict, verdicts: dict, too_few: list) -> list | None:
 
 
 def _label(pair: tuple, every: list) -> str:
-    """An AI model and its effort level, lined up with the others in the list."""
+    """An AI model and its effort level, lined up with the others in the list. The default level isn't named."""
     pad = max(len(name) for name, _ in every)
     name, effort = pair
-    return f"{name.ljust(pad)}  {effort or ''}".rstrip()
+    return f"{name.ljust(pad)}  {cli.shown_effort(effort)}".rstrip()
 
 
 def show(task: str, result: dict | None, predictor) -> str:

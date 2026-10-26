@@ -1,9 +1,10 @@
 """A list to pick from, 6 to a page, where several can be ticked.
 
 Enter picks the line you're on. To pick several, tick them with space first: Enter then picks the ticked ones.
-A choice's number picks it at once, as in every menu, or ticks it once some are ticked. The up and down arrows
-move, on to the next page at the end of one. The left and right arrows turn the page. Esc goes back. A
-terminal that can't pass single key presses gets each page numbered, and the numbers typed in.
+The choices are numbered on from one page to the next. A choice's number picks it at once, as in every menu,
+or ticks it once some are ticked. Two digits typed quickly make a number above 9. The up and down arrows move,
+on to the next page at the end of one. The left and right arrows turn the page. Esc goes back. A terminal that
+can't pass single key presses gets a page at a time, and the numbers typed in.
 """
 
 from __future__ import annotations
@@ -44,12 +45,17 @@ def tick(
             at = max(first - PAGE, 0)
         elif key == keys.SPACE:
             ticked ^= {at}
-        elif key.isdigit() and 1 <= int(key) <= min(PAGE, len(choices) - first):
-            at = first + int(key) - 1
+        elif key.isdigit():
+            picked, after = keys.number(key, read, len(choices))
+            if not 1 <= picked <= len(choices):
+                continue
+            at = picked - 1
             if not ticked:
                 _draw(choices, ticked, at, notes or [], drawn)
                 return [at]
             ticked ^= {at}
+            if after == keys.ENTER:  # Enter straight after the number goes on at once
+                return sorted(ticked)
 
 
 def pages(choices: list) -> int:
@@ -57,16 +63,17 @@ def pages(choices: list) -> int:
 
 
 def _page(choices: list[keys.Choice], ticked: set[int], first: int, at: int | None) -> list[str]:
-    """The page that starts at `first`: each choice numbered from 1 on the page, with its box, lined up."""
+    """The page that starts at `first`: each choice with its box, numbered on from the pages before, lined up."""
     shown = choices[first : first + PAGE]
     pad = max(ui.width(choice.label) for choice in choices)
+    digits = len(str(len(choices)))
     found = []
-    for number, choice in enumerate(shown, start=1):
-        place = first + number - 1
+    for place, choice in enumerate(shown, start=first):
         box = ui.accent(ui.mark("ticked")) if place in ticked else ui.dim(ui.mark("unticked"))
         lead = f"  {ui.accent(ui.mark('pick'))} " if place == at else "    "
         extra = pad - ui.width(choice.label)
-        found.append(keys.row(lead, choice.label, extra, choice.hint, place == at, f"{number}. {box} "))
+        label = f"{str(place + 1).rjust(digits)}. {box} "
+        found.append(keys.row(lead, choice.label, extra, choice.hint, place == at, label))
     return found
 
 
@@ -99,7 +106,8 @@ def _draw(choices, ticked: set[int], at: int, notes: list[str], drawn: int) -> i
 
 def _typed(choices: list[keys.Choice], notes: list[str]) -> list[int]:
     """The list for a terminal that can't pass single key presses: a page at a time, the numbers to pick typed in,
-    such as 2, or 1 3 for two. n and p turn the page, also between numbers, as in 1 n 2."""
+    such as 2, or 1 3 for two. The numbers go on from page to page, so any choice can be typed on any page. n and p
+    turn the page."""
     first = 0
     while True:
         for text in _page(choices, set(), first, None):
@@ -117,8 +125,8 @@ def _typed(choices: list[keys.Choice], notes: list[str]) -> list[int]:
                 first += PAGE
             elif word == "p":
                 first = max(first - PAGE, 0)
-            elif word.isdigit() and 1 <= int(word) <= min(PAGE, len(choices) - first):
-                picked.add(first + int(word) - 1)
+            elif word.isdigit() and 1 <= int(word) <= len(choices):
+                picked.add(int(word) - 1)
         if picked:
             return sorted(picked)
         if not reply:

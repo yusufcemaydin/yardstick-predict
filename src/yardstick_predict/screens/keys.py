@@ -30,8 +30,9 @@ class Choice:
     hint: str = ""
 
 
-def reader() -> Callable[[], str] | None:
-    """A way to read one key press at a time from this terminal, or None when it can't pass them."""
+def reader() -> Callable[..., str] | None:
+    """A way to read one key press at a time from this terminal, or None when it can't pass them. Given a number of
+    seconds, it waits that long at most, and gives an empty answer when no key came."""
     found = _terminal()
     if found is None:
         return None
@@ -55,7 +56,7 @@ def _terminal() -> str | None:
     return "posix"
 
 
-def _posix_key() -> str:
+def _posix_key(timeout: float | None = None) -> str:
     """The next key pressed, with the terminal set to pass each one at once and show none of them."""
     import select
     import termios
@@ -65,6 +66,8 @@ def _posix_key() -> str:
     saved = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd, termios.TCSANOW)  # Ctrl+C still stops it, and keys pressed ahead aren't thrown away
+        if timeout is not None and not select.select([fd], [], [], timeout)[0]:
+            return ""
         first = os.read(fd, 1)
         if first != b"\x1b":
             return _named(first.decode(errors="replace"))
@@ -77,9 +80,16 @@ def _posix_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
-def _windows_key() -> str:
+def _windows_key(timeout: float | None = None) -> str:
     import msvcrt
+    import time
 
+    if timeout is not None:
+        until = time.monotonic() + timeout
+        while not msvcrt.kbhit():
+            if time.monotonic() >= until:
+                return ""
+            time.sleep(0.02)
     first = msvcrt.getwch()
     if first in ("\x00", "\xe0"):  # an arrow key comes in two parts
         return _WINDOWS_ARROWS.get(msvcrt.getwch(), "")
@@ -102,13 +112,29 @@ PAGE = 6
 """How many choices a page of a long menu shows."""
 LONG = 9
 """A menu with more choices than this shows them a page at a time."""
+NEXT_DIGIT = 0.7
+"""Seconds to wait for a second digit after a first one, when the list is long enough for a two digit number."""
+
+
+def number(first: str, read: Callable[..., str], most: int) -> tuple[int, str]:
+    """The number typed, starting with the digit `first`. A digit typed straight after makes it longer, as long as
+    the number can still be one of the `most` choices. Returns it with the key pressed after it, when that wasn't a
+    digit, or an empty one."""
+    typed = first
+    while int(typed) * 10 <= most:
+        more = read(NEXT_DIGIT)
+        if not more.isdigit():
+            return int(typed), more
+        typed += more
+    return int(typed), ""
 
 
 def choose(choices: list[Choice], footer: list[str] | None = None, start: int = 0) -> int | None:
     """Show a menu and return the number of the choice made, from 0. None when Esc goes back.
 
     `footer` lines go under the choices, such as which keys do what. A menu of more than 9 choices shows 6 at a
-    time. The left and right arrows turn its page, and a number picks a choice on the page shown.
+    time, numbered on from one page to the next. The left and right arrows turn its page. A choice's number picks
+    it, on any page, and two digits typed quickly make a number above 9.
     """
     keys = reader()
     if keys is None:
@@ -120,7 +146,6 @@ def choose(choices: list[Choice], footer: list[str] | None = None, start: int = 
         drawn = _draw(choices, at, footer, drawn, paged)
         key = keys()
         first = at - at % PAGE if paged else 0
-        shown = min(PAGE, len(choices) - first) if paged else len(choices)
         if key == ENTER:
             return at
         if key == ESC:
@@ -133,10 +158,11 @@ def choose(choices: list[Choice], footer: list[str] | None = None, start: int = 
             at = first + PAGE
         elif key == LEFT and paged:
             at = max(first - PAGE, 0)
-        elif key.isdigit() and 1 <= int(key) <= shown:
-            at = first + int(key) - 1
-            _draw(choices, at, footer, drawn, paged)
-            return at
+        elif key.isdigit():
+            picked, _ = number(key, keys, len(choices))
+            if 1 <= picked <= len(choices):
+                _draw(choices, picked - 1, footer, drawn, paged)
+                return picked - 1
 
 
 def hint(back: str) -> str:
@@ -151,7 +177,7 @@ def _draw(choices: list[Choice], at: int, footer: list[str], drawn: int, paged: 
         return redraw([*_lines(choices, at), "", *notes(footer)], drawn)
     first = at - at % PAGE
     pad = max(ui.width(choice.label) for choice in choices)
-    page = _lines(choices[first : first + PAGE], at - first, pad)
+    page = _lines(choices[first : first + PAGE], at - first, pad, first, len(choices))
     page += [""] * (PAGE - len(page))
     count = -(-len(choices) // PAGE)
     status = f"Page {first // PAGE + 1} of {count}, {len(choices)} in all"
@@ -196,14 +222,21 @@ def row(lead: str, label: str, pad: int, hint: str, picked: bool = False, prefix
     return f"{shown}{' ' * (pad + 2)}{ui.dim(ui.cut(hint, space))}"
 
 
-def _lines(choices: list[Choice], at: int | None, pad: int | None = None) -> list[str]:
-    """Each choice on its own line, numbered, with what it does lined up after it and the one picked marked."""
+def _lines(
+    choices: list[Choice], at: int | None, pad: int | None = None, before: int = 0, every: int | None = None
+) -> list[str]:
+    """Each choice on its own line, numbered, with what it does lined up after it and the one picked marked.
+
+    On a page of a long menu, `before` is how many choices the earlier pages hold, so numbers go on from them, and
+    `every` is how many there are in all, so the numbers line up."""
     pad = max(ui.width(choice.label) for choice in choices) if pad is None else pad
+    digits = len(str(every or len(choices)))
     found = []
-    for number, choice in enumerate(choices, start=1):
-        lead = f"  {ui.accent(ui.mark('pick'))} " if number - 1 == at else "    "
+    for place, choice in enumerate(choices):
+        lead = f"  {ui.accent(ui.mark('pick'))} " if place == at else "    "
         extra = pad - ui.width(choice.label)
-        found.append(row(lead, choice.label, extra, choice.hint, number - 1 == at, f"{number}. "))
+        label = f"{str(before + place + 1).rjust(digits)}. "
+        found.append(row(lead, choice.label, extra, choice.hint, place == at, label))
     return found
 
 

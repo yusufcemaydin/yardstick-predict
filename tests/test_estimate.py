@@ -193,7 +193,7 @@ def test_every_long_step_shows_a_bar_in_a_terminal(capsys, monkeypatch, records,
     flags = ["--model-type", "quick", "--features", "", "--archive", f"claude-code={records}"]
     assert main(["create", "other", "--yes", *flags]) == 0
     out = ANSI.sub("", said(capsys))
-    assert "Training and testing" in out and " steps" not in out
+    assert "Training, then checking its forecasts" in out and " steps" not in out
 
 
 def test_text_outside_english_counts_by_its_bytes():

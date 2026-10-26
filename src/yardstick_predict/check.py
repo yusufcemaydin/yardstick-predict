@@ -232,13 +232,21 @@ def title(name: str) -> str:
 
 def summary(by_model: dict[str, dict]) -> str:
     """The latest verdicts on one feature in a few words, such as "Last check: helped claude-opus-5-5." Empty
-    when there are none."""
+    when there are none. Each kind of verdict is a sentence of its own."""
+    said = sentences(by_model)
+    return f"Last check: {said[0].lower()}{said[1:]}" if said else ""
+
+
+def sentences(by_model: dict[str, dict]) -> str:
+    """The verdicts on one feature for each AI model, a sentence for each kind of verdict, such as "Helped a and b.
+    Didn't help c." Empty when there are none."""
     said = []
-    for kind, words in ((HELPED, "helped"), (NO_HELP, "didn't help"), (NOT_ENOUGH, "not enough data for")):
+    for kind, words in ((HELPED, "Helped"), (NO_HELP, "Didn't help"), (NOT_ENOUGH, "Not enough data for")):
         models = [model for model, found in by_model.items() if found.get("verdict") == kind]
         if models:
-            said.append(f"{words} {', '.join(models)}")
-    return f"Last check: {'; '.join(said)}." if said else ""
+            listed = models[0] if len(models) == 1 else ", ".join(models[:-1]) + " and " + models[-1]
+            said.append(f"{words} {listed}.")
+    return " ".join(said)
 
 
 # Remembering the verdicts ------------------------------------------------------------------------------

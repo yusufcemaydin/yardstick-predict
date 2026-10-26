@@ -11,6 +11,9 @@ The label disappears because `ui.working` prints "Looking for new tasks" and `ui
 ## Words
 
 - Every screen calls a predictor a **model**, as Cem does. The models a forecast is about, such as claude-opus-5-5, stay **AI models**.
+- Screens never talk about the test. These show **not enough data**: an AI model whose forecasts were often wrong on your past tasks, one with too few tasks to check and one that ran fewer than 30 tasks at an effort level. One never used shows **no data**. One with enough data needs no word.
+- The **default** effort level is what the records call a task run without one set. No one picks it. Lists leave it out when the AI model ran at a named level too. An AI model that ran only at the default level shows with no level.
+- A long list numbers its choices on from one page to the next. Two digits typed quickly pick a number above 9.
 - Models show the names you gave them. The default model has `(default)` after its name in every list.
 - Command names and every `--json` field stay as they are, so scripts keep working.
 
@@ -74,7 +77,7 @@ Use plain `input()`. Enter on its own goes back home. Then, step by step:
 ```
   Which AI models should it forecast?
 
-  › 1. Tested AI models    claude-opus-5-5 and claude-fable-5: passed the test
+  › 1. AI models with enough data  claude-opus-5-5 and claude-fable-5
     2. Choose from a list  every one you've used, 15 in all
     3. Back
 ```
@@ -82,9 +85,9 @@ Use plain `input()`. Enter on its own goes back home. Then, step by step:
 Each choice opens a list of AI models at their effort levels, 6 to a page, with nothing ticked. Enter forecasts the line you're on. A number picks its line at once, as in every menu. To forecast several, tick them with space first. Enter then forecasts the ticked ones. A number ticks too. The left and right arrows turn the page. Under the full list, it names the AI models with too few tasks to forecast. Every line fits an 80 column terminal. So the list redraws in place.
 
 ```
-  › 1. ○ claude-opus-5-5   max      passed the test
-    2. ○ claude-opus-5-5   high     ⚠ only 11 runs
-    3. ○ claude-opus-5     max      ⚠ failed the test
+  › 1. ○ claude-opus-5-5   max
+    2. ○ claude-opus-5-5   high     ⚠ not enough data
+    3. ○ claude-opus-5     max      ⚠ not enough data
 
   Page 1 of 3
   ↑↓ move · enter forecast this one · space tick several · ←→ page · esc go back

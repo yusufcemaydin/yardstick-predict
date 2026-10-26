@@ -29,8 +29,10 @@ def pressing(monkeypatch, *pressed: str) -> list[str]:
     """A person in a terminal that passes single key presses, who presses these keys in turn."""
     waiting = list(pressed)
 
-    def key() -> str:
+    def key(timeout=None) -> str:
         if not waiting:
+            if timeout is not None:
+                return ""  # no key came in time, as when a person stops after one digit
             pytest.fail("It waited for a key no one pressed")
         return waiting.pop(0)
 
@@ -205,15 +207,16 @@ def test_estimate_asks_which_ai_models_then_what_next(capsys, monkeypatch, quick
     out = plain(capsys.readouterr().out)
     assert asked == ["›"]  # the task is asked once, and kept for other AI models
     assert "Which AI models should it forecast?" in out
-    assert "1. Tested AI models    claude-opus-5-5: passed the test" in out
-    assert "2. Choose from a list  every one you've used, 2 in all" in out
-    assert re.search(r"○ claude-opus-5-5\s+max\s+passed the test", out)  # nothing starts ticked
-    assert re.search(r"○ gpt-6\.1-sol\s+max\s+⚠ failed the test", out)
+    assert re.search(r"1\. AI models with enough data\s+claude-opus-5-5\n", out)
+    assert re.search(r"2\. Choose from a list\s+every one you've used, 2 in all", out)
+    assert re.search(r"○ claude-opus-5-5\s+max\n", out)  # nothing starts ticked, and enough data needs no word
+    assert re.search(r"○ gpt-6\.1-sol\s+max\s+⚠ not enough data", out)
+    assert "test" not in out.replace("yardstick", "")
     assert "enter forecast this one" in out
     first, second = out.split("Choose other AI models  for the same task", 1)
     table = first.split("AI model")[-1]
     assert re.search(r"claude-opus-5-5\s+max\s+60 s", table) and "gpt-6.1-sol" not in table  # only the one chosen
-    assert re.search(r"gpt-6\.1-sol\s+⚠\s+max\s+60 s", second) and "Failed the test: gpt-6.1-sol." in second
+    assert re.search(r"gpt-6\.1-sol\s+⚠\s+max\s+60 s", second) and "Not enough data: gpt-6.1-sol." in second
     assert "1. Estimate another task" in out and "3. Back to home" in out
     assert out.count("What would you like to do?") == 2  # home only when asked for
 
@@ -226,7 +229,7 @@ def test_enter_picks_the_line_you_are_on_and_space_ticks_several_across_pages(ca
     assert checklist.tick(rows) == [1]  # nothing ticked: Enter picks the line it's on
     pressing(monkeypatch, "3")
     assert checklist.tick(rows) == [2]  # a number picks at once, as in every menu
-    pressing(monkeypatch, keys.DOWN, keys.SPACE, keys.RIGHT, "1", keys.ENTER)
+    pressing(monkeypatch, keys.DOWN, keys.SPACE, keys.RIGHT, "7", keys.ENTER)
     assert checklist.tick(rows) == [1, 6]  # once one is ticked, a number ticks too, on any page
     out = plain(capsys.readouterr().out)
     assert "enter forecast this one" in out and "enter forecast the 2 ticked" in out
@@ -240,7 +243,7 @@ def test_a_list_without_single_keys_takes_typed_numbers(capsys, monkeypatch):
 
     monkeypatch.setattr(keys, "reader", lambda: None)
     rows = [keys.Choice(f"model {number}") for number in range(8)]
-    typing(monkeypatch, "", "2 n 1")
+    typing(monkeypatch, "", "2 7")  # the numbers go on from page to page
     assert checklist.tick(rows) == [1, 6]
     assert "Type at least one number." in plain(capsys.readouterr().out)
 
@@ -276,7 +279,7 @@ def test_forecasts_show_six_to_a_page(capsys, monkeypatch, quick, ready):
     trained("main", {f"claude-model-{number}": True for number in range(8)})
     typing(monkeypatch, "fix the parser")
     # Tested AI models, tick all 8 across the two pages, then the next page of forecasts, then home.
-    ticks = [keys.SPACE, "2", "3", "4", "5", "6", keys.RIGHT, "1", "2", keys.ENTER]
+    ticks = [keys.SPACE, "2", "3", "4", "5", "6", keys.RIGHT, "7", "8", keys.ENTER]
     pressing(monkeypatch, "1", "1", *ticks, "1", "4", keys.ESC)
     assert main([]) == 0
     out = plain(capsys.readouterr().out)
@@ -284,7 +287,7 @@ def test_forecasts_show_six_to_a_page(capsys, monkeypatch, quick, ready):
     assert [page[:6] for page in pages] == ["1 of 2", "2 of 2"]
     assert len(re.findall(r"claude-model-\d\s+max", pages[0].split("Under each")[0].split("AI model")[1])) == 6
     assert re.search(r"1\. Next page\s+forecasts 7 on", out) and "1. Previous page" in pages[1]
-    assert "1. Tested AI models    8 AI models: passed the test" in out  # too many to name on one line
+    assert re.search(r"1\. AI models with enough data\s+8 AI models\n", out)  # too many to name on one line
 
 
 # Fitting the terminal -----------------------------------------------------------------------------------------
@@ -300,11 +303,16 @@ def widest(out: str) -> int:
 
 def test_a_long_menu_shows_6_at_a_time_and_turns_the_page(capsys, monkeypatch):
     rows = [keys.Choice(f"model {number}", "updated 1 hour ago") for number in range(12)] + [keys.Choice("Back")]
-    pressing(monkeypatch, keys.RIGHT, "1")
-    assert keys.choose(rows) == 6  # the first on the second page
+    pressing(monkeypatch, keys.RIGHT, "7")
+    assert keys.choose(rows) == 6  # the first on the second page, numbered on from the first page
     out = plain(capsys.readouterr().out)
     assert "Page 1 of 3, 13 in all" in out and "Page 2 of 3, 13 in all" in out and "turn the page" in out
     assert "model 6" not in out.split("Page 1 of 3")[0]  # the first page shows 6
+    assert re.search(r" 7\. model 6 ", out) and re.search(r"12\. model 11 ", out)
+    pressing(monkeypatch, "1", "2")
+    assert keys.choose(rows) == 11  # two digits typed quickly make 12
+    pressing(monkeypatch, "1")
+    assert keys.choose(rows) == 0  # one digit and then nothing is 1
     pressing(monkeypatch, keys.UP, keys.ENTER)  # up from the first goes round to Back, on the last page
     assert keys.choose(rows) == 12
 
@@ -365,7 +373,7 @@ def test_the_forecast_table_cuts_a_long_ai_model_name_to_fit(capsys, monkeypatch
     ]
     cli.show_forecasts("x", {"predictor": "main", "forecasts": forecasts})
     out = capsys.readouterr().out
-    assert widest(out) < 80 and "claude-some-really" in out and "Failed the test: " + name in " ".join(out.split())
+    assert widest(out) < 80 and "claude-some-really" in out and "Not enough data: " + name in " ".join(out.split())
 
 
 def test_a_narrow_terminal_gets_each_forecast_as_a_block(capsys, monkeypatch):
@@ -390,6 +398,37 @@ def test_a_narrow_terminal_gets_each_forecast_as_a_block(capsys, monkeypatch):
     assert re.search(r"claude-opus-5  ⚠  xhigh\n    time\s+4 min  \S+ to \S+ min\n    tokens\s+20\.6M", text)
     assert re.search(r"claude-opus-5-5  max\n    time\s+16 min", text)  # names are never cut
     assert "Beside each forecast is the range" in " ".join(text.split())
+
+
+@pytest.mark.parametrize("width", [80, 45])
+def test_status_says_how_close_forecasts_came_in_plain_words_and_fits(capsys, monkeypatch, quick, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    predictor = made("main")
+    scores = {"better_than_simple_rule": 0.12, "in_90_range": 0.88}
+    report = {
+        "tested_on": 300,
+        "min_tasks_to_test": 60,
+        "models": {
+            "claude-opus-5-5": {"served": True, "reason": None, "tasks_tested": 200, "tasks": 600,
+                                "failed_checks": [], "seconds": scores, "tokens": scores, "usd": scores},
+            "gpt-6.1-sol": {"served": False, "reason": "not_accurate_enough", "tasks_tested": 100, "tasks": 330,
+                            "failed_checks": ["seconds.simple_rule"],
+                            "seconds": {"better_than_simple_rule": -0.42, "in_90_range": 0.45}},
+            "claude-haiku-5-5": {"served": False, "reason": "not_enough_data", "tasks_tested": 0, "tasks": 6,
+                                 "failed_checks": []},
+        },
+    }  # fmt: skip
+    meta = {"tasks": 600, "report": report, "categories": {"model": list(report["models"])}}
+    (predictor.model_dir / "model.json").write_text(json.dumps(meta))
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    text = " ".join(plain(out).split())
+    assert "How close its forecasts came on each AI model's newest tasks, 300 in all" in text
+    assert re.search(r"claude-opus-5-5 (✓ )?forecasts on(,| ·) checked on 200 tasks", text)
+    assert re.search(r"gpt-6\.1-sol (⚠ )?not enough data(,| ·) checked on 100 tasks", text)
+    assert "Time forecasts were 42% worse than the simple rule." in text
+    assert re.search(r"claude-haiku-5-5 (⚠ )?not enough data(,| ·) 6 tasks, needs 60", text)
+    assert not re.search(r"\btest", text.lower()) and widest(out) < width  # no word about a test
 
 
 def test_the_setup_features_screen_fits_80_columns(capsys, monkeypatch):
@@ -482,6 +521,28 @@ def curve(mu: float, sigma: float) -> dict:
 TARGETS = ("seconds", "tokens", "usd")
 
 
+def test_the_default_effort_level_is_never_offered_to_a_person(capsys):
+    trained("main", {"claude-opus-5-5": True, "claude-sonnet-5": True, "claude-sonnet-4-6": True})
+    meta = json.loads((Predictor("main").model_dir / "model.json").read_text())
+    meta["effort_counts"] = {
+        "claude-opus-5-5": [["max", 200], ["default", 70], ["high", 40]],
+        "claude-sonnet-5": [["default", 58], ["high", 5]],  # its named level is rare, but it's the one shown
+        "claude-sonnet-4-6": [["default", 40]],  # it ran only at the default level, so no level is named
+    }
+    pairs, runs, _ = cli.every_pair(Predictor("main"), None, meta)
+    assert pairs == [
+        ("claude-opus-5-5", "max"),
+        ("claude-opus-5-5", "high"),
+        ("claude-sonnet-5", "high"),
+        ("claude-sonnet-4-6", None),
+    ]
+    assert cli.for_people([("m", "max"), ("m", "default"), ("n", "default")]) == [("m", "max"), ("n", None)]
+    forecasts = [{"model": "claude-sonnet-4-6", "effort": "default", "seconds": 60.0, "tokens": 1000, "usd": 0.1}]
+    made("other")
+    cli.show_forecasts("x", {"predictor": "other", "forecasts": forecasts}, screen=True)
+    assert "default" not in plain(capsys.readouterr().out).split("AI model")[1].split("Learned")[0]
+
+
 def test_the_range_is_where_the_curve_holds_9_results_in_10():
     from yardstick_predict.forecast import likely_range
 
@@ -531,10 +592,9 @@ def test_the_forecast_table_shows_ranges_and_warns_on_rough_forecasts(capsys):
     # Under it, its range: 900 seconds' curve holds 9 results in 10 from about 466 to 1,738 seconds.
     assert re.search(r"\n\s+8 to 29 min\s+\d+ to [\d,.]+[kM]?\s+\$[\d.]+k? to \$[\d.]+k?\s*\n", out)
     assert re.search(r"⚠\s+high\s+5 min\s+7\.7M\s+\$3\.18", out)  # marked, with why under the table
-    assert "⚠ Few runs: claude-opus-5-5 at high (11)." in out
-    assert "⚠ Failed the test: gpt-6.1-sol." in out and "⚠ Not tested yet: gpt-6-astra." in out
-    squashed = " ".join(out.split())  # notes are broken to fit the terminal
-    assert "Too few of your tasks to forecast: claude-haiku-5-5 (6) and claude-opus-4-7 (3)." in squashed
+    squashed = " ".join(out.split())
+    assert "⚠ Not enough data: claude-opus-5-5 at high, gpt-6.1-sol and gpt-6-astra." in squashed
+    assert "Not enough data to forecast claude-haiku-5-5 (6 runs) and claude-opus-4-7 (3 runs)." in squashed
     assert "Under each forecast is the range it lands in 9 times out of 10." in out
     assert "Those are a rough guide. Plan with a wider margin there." in out
     assert "Create a fun game" not in out and "model main, updated" in out and "--json" not in out
@@ -544,7 +604,7 @@ def test_the_forecast_table_shows_ranges_and_warns_on_rough_forecasts(capsys):
     assert "Create a fun game" in out and "predictor main, updated" in out and "add --json for details" in squashed
 
 
-def test_a_program_never_gets_a_forecast_that_failed_the_test_but_a_person_sees_it_marked(
+def test_a_program_never_gets_a_forecast_with_not_enough_data_but_a_person_sees_it_marked(
     capsys, monkeypatch, quick, ready
 ):
     embedding = {"model": "voyage-4", "dimensions": 256}
@@ -558,7 +618,7 @@ def test_a_program_never_gets_a_forecast_that_failed_the_test_but_a_person_sees_
     monkeypatch.setattr(cli, "terminal_output", lambda: True)
     assert main(["predict", "fix it", "--model", "gpt-6.1-sol"]) == 0
     out = plain(capsys.readouterr().out)
-    assert re.search(r"gpt-6\.1-sol\s+⚠\s+60 s", out) and "Failed the test: gpt-6.1-sol." in out
+    assert re.search(r"gpt-6\.1-sol\s+⚠\s+60 s", out) and "Not enough data: gpt-6.1-sol." in out
 
 
 # Models -------------------------------------------------------------------------------------------------------

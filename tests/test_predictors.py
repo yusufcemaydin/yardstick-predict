@@ -148,9 +148,17 @@ def test_status_shows_the_coverage_the_features_listing_counts(capsys, quickly):
 
     code, out = run(capsys, "status")
     assert code == 0
-    line = next(line for line in out.splitlines() if line.strip().startswith("Coverage"))
+    # The line is broken to fit the terminal, so its parts are read back together.
+    lines = out.splitlines()
+    start = next(number for number, line in enumerate(lines) if line.strip().startswith("Coverage"))
+    end = next(
+        number
+        for number in range(start + 1, len(lines))
+        if not lines[number].startswith("  ") or lines[number].strip().startswith(("Features", "Trained", "Its "))
+    )
+    line = " ".join(part.strip() for part in lines[start:end])
     expected = ", ".join(f"{title} {share:.0%}" for title, share in shares.items())
-    assert line.strip() == f"Coverage of the 40 tasks it can learn from: {expected}"
+    assert line == f"Coverage of the 40 tasks it can learn from: {expected}"
 
     code, out = run(capsys, "status", "--json")
     found = json.loads(out)

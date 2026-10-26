@@ -48,10 +48,11 @@ from .store import (
 
 SIMPLE_RULE = "The simple rule gives every task on a model the same forecast: the spread of that model's past tasks."
 REASONS = {
-    "unknown_model": "no forecast: no past tasks on this model",
-    "not_enough_data": "no forecast yet: too few tasks on this model",
-    "not_accurate_enough": "no forecast: it didn't pass the test",
+    "unknown_model": "no data",
+    "not_enough_data": "not enough data",
+    "not_accurate_enough": "not enough data",
 }
+"""Why an AI model in a person's table has no forecast, in plain words. A program gets the reason's code."""
 
 
 def interactive() -> bool:
@@ -327,7 +328,7 @@ def feature_summary(config: dict) -> str:
         if name == "llm" and how.get("provider") in llm.PROVIDERS:
             label += f", by {llm.title(how['model'])} through {llm.PROVIDERS[how['provider']].title.lower()}"
         found.append(label)
-    return "; ".join(found)
+    return in_words(found)
 
 
 def unknown_features_note(predictor: Predictor) -> None:
@@ -496,63 +497,94 @@ def thresholds(report: dict) -> dict:
 
 
 def print_report(meta: dict) -> None:
-    """How the test went for each AI model, from the meta a trained model saves."""
+    """How close the forecasts came on each AI model's newest tasks, from the meta a trained model saves. It's said
+    in plain words: an AI model whose forecasts weren't close enough, or had too few tasks to show it, has not
+    enough data."""
     report = meta.get("report") or {}
     needed = report.get("min_tasks_to_test") or 60
     if not report.get("tested_on"):
-        ui.note(
-            f"There aren't enough tasks to test forecasts yet. Each AI model needs {needed:,} of its own. "
+        wrapped_note(
+            f"There's not enough data to check its forecasts yet. Each AI model needs {needed:,} tasks of its own. "
             "Until then, it gives no forecasts."
         )
         return
     checks = thresholds(report)
     least = checks["min_test_tasks"]
-    ui.line(f"Tested on each AI model's newest tasks, {report['tested_on']:,} in all, as if they hadn't happened yet.")
+    for part in ui.wrapped(
+        f"How close its forecasts came on each AI model's newest tasks, {report['tested_on']:,} in all, "
+        "as if they hadn't happened yet:"
+    ):
+        ui.line(part)
     ui.line()
     names = {"seconds": "time", "tokens": "tokens", "usd": "cost"}
     results = [(name, report["models"][name]) for name in tested_models(report)]
     if not results:
         return
     pad = max(len(name) for name, _ in results)
-    flags = {"ok": ui.green(ui.mark("ok")), "fail": ui.red(ui.mark("fail")), "none": ui.dim("-")}
+    flags = {"ok": ui.green(ui.mark("ok")), "thin": ui.yellow(ui.mark("warn"))}
     lead = pad + 3 + (2 if ui.styled() else 0)
 
     def flag(kind: str) -> str:
         return f"{flags[kind]} " if ui.styled() else ""
 
+    def verdict(name: str, label: str, mark: str, words: list[str]) -> None:
+        """An AI model's line: its name, then what came of its forecasts. Too wide, the words go under the name."""
+        shown = f"{label}   {mark}" + ui.join(words)
+        if ui.width(shown) < ui.columns() - 2:
+            ui.line(shown)
+            return
+        ui.line(ui.bold(ui.cut(name, ui.columns() - 3)))
+        for part in ui.wrapped(", ".join(words), 4 + ui.width(mark)):
+            ui.line(f"  {mark}{part}")
+            mark = " " * ui.width(mark)
+
+    def why(text: str) -> None:
+        """A reason under an AI model's line, broken to fit the terminal."""
+        for part in ui.wrapped(text, 2 + lead):
+            ui.line(" " * lead + ui.dim(part))
+
     for name, result in results:
         tested = result["tasks_tested"]
         label = ui.bold(name) + " " * (pad - len(name))
         if result["served"]:
-            ui.line(f"{label}   {flag('ok')}" + ui.join(["forecasts on", f"tested on {tested:,} tasks"]))
+            verdict(name, label, flag("ok"), ["forecasts on", f"checked on {tested:,} tasks"])
             scores = [(names[t], result[t]) for t in names if t in result]
             if scores:
                 better = [f"{n} {s['better_than_simple_rule']:.0%}" for n, s in scores]
                 rows = [(ui.dim("better than the simple rule"), *better)]
                 if all(s.get("in_90_range") is not None for _, s in scores):
                     rows.append((ui.dim("inside the 90% range"), *(f"{n} {s['in_90_range']:.0%}" for n, s in scores)))
-                ui.table(rows, indent=2 + lead)
+                # Lined up under the AI model's words when that fits the terminal, else closer to the edge. A
+                # terminal too narrow for the table gets each line as words broken to fit.
+                wide = sum(max(ui.width(row[i]) for row in rows) + 3 for i in range(len(rows[0]))) - 3
+                if 4 + wide < ui.columns():
+                    ui.table(rows, indent=2 + lead if 2 + lead + wide < ui.columns() else 4)
+                else:
+                    for label, *values in rows:
+                        for part in ui.wrapped(f"{ui.plain(label)}: {', '.join(values)}", 4):
+                            ui.line(f"  {ui.dim(part)}")
         elif result["reason"] == "not_enough_data":
             count = result.get("tasks")
             if tested == 0 and isinstance(count, int) and count < needed:
-                why = f"{count:,} tasks, needs {needed}"
+                short = f"{count:,} tasks, needs {needed}"
             elif tested == 0:
-                why = f"needs {least} recent tasks to test it on"
+                short = f"needs {least} recent tasks"
             elif tested < least:
-                why = f"{tested} test tasks, needs {least}"
+                short = f"{tested} recent tasks, needs {least}"
             else:
-                why = "too few known values to test its time, tokens or cost"
-            ui.line(f"{label}   {flag('none')}" + ui.join(["not yet", why]))
+                short = "too few known times, tokens or costs"
+            verdict(name, label, flag("thin"), ["not enough data", short])
         else:
-            ui.line(f"{label}   {flag('fail')}" + ui.join(["no forecasts", f"tested on {tested:,} tasks"]))
+            verdict(name, label, flag("thin"), ["not enough data", f"checked on {tested:,} tasks"])
             for failed in result.get("failed_checks", []):
-                ui.line(" " * lead + ui.dim(failed_check(failed, result, names, checks)))
+                why(failed_check(failed, result, names, checks))
     ui.line()
-    ui.note(SIMPLE_RULE)
+    wrapped_note(SIMPLE_RULE)
 
 
 def failed_check(failed: str, result: dict, names: dict, checks: dict | None = None) -> str:
-    """One failed check, in plain words. `checks` holds the test's thresholds, as thresholds() gives them."""
+    """Why an AI model's forecasts weren't close enough, in plain words. `checks` holds the bars they had to clear,
+    as thresholds() gives them."""
     checks = checks or thresholds({})
     target, check = failed.split(".")
     scores = result[target]
@@ -982,7 +1014,7 @@ def train_and_report(predictor: Predictor, train):
 
     ui.heading("Training")
     # The built-in model's bar takes this line's place. A model type from a plugin keeps it.
-    ui.working("Training and testing. This takes a minute")
+    ui.working("Training, then checking its forecasts. This takes a minute")
     try:
         model = train(predictor, lambda done, total: ui.progress(done, total, "steps"))
     except NotEnoughData as error:
@@ -1008,7 +1040,7 @@ def say_how_to_use(model, name: str, full: bool = True) -> None:
         return
     ui.heading("Ready")
     if not served:
-        ui.line("No AI model passed the test yet, so forecasts come back empty, with the reason.")
+        ui.line("No AI model has enough data yet, so forecasts come back empty, with the reason.")
         ui.note("Run yardstick-predict again once you have more tasks. It adds them and retrains.")
         return
     is_default = default_name() == name
@@ -1056,7 +1088,7 @@ def run_check(predictor: Predictor):
 
     ui.heading("Feature check")
     # The bar takes this line's place once the first trial model is being fitted.
-    ui.working("Testing the model with every feature, then without each one")
+    ui.working("Comparing forecasts with every feature, then without each one")
     try:
         result = check.run(check.inputs(predictor), lambda done, total: ui.progress(done, total, "steps"))
     except NotEnoughData as error:
@@ -1072,7 +1104,8 @@ def say_checked(result) -> None:
     """Say how many features the check tested, on how many of the AI models' newest tasks."""
     count = len(result.features)
     tested = result.report.get("tested_on", 0)
-    ui.ok(f"Checked {count} feature{'' if count == 1 else 's'} on {tested:,} test task{'' if tested == 1 else 's'}.")
+    tasks = f"{tested:,} newest task{'' if tested == 1 else 's'}"
+    ui.ok(f"Checked {count} feature{'' if count == 1 else 's'} on your {tasks}.")
 
 
 def show_check(result) -> None:
@@ -1082,34 +1115,46 @@ def show_check(result) -> None:
     tested = [model for model in result.models if result.tasks_tested(model)]
     if not tested:
         needed = result.report.get("min_tasks_to_test") or 60
-        ui.note(f"There aren't enough tasks to check the features yet. Each AI model needs {needed:,} of its own.")
+        wrapped_note(
+            f"There's not enough data to check the features yet. Each AI model needs {needed:,} tasks of its own."
+        )
         return
-    ui.line("Tested on each AI model's newest tasks, with every feature and then without each one.")
+    for part in ui.wrapped("Forecasts of each AI model's newest tasks, with every feature and then without each one:"):
+        ui.line(part)
     ui.line()
     looks = {check.HELPED: ui.green, check.NO_HELP: str, check.NOT_ENOUGH: ui.dim}
     rows = [("", *(ui.dim(model) for model in tested))]
     for name in result.features:
         found = [result.verdicts[name][model]["verdict"] for model in tested]
         rows.append((ui.bold(check.title(name)), *(looks[kind](check.WORDS[kind]) for kind in found)))
-    ui.table(rows)
+    wide = 2 + sum(max(ui.width(row[i]) for row in rows) + 3 for i in range(len(rows[0]))) - 3
+    if wide < ui.columns():
+        ui.table(rows)
+    else:
+        # A column for each AI model would run past the terminal's edge, so each feature says it in words.
+        for name in result.features:
+            ui.line(ui.bold(check.title(name)))
+            by_model = {model: result.verdicts[name][model] for model in tested}
+            for part in ui.wrapped(check.sentences(by_model), 4):
+                ui.line(f"  {part}")
     ui.line()
-    ui.note(f"A feature helped when an AI model's test scored more than {check.WORSE_BY:.0%} worse without it.")
-    ui.note(
-        f"Not enough data: the AI model had too few tasks to test, or under {check.LEAST_SHARE:.0%} of its test "
-        "tasks, or of the earlier tasks the test learned from, had the feature."
+    wrapped_note(f"A feature helped when an AI model's forecasts were over {check.WORSE_BY:.0%} worse without it.")
+    wrapped_note(
+        f"Not enough data: the AI model had too few tasks. Or under {check.LEAST_SHARE:.0%} of its newest tasks had "
+        "the feature, or of the tasks before them."
     )
     short = check.sampled_too_little(result)
     if "llm" in result.alone and len(short) < len(tested):
-        ui.note(
-            "LLM analysis read only some of your tasks, so it was judged on those alone: the test learned from "
-            "and forecast only tasks it read, with it and without it."
+        wrapped_note(
+            "LLM analysis read only some of your tasks. So it was judged on those alone: the forecasts with it and "
+            "without it learned from and forecast only the tasks it read."
         )
     untested = [model for model in result.models if not result.tasks_tested(model)]
     if untested:
-        ui.note(f"Too few tasks to test: {', '.join(untested)}.")
+        wrapped_note(f"Not enough data: {in_words(untested)}.")
     if short:
-        ui.note(
-            f"LLM analysis read only a sample of your tasks, too few to judge it for {', '.join(short)}. To judge "
+        wrapped_note(
+            f"LLM analysis read only a sample of your tasks, too few to judge it for {in_words(short)}. To judge "
             "it fully, keep it, let it read the rest, then run: yardstick-predict check"
         )
 
@@ -1395,6 +1440,7 @@ def forecast_request(args, prompt: str | None, rough: bool = False) -> tuple[Pre
     else:
         models = list(dict.fromkeys(args.model)) or forecast_models(predictor, model.meta)
         pairs = effort_pairs(predictor, models, args.effort, model.meta)
+        pairs = for_people(pairs) if rough else pairs
     result = forecast_pairs(predictor, model, prompt, pairs, args, rough, runs)
     if rough:
         result["too_few"] = too_few
@@ -1422,23 +1468,40 @@ def forecast_pairs(predictor: Predictor, model, prompt: str, pairs: list, args, 
     for forecast in result["forecasts"]:
         forecast["task"] = "task"
         if rough:
-            forecast["runs"] = (runs or {}).get((forecast["model"], forecast.get("effort")))
+            # A pair asked with no effort level comes back with the level the AI model ran at most.
+            found, name = runs or {}, forecast["model"]
+            forecast["runs"] = found.get((name, forecast.get("effort")), found.get((name, None)))
     return result
 
 
 SHOWN_FROM = 10
 """A person's table shows an AI model at an effort level once it ran this many tasks at it."""
 FEW_RUNS = 30
-"""Below this many tasks at an effort level, the table warns that the forecast rests on few runs."""
+"""Below this many tasks at an effort level, the table warns that there's not enough data."""
+DEFAULT_EFFORT = "default"
+"""What the records call the effort level of a task run without one set. No one picks it, so a person's lists
+leave it out when the AI model ran at a named level too, and never show the word."""
+
+
+def for_people(pairs: list[tuple[str, str | None]]) -> list[tuple[str, str | None]]:
+    """The pairs a person's table shows: none at the default effort level when the AI model has a named one too. An
+    AI model that ran only at the default level is forecast with no level named."""
+    named = {model for model, effort in pairs if effort and effort != DEFAULT_EFFORT}
+    return [
+        (model, None if effort == DEFAULT_EFFORT else effort)
+        for model, effort in pairs
+        if not (effort == DEFAULT_EFFORT and model in named)
+    ]
 
 
 def every_pair(
     predictor: Predictor, effort: str | None, meta: dict
 ) -> tuple[list[tuple[str, str | None]], dict, list[tuple[str, int]]]:
-    """For a person's table: every AI model the predictor knows, at each effort level it ran 10 tasks at, or at
-    its most common level when its tasks spread over several. The ones that passed the test come first, then the
-    ones that failed it, then the untested ones. Returns the pairs, how many tasks each pair had, and the AI models
-    with too few tasks to forecast at all, with how many they had.
+    """For a person's table: every AI model the predictor knows, at each named effort level it ran 10 tasks at, or
+    at its most common named level when its tasks spread over several. The default level is left out. An AI model
+    that ran only at the default level is forecast with no level named. The ones with enough data come first. Returns
+    the pairs, how many tasks each pair had, and the AI models with too few tasks to forecast at all, with how many
+    they had.
     """
     report = meta.get("report") or {}
     verdicts = report.get("models") or {}
@@ -1465,8 +1528,9 @@ def every_pair(
         if total(model) < SHOWN_FROM:
             too_few.append((model, total(model)))
             continue
-        often = [(level, count) for level, count in levels if count >= SHOWN_FROM] or levels[:1] or [(None, 0)]
-        for level, count in often:
+        named = [(level, count) for level, count in levels if level != DEFAULT_EFFORT]
+        often = [(level, count) for level, count in named if count >= SHOWN_FROM] or named[:1]
+        for level, count in often or [(None, total(model))]:
             pairs.append((model, level))
             runs[(model, level)] = count
     return pairs, runs, too_few
@@ -1547,17 +1611,18 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
 FORECAST_COLUMNS = ("", "effort", "time", "tokens", "cost")
 """The forecast table's columns after the AI model's name. The first holds the warning mark, when there is one."""
 WARNINGS = {
-    "not_accurate_enough": "failed the test",
-    "not_enough_data": "not tested yet",
-    "unknown_model": "never used",
+    "not_accurate_enough": "not enough data",
+    "not_enough_data": "not enough data",
+    "unknown_model": "no data",
 }
-"""The words of a rough forecast's warning, by why the test didn't pass it."""
+"""The words of a rough forecast's warning, by the reason code a program gets. Not enough data covers an AI model
+whose forecasts were often wrong on your past tasks, and one with too few of them to check."""
 
 
 def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None, screen: bool = False) -> None:
     """The forecasts as a small table, for a person in a terminal. Under each forecast, in grey, is the range it
-    lands in 9 times out of 10, when the forecast has a curve. A forecast that failed the test, wasn't tested or
-    rests on few runs is marked, and why is said under the table. It fits an 80 column terminal.
+    lands in 9 times out of 10, when the forecast has a curve. A forecast with not enough data behind it is marked,
+    and the AI models that have too little are named under the table. It fits the terminal at any width.
 
     `screen` is for the Estimate screen: the task was typed just above, so it isn't said again, and the
     predictor is called a model there, as every screen calls it.
@@ -1565,7 +1630,9 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     from .forecast import likely_range
 
     pad = max(len("AI model"), *(len(forecast["model"]) for forecast in result["forecasts"]))
-    rows, missing, previous, ranges, why, blocks = [], {}, None, False, {}, []
+    rows, missing, previous, ranges, blocks = [], {}, None, False, []
+    thin: dict[str, bool] = {}
+    """The AI models with not enough data, and the effort levels with too few runs, to name under the table."""
     for forecast in result["forecasts"]:
         model = forecast["model"]
         seconds, tokens, usd = forecast["seconds"], forecast["tokens"], forecast["usd"]
@@ -1577,25 +1644,24 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
         name = model if model != previous else ""
         previous = model
         warning = rough_warning(forecast)
+        effort = shown_effort(forecast.get("effort"))
         if warning:
-            few = warning.startswith("only")
-            title = "Few runs" if few else warning[0].upper() + warning[1:]
-            who = f"{model} at {forecast.get('effort')} ({forecast.get('runs')})" if few else model
-            why.setdefault(title, {})[who] = True
+            # Too little for the whole AI model names it alone. Too few runs at one level names that level.
+            thin[model if forecast.get("reason") or not effort else f"{model} at {effort}"] = True
         mark = ui.yellow(ui.mark("warn")) if warning else ""
         values = (
             duration(seconds) if seconds is not None else ui.dim("-"),
             short_tokens(tokens) if tokens is not None else ui.dim("-"),
             money(usd) if usd is not None else ui.dim("-"),
         )
-        rows.append((name, mark, forecast.get("effort", ""), *values))
+        rows.append((name, mark, effort, *values))
         spans = [likely_range(forecast.get("distribution"), target) for target in ("seconds", "tokens", "usd")]
         words = ("", "", "")
         if any(spans):
             ranges = True
             words = tuple(span_words(span, show) for span, show in zip(spans, (duration, whole_tokens, short_money)))
             rows.append(("", "", "", *(ui.dim(word) for word in words)))
-        blocks.append((model, mark, forecast.get("effort", ""), values, words))
+        blocks.append((model, mark, effort, values, words))
     # A table needs room for every column. A terminal too narrow for it gets each forecast as a block of its own.
     others = sum(max((ui.width(r[i]) for r in rows), default=0) + 2 for i in range(1, 6))
     stacked = 2 + pad + others >= ui.columns()
@@ -1615,14 +1681,16 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
         ui.line(ui.cut(f"{ui.bold(ui.cut(model, pad).ljust(pad))}   {ui.dim(reason)}", ui.columns() - 3))
     too_few = result.get("too_few") or []
     if too_few:
-        wrapped_note(f"Too few of your tasks to forecast: {in_words([f'{m} ({n:,})' for m, n in too_few])}.")
+        listed = in_words([f"{m} ({n:,} run{'' if n == 1 else 's'})" for m, n in too_few])
+        wrapped_note(f"Not enough data to forecast {listed}.")
     predictor = predictor or Predictor(result["predictor"])
     ui.out()
-    for title, names in why.items():
+    # An AI model named on its own covers its levels, so a level of it isn't named again.
+    names = [who for who in thin if " at " not in who or who.split(" at ")[0] not in thin]
+    if names:
         mark = ui.yellow(ui.mark("warn"))
-        for number, part in enumerate(textwrap.wrap(f"{title}: {in_words(list(names))}.", columns() - 6)):
+        for number, part in enumerate(textwrap.wrap(f"Not enough data: {in_words(names)}.", columns() - 6)):
             ui.line(f"{mark if number == 0 else ' '} {part}")
-    if why:
         wrapped_note("Those are a rough guide. Plan with a wider margin there.")
     if ranges:
         where = "Beside" if stacked else "Under"
@@ -1663,14 +1731,19 @@ def show_blocks(blocks: list) -> None:
 
 
 def rough_warning(forecast: dict) -> str | None:
-    """Why a forecast in a person's table is only a rough guide, in a few words, or None when it passed the test on
-    enough runs."""
+    """Why a forecast in a person's table is only a rough guide, in a few words, or None when there's enough data
+    behind it: for its AI model, and at its effort level."""
     if forecast.get("reason"):
-        return WARNINGS.get(forecast["reason"], "not tested")
+        return WARNINGS.get(forecast["reason"], "not enough data")
     runs = forecast.get("runs")
     if isinstance(runs, int) and runs < FEW_RUNS:
-        return f"only {runs} runs"
+        return "not enough data"
     return None
+
+
+def shown_effort(effort: str | None) -> str:
+    """An effort level as a person's table shows it. The default level isn't one a person picks, so it's left out."""
+    return "" if not effort or effort == DEFAULT_EFFORT else effort
 
 
 def short_money(usd: float) -> str:
@@ -1760,10 +1833,12 @@ def show_coverage(coverage: dict | None, problem: str | None) -> None:
             ui.note(problem)
         return
     if not coverage["tasks"]:
-        ui.line("Coverage: it has no tasks to learn from yet.")
+        for part in ui.wrapped("Coverage: it has no tasks to learn from yet."):
+            ui.line(part)
         return
     shares = [f"{use['title']} {use['coverage']:.0%}" for use in coverage["features"] if use["coverage"] is not None]
-    ui.line(f"Coverage of the {coverage['tasks']:,} tasks it can learn from: {ui.join(shares)}")
+    for part in ui.wrapped(f"Coverage of the {coverage['tasks']:,} tasks it can learn from: {', '.join(shares)}"):
+        ui.line(part)
 
 
 def cmd_status(args) -> int:
@@ -1843,8 +1918,11 @@ def cmd_status(args) -> int:
         if entry["prepared_bytes"] is not None:
             facts.append(f"prepared dataset {ui.size(entry['prepared_bytes'])}")
         predictor = predictors[entry["name"]]
-        ui.line(ui.join(facts))
-        ui.line(f"Features: {feature_summary(predictor.config)}")
+        joined = ui.join(facts)
+        for part in [joined] if ui.width(joined) < ui.columns() - 2 else ui.wrapped(", ".join(facts)):
+            ui.line(part)
+        for part in ui.wrapped(f"Features: {feature_summary(predictor.config)}"):
+            ui.line(part)
         show_coverage(entry["coverage"], problems.get(entry["name"]))
         newer_settings_note(predictor)
         if not predictor.config.get("plugins") or entry["coverage"] is not None:
@@ -1862,7 +1940,7 @@ def cmd_status(args) -> int:
                 ui.line(f"Trained on {meta.get('tasks', 0):,} tasks.")
                 print_report(meta)
             except (KeyError, TypeError, ValueError, AttributeError):  # a report this version can't read
-                ui.note("Its test report can't be shown. A newer version of yardstick-predict may have saved it.")
+                ui.note("Its forecast report can't be shown. A newer version of yardstick-predict may have saved it.")
     if without and predictors:
         ui.out()
         ui.note("Coverage isn't shown: it's counted from what training reads, and training needs XGBoost.")
@@ -2096,7 +2174,7 @@ def cmd_check(args) -> int:
     if kind != "xgboost":
         return stop(
             "unsupported_model_type",
-            f"{name} uses the {kind} model type from a plugin. The check tests the built-in model only.",
+            f"{name} uses the {kind} model type from a plugin. The check works with the built-in model only.",
         )
     person = not args.json
     if person:
@@ -2128,7 +2206,7 @@ def cmd_check(args) -> int:
         ui.line("There's nothing to check: it uses only the features that are always on.")
         return 0
     if person:
-        ui.working("Testing the model with every feature, then without each one")
+        ui.working("Comparing forecasts with every feature, then without each one")
     try:
         result = check.run(given, (lambda done, total: ui.progress(done, total, "steps")) if person else None)
     except NotEnoughData as error:
