@@ -324,12 +324,16 @@ def answer(
     distribution: bool = False,
     model=None,
     recent: list[Task] | None = None,
+    rough: bool = False,
 ) -> dict:
     """Forecast every task on every model it lists. `model` is the predictor's model, when it's loaded already.
 
     What came before each task, in its project and, with the conversation feature, in its conversation, comes
     from the predictor's tasks plus `recent`: tasks read from the records just now, newer than the last refresh.
     Each task starts now, the moment the forecast is asked for.
+
+    With `rough`, for a person's table only, an AI model whose forecasts failed the test or weren't tested is
+    forecast too. Its forecast keeps its reason, so the table can warn. A program never gets these.
     """
     from .model import Features
 
@@ -341,7 +345,11 @@ def answer(
     defaults = model.meta.get("defaults", {})
     verdict = _verdicts(model)
     pairs = [(task, name, *verdict(name, task.effort)) for task in tasks for name in task.models]
-    labels = _llm_labels(predictor, tasks, chosen) if any(served for _, _, served, _ in pairs) else {}
+
+    def forecast_it(served: bool, reason: str | None) -> bool:
+        return served or (rough and reason != "unknown_model")
+
+    labels = _llm_labels(predictor, tasks, chosen) if any(forecast_it(*pair[2:]) for pair in pairs) else {}
     without = getattr(model, "served_without_llm", None)
     if "llm" in chosen and callable(without):
         # A task LLM analysis couldn't read is forecast by the model without it, which had its own test.
@@ -353,7 +361,7 @@ def answer(
     # A row for each model to forecast. As in training, its features see its model, effort level and agent.
     # A task with no model to forecast has no row, so its texts aren't sent to Voyage. Neither are texts
     # the model can't use.
-    served_pairs = [(task, name) for task, name, served, _ in pairs if served]
+    served_pairs = [(task, name) for task, name, served, reason in pairs if forecast_it(served, reason)]
     infos = [
         _info(task, name, defaults, _known_skills(task, predictor.config), labels.get(task.id, {}), now)
         for task, name in served_pairs
@@ -395,7 +403,7 @@ def answer(
                 started_at=now,
             )
         )
-    results = iter(model.forecast(rows))
+    results = iter(_forecast(model, rows, every_head=rough))
     # A free model's cost is known without forecasting it: nothing. Its usd head can't learn $0 on a log
     # scale, so the model drops it. A predictor set to leave usd out still leaves it out.
     gives_usd = "usd" in ((model.meta.get("settings") or {}).get("heads") or TARGETS)
@@ -408,7 +416,7 @@ def answer(
         forecast.update(seconds=None, tokens=None, usd=None)
         if reason:
             forecast["reason"] = reason  # only when the numbers are null
-        result = next(results) if served else None
+        result = next(results) if forecast_it(served, reason) else None
         if result is not None:
             shape: dict = {
                 "shape": result.get("shape"),
@@ -435,6 +443,57 @@ def answer(
         "embedding_model": predictor.embedding_model,
         "forecasts": forecasts,
     }
+
+
+def _forecast(model, rows: list, every_head: bool) -> list[dict]:
+    """The model's forecasts. With `every_head`, also the parts the test never checked, from a model that can give
+    them. A model type of your own gives what it gives."""
+    if every_head:
+        try:
+            takes = "tested_only" in inspect.signature(model.forecast).parameters
+        except (TypeError, ValueError):
+            takes = False
+        if takes:
+            return model.forecast(rows, tested_only=False)
+    return model.forecast(rows)
+
+
+def likely_range(distribution: dict | None, target: str, share: float = 0.9) -> tuple[float, float] | None:
+    """The range a result lands in `share` of the time, from a forecast's curve: the values where the chance it's
+    at most that much is 5% and 95% for the 90% range. None without a curve for the target."""
+    if not isinstance(distribution, dict) or not isinstance(distribution.get(target), dict):
+        return None
+    parts = distribution[target]
+    if not all(isinstance(parts.get(part), dict) for part in ("direct", "work")):
+        return None
+    p = distribution.get("direct_probability")
+    p = 0.0 if p is None else float(p)
+    weibull = str(distribution.get("shape") or "").endswith("weibull")
+
+    def part_chance(w: float) -> float:
+        return 1.0 - math.exp(-math.exp(min(w, 50.0))) if weibull else 0.5 * (1.0 + math.erf(w / math.sqrt(2.0)))
+
+    def chance(log_value: float) -> float:
+        return sum(
+            weight * part_chance((log_value - parts[part]["mu"]) / max(parts[part]["sigma"], 1e-9))
+            for weight, part in ((p, "direct"), (1.0 - p, "work"))
+            if weight > 0
+        )
+
+    mus = [parts[part]["mu"] for part in ("direct", "work")]
+    widest = max(parts[part]["sigma"] for part in ("direct", "work"))
+    low, high = min(mus) - 12 * widest - 1, max(mus) + 12 * widest + 1
+
+    def where(goal: float) -> float:
+        """The log value where the chance reaches the goal, found by halving the gap."""
+        left, right = low, high
+        for _ in range(80):
+            middle = (left + right) / 2
+            left, right = (middle, right) if chance(middle) < goal else (left, middle)
+        return (left + right) / 2
+
+    tail = (1.0 - share) / 2
+    return math.exp(where(tail)), math.exp(where(1.0 - tail))
 
 
 def _llm_labels(predictor: Predictor, tasks: list[TaskRequest], chosen: list[str]) -> dict[str, dict]:

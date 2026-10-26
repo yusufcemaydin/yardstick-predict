@@ -6,13 +6,12 @@ models' settings, so it opens at once. When a choice finishes, the home screen c
 
 from __future__ import annotations
 
-import argparse
 import shutil
 import textwrap
 
 from .. import __version__, cli, ui
 from ..store import BrokenPredictor, predictor_names
-from . import keys, listing
+from . import keys, listing, version
 
 DESCRIPTION = "Forecasts a coding-agent task's time and cost before it runs"
 NO_BOX_UNDER = 50
@@ -52,15 +51,20 @@ def greet(names: list[str]) -> None:
     found = listing.models()
     if found:
         pad = max(ui.width(name) for name, _ in found)
+        lines.append(f"  {ui.bold('Your models')}")
         lines += [f"  {name}{' ' * (pad - ui.width(name))}  {ui.dim(when)}" for name, when in found]
     else:
-        lines.append("  No model yet")
+        lines.append("  No models yet")
     ui.out()
     if columns < NO_BOX_UNDER:
         for text in lines:
             ui.out(f"  {text}" if text else "")
     else:
         box(lines)
+    newer = version.notice()
+    if newer:
+        ui.out()
+        ui.line(ui.accent(newer))
     if not names:
         ui.out()
         ui.line("Add New reads your Claude Code and Codex chats. It needs a Voyage API key.")
@@ -88,7 +92,9 @@ def act(action: str, names: list[str]) -> None:
             ui.out()
             ui.note("There's no model yet. Choose Add New to make one.")
         elif action == "estimate":
-            estimate()
+            from . import estimate
+
+            estimate.run()
         elif action == "update":
             update.run()
         else:
@@ -99,24 +105,3 @@ def act(action: str, names: list[str]) -> None:
         if not isinstance(stop.code, str):
             raise
         ui.error(stop.code)
-
-
-def estimate() -> None:
-    """Ask what the task is, then show its forecast on the default model."""
-    from ..forecast import RequestError
-
-    ui.out()
-    ui.line(f"{ui.bold('Estimate')}  {ui.dim('Forecast a task before you run it')}")
-    ui.out()
-    ui.line("Describe the task, as you'd ask a coding agent.")
-    ui.note("For example: add a dark mode toggle to the settings page")
-    task = input(f"  {ui.accent(ui.mark('pick'))} ").strip()
-    if not task:
-        return
-    asked = argparse.Namespace(predictor=None, model=[], effort=None, context=None, skill=[], distribution=False)
-    try:
-        predictor, result = cli.forecast_request(asked, task)
-    except RequestError as error:
-        ui.error(error.message)
-        return
-    cli.show_forecasts(task, result, predictor)

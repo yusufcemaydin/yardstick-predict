@@ -24,6 +24,10 @@ _MARKS = {
     "rest": ("─", "-"),
     "dot": ("·", "-"),
     "pick": ("›", ">"),
+    "warn": ("⚠", "!"),
+    "pages": ("←→", "left and right"),
+    "ticked": ("●", "[x]"),
+    "unticked": ("○", "[ ]"),
     "logo": ("◆", "*"),
     "keys": ("↑↓", "up and down"),
     "box": ("╭╮╰╯─│", "++++-|"),
@@ -101,6 +105,10 @@ def green(text: str) -> str:
 
 def red(text: str) -> str:
     return _style("31", "39", text)
+
+
+def yellow(text: str) -> str:
+    return _style("33", "39", text)
 
 
 def width(text: str) -> int:

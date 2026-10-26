@@ -12,11 +12,18 @@ $ yardstick-predict predict "Add a login page with tests"
 
   Add a login page with tests
 
-  claude-opus-5-5   max     4 min   1.8M tokens   $0.92
-                    xhigh   3 min   1.2M tokens   $0.61
-  gpt-6.1-sol       xhigh   5 min   950k tokens   $0.41
+  AI model          effort             time         tokens             cost
+  claude-opus-5-5   max               4 min           1.8M            $0.92
+                                 2 to 8 min   703k to 3.6M   $0.37 to $1.93
+                    high              3 min           1.2M            $0.61   ⚠ only 12 runs
+                              72 s to 6 min   483k to 2.5M   $0.25 to $1.27
+  gpt-6.1-sol       xhigh             5 min           950k            $0.41   ⚠ failed the test
+                             85 s to 14 min   269k to 2.7M   $0.12 to $1.17
+  Too few of your tasks to forecast: claude-haiku-5-5 (6).
 
-  Expected values from your own runs · predictor default, updated 2 days ago · add --json for details
+  Under each forecast is the range it lands in 9 times out of 10. Costs are at API prices.
+  ⚠ marks a rough guide. Plan with a wider margin there.
+  Learned from your own runs · predictor default, updated 2 days ago · add --json for details
 ```
 
 The numbers above are an example. Yours come from your own history.
@@ -25,7 +32,7 @@ The numbers above are an example. Yours come from your own history.
 
 - **Expected time, tokens and cost** for any task on any AI model and effort level you've used, with the full probability curve on request.
 - **Learns from records you already have.** Claude Code and Codex keep a record of every run. There's nothing to label.
-- **Tests itself before it forecasts.** It replays your newest tasks and gives forecasts only for AI models that pass.
+- **Tests itself before it forecasts.** It replays your newest tasks and gives programs forecasts only for AI models that pass. In a terminal, the others show too, marked ⚠ as a rough guide.
 - **One fixed, versioned JSON format,** with published schemas, so any program in any language can call it.
 - **Runs on your computer.** Only the text you choose is sent: to Voyage to embed it and, if you turn on LLM analysis, to the AI model you pick.
 - **Shows the exact cost before spending anything,** and counts Voyage's free tokens.
@@ -59,7 +66,7 @@ yardstick-predict create --express
 yardstick-predict
 ```
 
-The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
+The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. When a newer version of yardstick-predict is out, it says so under the box, with the command that updates it. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Estimate asks for a task. Then it asks which AI models: the ones that passed the test or any you tick from a list, 6 to a page. After the forecasts you choose what's next. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
 When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The check tests the model with each feature and without it, shows what helped for each AI model, and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice: say no, and setup trains with the features you picked.
 
@@ -69,7 +76,7 @@ When you pick features beyond the three that are always on, setup offers to chec
 yardstick-predict predict "Add a login page with tests"
 ```
 
-It shows the expected time, tokens and cost on each AI model your predictor covers, at each effort level you often use it at. `--model` and `--effort` name them yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
+It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. Under each forecast is the range it lands in 9 times out of 10. A forecast that failed the test or rests on few runs is marked ⚠ as a rough guide. `--model` and `--effort` name them yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
 
 Every week or so, run `yardstick-predict` and choose Update. Before it reads anything, it says where your new work is and how much there is to read. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. It asks once. Cancel spends nothing and saves nothing. `yardstick-predict refresh` in a terminal shows the same summary. With `--yes` it asks nothing.
 
@@ -284,7 +291,7 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 - **The cache of embeddings holds no text.** For each text it keeps a one-way hash and the text's vector, in the same private folder.
 - **Only the text you choose is sent,** over an encrypted connection: to Voyage to embed it, and with LLM analysis, each task's prompt and the end of its conversation to the AI model you pick.
 - **Your Voyage key** is read from `VOYAGE_API_KEY` or kept in your computer's password store. yardstick-predict never writes it to a file of its own.
-- **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face, at one fixed version, and OpenRouter's model list if you use benchmarks.
+- **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face, at one fixed version, and OpenRouter's model list if you use benchmarks. The home screen also reads yardstick-predict's public page on PyPI at most once a day, to say when a newer version is out. Set `YARDSTICK_NO_UPDATE_CHECK` to turn that off.
 - **Saved models are plain JSON and plain numbers.** Loading one runs no code.
 - **Plugins are code you choose to run.** yardstick-predict only imports the modules you name.
 

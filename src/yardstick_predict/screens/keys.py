@@ -15,11 +15,11 @@ from dataclasses import dataclass
 
 from .. import ui
 
-UP, DOWN, ENTER, ESC = "up", "down", "enter", "esc"
+UP, DOWN, LEFT, RIGHT, ENTER, ESC, SPACE = "up", "down", "left", "right", "enter", "esc", " "
 """The keys a menu knows by name. A number key comes as its digit."""
 
-_ARROWS = {"[A": UP, "OA": UP, "[B": DOWN, "OB": DOWN}
-_WINDOWS_ARROWS = {"H": UP, "P": DOWN}
+_ARROWS = {"[A": UP, "OA": UP, "[B": DOWN, "OB": DOWN, "[C": RIGHT, "OC": RIGHT, "[D": LEFT, "OD": LEFT}
+_WINDOWS_ARROWS = {"H": UP, "P": DOWN, "M": RIGHT, "K": LEFT}
 
 
 @dataclass(frozen=True)

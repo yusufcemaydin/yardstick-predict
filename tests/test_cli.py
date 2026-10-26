@@ -73,7 +73,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     monkeypatch.setattr(cli, "terminal_output", lambda: True)
     sent = len(ready.requests)
     code, out = run(capsys, "predict", "fix the api")
-    row = r"\s+\d+ (s|min|h)\s+[\d.]+[kM]? tokens\s+\$"
+    row = r"\s+\d+ (s|min|h)\s+[\d.]+[kM]?\s+\$"
     assert code == 0 and re.search(r"claude-opus-5-5\s+high" + row, out) and re.search(r"\n\s+max" + row, out)
     # One prompt at several effort levels is embedded once. The JSON forecast above already paid for it, and
     # the cache of vectors kept it, so this one sends it no more.
@@ -223,7 +223,7 @@ def test_a_typed_prompt_is_forecast_as_a_persons(capsys, monkeypatch):
     Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
     asked = []
 
-    def answer(predictor, tasks, distribution, model=None):
+    def answer(predictor, tasks, distribution, model=None, rough=False):
         asked.extend(tasks)
         return {"forecasts": []}
 

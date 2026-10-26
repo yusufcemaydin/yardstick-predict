@@ -25,6 +25,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
     monkeypatch.delenv("VOYAGE_API_BASE", raising=False)
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    monkeypatch.setenv("YARDSTICK_NO_UPDATE_CHECK", "1")  # the home screen never asks PyPI in a test
     from yardstick_predict import embeddings
 
     # Tests never download Voyage's tokenizer. One token per word is close enough here.

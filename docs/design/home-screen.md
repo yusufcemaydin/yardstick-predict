@@ -24,9 +24,13 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 │   Forecasts a coding-agent task's time and   │
 │   cost before it runs                        │
 │                                              │
+│   Your models                                │
 │   main (default)  updated 12 hours ago       │
 │   llm             updated 12 hours ago       │
 ╰──────────────────────────────────────────────╯
+
+  yardstick-predict 0.5.0 is out. You have 0.4.0.
+  Update with: uv tool upgrade yardstick-predict
 
   What would you like to do?
 
@@ -42,7 +46,8 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 
 - There is no Status choice. The `status` command stays for anyone who wants the long report.
 - When a choice finishes, you come back to this screen.
-- With no model yet, the header says so and Add New comes first, with one line on what setup needs.
+- With no model yet, the header says No models yet and Add New comes first, with one line on what setup needs.
+- When a newer version is out on PyPI, a line under the box says so, with the command that updates it. PyPI is asked at most once a day, in the background. The screen never waits for it. Its answer is kept in `~/.yardstick/update-check.json` and shows from the next screen on. `YARDSTICK_NO_UPDATE_CHECK` turns it off.
 - Draw the box with Unicode when the terminal supports it and with plain characters otherwise. Leave the box out under 50 columns.
 
 ## 2. How menus work
@@ -61,7 +66,28 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
   › _
 ```
 
-Use plain `input()`. Then show today's forecast table (`show_forecasts`) for the default model and return home.
+Use plain `input()`. Enter on its own goes back home. Then, step by step:
+
+```
+  Which AI models should it forecast?
+
+  › 1. Tested AI models    claude-opus-5-5 and claude-fable-5: passed the test
+    2. Choose from a list  every one you've used, 15 in all
+    3. Back
+```
+
+Each choice opens a checklist of AI models at their effort levels, 6 to a page. Tested AI models start ticked. The list starts with none ticked. Under it, it names the AI models with too few tasks to forecast. Space or a number ticks. The left and right arrows turn the page. Enter goes on once one is ticked.
+
+```
+  › 1. ● claude-opus-5-5   max      passed the test
+    2. ○ claude-opus-5-5   high     ⚠ only 11 runs
+    3. ○ claude-opus-5     max      ⚠ failed the test
+
+  Page 1 of 3 · 1 ticked
+  ↑↓ move · space tick · ←→ page · enter go on · esc go back
+```
+
+The forecasts show 6 to a page, each with the range it lands in 9 times out of 10 under it. A rough one is marked ⚠ with why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task or Back to home.
 
 ## 4. Update
 

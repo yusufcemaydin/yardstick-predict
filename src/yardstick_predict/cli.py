@@ -1344,7 +1344,8 @@ def cmd_predict(args) -> int:
     table = prompt is not None and terminal_output() and not args.json and not args.distribution
     predictor = None
     try:
-        predictor, result = forecast_request(args, prompt)
+        # A person's table shows every AI model, with a warning on the rough ones. A program gets only tested ones.
+        predictor, result = forecast_request(args, prompt, rough=table)
         code = 0
     except RequestError as error:
         result, code = error.as_answer(), 1
@@ -1363,8 +1364,12 @@ def cmd_predict(args) -> int:
     return code
 
 
-def forecast_request(args, prompt: str | None) -> tuple[Predictor, dict]:
-    """The predictor and the answer for a prompt on the command line, or for a JSON request on standard input."""
+def forecast_request(args, prompt: str | None, rough: bool = False) -> tuple[Predictor, dict]:
+    """The predictor and the answer for a prompt on the command line, or for a JSON request on standard input.
+
+    With `rough`, for a person's table: every AI model the predictor knows, at each effort level it often ran at,
+    with the curves the table's ranges come from. One that failed the test or wasn't tested keeps its reason.
+    """
     from .forecast import RequestError, answer, load, parse
 
     if prompt is None:
@@ -1382,8 +1387,24 @@ def forecast_request(args, prompt: str | None) -> tuple[Predictor, dict]:
     predictor = request_predictor(args.predictor)
     # The model is loaded once. Its meta picks the AI models and effort levels, and it forecasts them.
     model = load(predictor)
-    models = list(dict.fromkeys(args.model)) or forecast_models(predictor, model.meta)
-    pairs = effort_pairs(predictor, models, args.effort, model.meta)
+    runs, too_few = {}, []
+    if rough and not args.model:
+        pairs, runs, too_few = every_pair(predictor, args.effort, model.meta)
+    else:
+        models = list(dict.fromkeys(args.model)) or forecast_models(predictor, model.meta)
+        pairs = effort_pairs(predictor, models, args.effort, model.meta)
+    result = forecast_pairs(predictor, model, prompt, pairs, args, rough, runs)
+    if rough:
+        result["too_few"] = too_few
+    return predictor, result
+
+
+def forecast_pairs(predictor: Predictor, model, prompt: str, pairs: list, args, rough: bool = False, runs=None) -> dict:
+    """The answer for a prompt a person typed, on each AI model at each effort level in `pairs`. `args` holds the
+    conversation, the skills and whether to give the curves. With `rough`, as forecast_request says, each forecast
+    also says how many tasks its AI model ran at its effort level, from `runs`."""
+    from .forecast import answer, parse
+
     asked = []
     for number, (name, effort) in enumerate(pairs, start=1):
         task = {"id": "task" if len(pairs) == 1 else f"task-{number}", "prompt": prompt, "models": [name]}
@@ -1393,12 +1414,60 @@ def forecast_request(args, prompt: str | None) -> tuple[Predictor, dict]:
         if effort:
             task["effort"] = effort
         asked.append(task)
-    tasks, distribution, _ = parse({"version": 1, "distribution": args.distribution, "tasks": asked})
-    result = answer(predictor, tasks, distribution, model=model)
+    tasks, distribution, _ = parse({"version": 1, "distribution": args.distribution or rough, "tasks": asked})
+    result = answer(predictor, tasks, distribution, model=model, rough=rough)
     # One prompt is one task, whatever models and effort levels it's forecast on.
     for forecast in result["forecasts"]:
         forecast["task"] = "task"
-    return predictor, result
+        if rough:
+            forecast["runs"] = (runs or {}).get((forecast["model"], forecast.get("effort")))
+    return result
+
+
+SHOWN_FROM = 10
+"""A person's table shows an AI model at an effort level once it ran this many tasks at it."""
+FEW_RUNS = 30
+"""Below this many tasks at an effort level, the table warns that the forecast rests on few runs."""
+
+
+def every_pair(
+    predictor: Predictor, effort: str | None, meta: dict
+) -> tuple[list[tuple[str, str | None]], dict, list[tuple[str, int]]]:
+    """For a person's table: every AI model the predictor knows, at each effort level it ran 10 tasks at, or at
+    its most common level when its tasks spread over several. The ones that passed the test come first, then the
+    ones that failed it, then the untested ones. Returns the pairs, how many tasks each pair had, and the AI models
+    with too few tasks to forecast at all, with how many they had.
+    """
+    report = meta.get("report") or {}
+    verdicts = report.get("models") or {}
+    counts = meta.get("effort_counts")
+    if not isinstance(counts, dict):
+        counts = predictor.effort_counts()
+    known = list((meta.get("categories") or {}).get("model") or verdicts)
+
+    def total(model: str) -> int:
+        return sum(count for _, count in counts.get(model, []))
+
+    def rank(model: str) -> tuple:
+        verdict = verdicts.get(model) or {}
+        group = 0 if verdict.get("served") else 1 if verdict.get("reason") == "not_accurate_enough" else 2
+        return group, -(verdict.get("tasks_tested") or 0), -total(model)
+
+    pairs, runs, too_few = [], {}, []
+    for model in sorted(known, key=rank):
+        levels = [(level, count) for level, count in counts.get(model, []) if count]
+        if effort:
+            pairs.append((model, effort))
+            runs[(model, effort)] = dict(levels).get(effort, 0)
+            continue
+        if total(model) < SHOWN_FROM:
+            too_few.append((model, total(model)))
+            continue
+        often = [(level, count) for level, count in levels if count >= SHOWN_FROM] or levels[:1] or [(None, 0)]
+        for level, count in often:
+            pairs.append((model, level))
+            runs[(model, level)] = count
+    return pairs, runs, too_few
 
 
 def request_predictor(chosen: str | None, from_request: bool = False) -> Predictor:
@@ -1473,10 +1542,28 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
     return known
 
 
-def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None) -> None:
-    """The forecasts as a small table, for a person in a terminal."""
-    pad = max(len(forecast["model"]) for forecast in result["forecasts"])
-    rows, missing, previous = [], {}, None
+FORECAST_COLUMNS = ("effort", "time", "tokens", "cost", "")
+"""The forecast table's columns after the AI model's name. The last one holds a warning, when there is one."""
+WARNINGS = {
+    "not_accurate_enough": "failed the test",
+    "not_enough_data": "not tested yet",
+    "unknown_model": "never used",
+}
+"""The words of a rough forecast's warning, by why the test didn't pass it."""
+
+
+def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None, screen: bool = False) -> None:
+    """The forecasts as a small table, for a person in a terminal. Under each forecast, in grey, is the range it
+    lands in 9 times out of 10, when the forecast has a curve. A forecast that failed the test, wasn't tested or
+    rests on few runs has a warning after it.
+
+    `screen` is for the Estimate screen: the task was typed just above, so it isn't said again, and the
+    predictor is called a model there, as every screen calls it.
+    """
+    from .forecast import likely_range
+
+    pad = max(len("AI model"), *(len(forecast["model"]) for forecast in result["forecasts"]))
+    rows, missing, previous, ranges, warned = [], {}, None, False, False
     for forecast in result["forecasts"]:
         model = forecast["model"]
         seconds, tokens, usd = forecast["seconds"], forecast["tokens"], forecast["usd"]
@@ -1487,32 +1574,78 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
         # A model forecast at several effort levels is named once, on its first row.
         name = ui.bold(model.ljust(pad)) if model != previous else " " * pad
         previous = model
+        warning = rough_warning(forecast)
+        warned = warned or bool(warning)
         rows.append(
             (
                 name,
                 forecast.get("effort", ""),
                 duration(seconds) if seconds is not None else ui.dim("-"),
-                f"{short_tokens(tokens)} tokens" if tokens is not None else ui.dim("-"),
+                short_tokens(tokens) if tokens is not None else ui.dim("-"),
                 money(usd) if usd is not None else ui.dim("-"),
+                ui.yellow(f"{ui.mark('warn')} {warning}") if warning else "",
             )
         )
-    shown = prompt if len(prompt) <= 72 else prompt[:71].rstrip() + ui.mark("wait")
+        spans = [likely_range(forecast.get("distribution"), target) for target in ("seconds", "tokens", "usd")]
+        if any(spans):
+            ranges = True
+            words = [span_words(span, show) for span, show in zip(spans, (duration, whole_tokens, money))]
+            rows.append(("", "", *(ui.dim(word) for word in words), ""))
+    if not screen:
+        shown = prompt if len(prompt) <= 72 else prompt[:71].rstrip() + ui.mark("wait")
+        ui.out()
+        ui.line(ui.bold(shown))
     ui.out()
-    ui.line(ui.bold(shown))
-    ui.out()
-    ui.table(rows, align="llrrr")
+    if rows:
+        ui.table([tuple(ui.dim(title) for title in ("AI model".ljust(pad), *FORECAST_COLUMNS)), *rows], align="llrrrl")
     for text in missing.values():
         ui.line(text)
+    too_few = result.get("too_few") or []
+    if too_few:
+        listed = in_words([f"{model} ({count:,})" for model, count in too_few])
+        ui.line(ui.dim(f"Too few of your tasks to forecast: {listed}."))
     predictor = predictor or Predictor(result["predictor"])
-    footer = [
-        "Expected values from your own runs",
-        f"predictor {predictor.name}, updated {ago(predictor.config.get('refreshed_at'))}",
-        "add --json for details",
-    ]
     ui.out()
+    if ranges:
+        ui.note("Under each forecast is the range it lands in 9 times out of 10. Costs are at API prices.")
+    if warned:
+        ui.note(f"{ui.mark('warn')} marks a rough guide. Plan with a wider margin there.")
+    named = f"model {predictor.name}" if screen else f"predictor {predictor.name}"
+    footer = [
+        "Learned from your own runs",
+        f"{named}, updated {ago(predictor.config.get('refreshed_at'))}",
+        *([] if screen else ["add --json for details"]),
+    ]
     ui.line(ui.join([ui.dim(part) for part in footer]))
     newer_settings_note(predictor)
     unknown_features_note(predictor)
+
+
+def rough_warning(forecast: dict) -> str | None:
+    """Why a forecast in a person's table is only a rough guide, in a few words, or None when it passed the test on
+    enough runs."""
+    if forecast.get("reason"):
+        return WARNINGS.get(forecast["reason"], "not tested")
+    runs = forecast.get("runs")
+    if isinstance(runs, int) and runs < FEW_RUNS:
+        return f"only {runs} runs"
+    return None
+
+
+def whole_tokens(value: float) -> str:
+    """Tokens at a glance, such as the ends of a range, which a curve gives as fractions."""
+    return short_tokens(int(round(value)))
+
+
+def span_words(span: tuple[float, float] | None, show) -> str:
+    """A range in words, its unit said once when both ends share it: 9 to 31 min, $3.90 to $13.10."""
+    if span is None:
+        return ""
+    low, high = show(span[0]), show(span[1])
+    for unit in (" min", " s", " h", "M", "k"):
+        if low.endswith(unit) and high.endswith(unit):
+            return f"{low.removesuffix(unit)} to {high}"
+    return f"{low} to {high}"
 
 
 def trained_facts(predictor: Predictor, meta: dict | None) -> dict:
