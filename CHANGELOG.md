@@ -30,6 +30,8 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - The Anthropic and OpenAI libraries come with every install. LLM analysis with an API key needs no second install. The `llm` extra is gone. An upgrade of an install that had it may warn that there's no extra named `llm`. That's harmless. `uv tool install --force yardstick-predict` stops it.
 - An error yardstick-predict didn't expect is said in one line, with where its details are kept and where to report it. It used to print a page of Python. The details go to `last-crash.txt` in the yardstick folder. `YARDSTICK_DEBUG=1` shows them where it happens too. A program that asked for JSON gets the error as `internal_error`.
 - Output sent to a program that stops reading early, such as `head`, ends quietly.
+- A new release of a library gets into `uv.lock` only once it has been out for 7 days. The tests and the release builds use only libraries that had that time.
+- A security scan checks every locked library against OSV, the public database of known vulnerabilities. It runs on each pull request, each push to main and once a week.
 - Every progress bar keeps its step's label. Reading your records used to show a bar like `0 KB / 6.2 GB` with no word of what it was.
 
 ### Fixed

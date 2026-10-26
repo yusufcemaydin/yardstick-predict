@@ -53,6 +53,13 @@ dev = [
 requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
+[tool.uv]
+# A new release of a library gets into uv.lock only once it has been out for 7 days. A bad release is usually found
+# and pulled by then. This keeps the tests and the release builds to libraries that have had that time. It doesn't
+# change what an install of yardstick-predict gets: CONTRIBUTING.md says how to wait there too.
+exclude-newer = "7 days"
+required-version = ">=0.11"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/yardstick_predict"]
 

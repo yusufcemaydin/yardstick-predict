@@ -4,7 +4,7 @@ Thanks for helping. This guide says how to report problems and how to send chang
 
 ## Set up and run the tests
 
-You need [uv](https://docs.astral.sh/uv/). It installs the right Python and every dependency.
+You need [uv](https://docs.astral.sh/uv/), version 0.11 or newer. It installs the right Python and every dependency.
 
 ```bash
 git clone https://github.com/yusufcemaydin/yardstick-predict
@@ -30,6 +30,26 @@ Before you send a change, check the style too:
 uv run ruff check src tests
 uv run ruff format src tests
 ```
+
+## Libraries and known vulnerabilities
+
+`uv.lock` pins every library the tests and the release builds use. A new release of a library gets into it only once it has been out for 7 days, as `exclude-newer` in `pyproject.toml` says. A bad release is usually found and pulled by then. So `uv lock --upgrade` picks the newest releases that are at least 7 days old.
+
+To take a fix that is newer than that, name the library and the moment its release came out, in UTC, for example:
+
+```bash
+uv lock --upgrade-package anthropic --exclude-newer-package anthropic=2026-10-25T12:00:00Z
+```
+
+The wait covers this project's lock file, not what an install of yardstick-predict gets. To wait the same way when you install it, run `uv tool install --exclude-newer "7 days" yardstick-predict`.
+
+The automatic tests include a security scan. It checks every locked library against OSV, the public database of known vulnerabilities, on each pull request, each push to main and once a week. Run it yourself with:
+
+```bash
+uv audit --locked --preview-features audit
+```
+
+When it finds one, upgrade the library to the release that fixes it, as above.
 
 [How it works](docs/how-it-works.md) explains the data, the model and the test. A change to the model must keep passing the test on real runs, not just the unit tests. Say in your pull request how it did.
 
