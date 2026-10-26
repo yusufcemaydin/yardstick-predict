@@ -29,12 +29,8 @@ dependencies = [
     # The feature store keeps embeddings and LLM answers in Parquet files. Only refresh, setup and the features
     # listing load it, never a forecast.
     "pyarrow>=18",
-]
-
-[project.optional-dependencies]
-# Only for LLM analysis paid with an API key: the providers' own official libraries. A subscription uses the
-# Claude Code or Codex command already on your computer and needs neither.
-llm = [
+    # LLM analysis paid with an API key calls the providers' own official libraries. A subscription uses the
+    # Claude Code or Codex command already on your computer instead.
     "anthropic>=1.12,<2",
     "openai>=3.26,<4",
 ]

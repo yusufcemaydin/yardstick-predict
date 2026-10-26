@@ -1304,19 +1304,15 @@ name = "yardstick-predict"
 version = "0.4.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anthropic" },
     { name = "keyring" },
     { name = "numpy" },
+    { name = "openai" },
     { name = "pyarrow" },
     { name = "scikit-learn", marker = "sys_platform == 'darwin'" },
     { name = "tokenizers" },
     { name = "xgboost", marker = "sys_platform == 'darwin'" },
     { name = "xgboost-cpu", marker = "sys_platform != 'darwin'" },
-]
-
-[package.optional-dependencies]
-llm = [
-    { name = "anthropic" },
-    { name = "openai" },
 ]
 
 [package.dev-dependencies]
@@ -1328,17 +1324,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", marker = "extra == 'llm'", specifier = ">=1.12,<2" },
+    { name = "anthropic", specifier = ">=1.12,<2" },
     { name = "keyring", specifier = ">=24" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "openai", marker = "extra == 'llm'", specifier = ">=3.26,<4" },
+    { name = "openai", specifier = ">=3.26,<4" },
     { name = "pyarrow", specifier = ">=18" },
     { name = "scikit-learn", marker = "sys_platform == 'darwin'", specifier = ">=1.3" },
     { name = "tokenizers", specifier = ">=0.19" },
     { name = "xgboost", marker = "sys_platform == 'darwin'", specifier = ">=3.4,<4" },
     { name = "xgboost-cpu", marker = "sys_platform != 'darwin'", specifier = ">=3.4,<4" },
 ]
-provides-extras = ["llm"]
 
 [package.metadata.requires-dev]
 dev = [

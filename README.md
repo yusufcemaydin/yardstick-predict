@@ -117,11 +117,7 @@ It sends each task's prompt and the end of the conversation before it to the AI 
 | `claude` | Your Claude subscription, through the Claude Code command. No extra bill, but it counts toward your plan's usage limits. | Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 |
 | `codex` | Your ChatGPT subscription, through the Codex command. No extra bill, but it counts toward your plan's usage limits. | Codex's own model |
 
-With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price; with Claude Haiku 5.5, about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session, so these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in, stop asking, and train without LLM analysis for now. The next refresh asks again. An API key needs the providers' own libraries:
-
-```bash
-uv tool install 'yardstick-predict[llm]@latest'
-```
+With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price; with Claude Haiku 5.5, about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session, so these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in, stop asking, and train without LLM analysis for now. The next refresh asks again.
 
 ## Forecasts in Claude Code
 
@@ -257,7 +253,7 @@ To get the newest version:
 uv tool upgrade yardstick-predict
 ```
 
-It keeps the `llm` extra if you added it. If you installed 0.3.0 or an earlier version from GitHub, switch to PyPI once with `uv tool install 'yardstick-predict@latest'`, or `uv tool install 'yardstick-predict[llm]@latest'` if you use LLM analysis with an API key. After that, the upgrade command above gets each new release.
+If you installed 0.3.0 or an earlier version from GitHub, switch to PyPI once with `uv tool install 'yardstick-predict@latest'`. After that, the upgrade command above gets each new release.
 
 Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once, and embeds only the texts that changed. When a new version reads new features or trains the model another way, the next refresh trains it again. Until then, a model the previous version trained keeps forecasting as it did. A model from an older version gives no forecasts until it's trained again.
 
@@ -305,7 +301,7 @@ An account without a payment method gets low limits, such as a few requests and 
 | [keyring](https://github.com/jaraco/keyring) | Keeps your Voyage key in your computer's password store. |
 | [PyArrow](https://arrow.apache.org/docs/python/) | Reads and writes the feature store's files, in Parquet, a compact file format for tables. |
 | [scikit-learn](https://scikit-learn.org), on macOS only | Brings the OpenMP library XGBoost needs on a Mac, so there's nothing else to install. |
-| [anthropic](https://github.com/anthropics/anthropic-sdk-python) and [openai](https://github.com/openai/openai-python), only with the `llm` extra | The providers' own libraries, for LLM analysis paid with an API key. Not installed unless you ask for them. |
+| [anthropic](https://github.com/anthropics/anthropic-sdk-python) and [openai](https://github.com/openai/openai-python) | The providers' own libraries, for LLM analysis paid with an API key. |
 
 ## Documentation
 
