@@ -51,8 +51,6 @@ DESCRIPTION_TOKENS = 150
 INSIDE = "YARDSTICK_PREDICT_LLM_CALL"
 """Set for the Claude Code and Codex commands this module starts, so yardstick's own hooks stay out of them."""
 DEFAULT_CODEX = "codex-default"
-INSTALL = "uv tool install 'yardstick-predict[llm]'"
-"""How to add the providers' libraries to a yardstick-predict installed with uv."""
 """Codex's own default model, whichever the plan gives."""
 
 
@@ -524,12 +522,8 @@ def analyze_requests(predictor, tasks) -> dict[str, dict]:
 
 
 def _anthropic(model: str, system: str, text: str, shape: dict) -> dict:
-    try:
-        import anthropic
-    except ImportError:
-        raise LLMError(
-            f"Paying with an Anthropic API key needs the anthropic package. Add it with: {INSTALL}"
-        ) from None
+    import anthropic
+
     request = {
         "model": model,
         "max_tokens": 16000,
@@ -563,10 +557,8 @@ def _anthropic(model: str, system: str, text: str, shape: dict) -> dict:
 
 
 def _openai(model: str, system: str, text: str, shape: dict) -> dict:
-    try:
-        import openai
-    except ImportError:
-        raise LLMError(f"Paying with an OpenAI API key needs the openai package. Add it with: {INSTALL}") from None
+    import openai
+
     try:
         response = openai.OpenAI().responses.create(
             model=model,
