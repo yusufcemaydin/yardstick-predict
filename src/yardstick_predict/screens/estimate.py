@@ -1,55 +1,108 @@
 """Estimate: forecast a task before you run it, one step at a time.
 
-Describe the task. Then pick the AI models: the ones with enough data behind them, or any you've used, from a
-list. Either way a list shows them 6 at a time. The forecasts show 6 at a time too, each with the ranges the
-real result lands in half the time and 9 times out of 10. After them you choose what's next: another page,
-another task, other AI models for the same task, or home.
+Describe the task. With more than one model, choose which of your models forecasts it. Then pick the AI
+models: the ones with enough data behind them, or any you've used, from a list. Either way a list shows them 6
+at a time. The forecasts show 6 at a time too, each with the ranges the real result lands in half the time and
+9 times out of 10. After them you choose what's next: another page, another task, other AI models for the same
+task, another of your models for it or home.
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 
 from .. import cli, ui
-from . import checklist, keys
+from ..store import default_name, predictor_names
+from . import checklist, keys, listing
 
 PAGE = 6
 """How many forecasts a page shows."""
 
 
+@dataclass
+class Ready:
+    """One of your models, loaded to forecast, with the AI models it knows and how much data each has."""
+
+    predictor: object
+    model: object
+    pairs: list
+    runs: dict
+    too_few: list
+    verdicts: dict
+
+
 def run() -> None:
     """The Estimate screen, until you go back home."""
-    from ..forecast import RequestError, load
+    from ..forecast import RequestError
 
-    try:
-        predictor = cli.request_predictor(None)
-        model = load(predictor)
-    except RequestError as error:
-        ui.error(error.message)
-        return
-    pairs, runs, too_few = cli.every_pair(predictor, None, model.meta)
-    verdicts = (model.meta.get("report") or {}).get("models") or {}
-    task = None
+    several = len(predictor_names()) > 1
+    task, name, loaded = None, None, None
     while True:
         if task is None:
             task = describe()
             if not task:
                 return
-        chosen = pick(pairs, runs, verdicts, too_few)
+        if loaded is None:
+            name = which(name) if several else default_name() or predictor_names()[0]
+            if name is None:
+                task = None  # back to describing the task
+                continue
+            loaded = ready(name)
+            if loaded is None:  # it can't forecast, and the reason was said
+                if not several:
+                    return
+                continue  # choose another of your models, for the same task
+        chosen = pick(loaded.pairs, loaded.runs, loaded.verdicts, loaded.too_few)
         if chosen is None:
             task = None  # back to describing the task
             continue
         asked = argparse.Namespace(context=None, skill=[], distribution=False)
         try:
-            result = cli.forecast_pairs(predictor, model, task, chosen, asked, rough=True, runs=runs)
+            result = cli.forecast_pairs(
+                loaded.predictor, loaded.model, task, chosen, asked, rough=True, runs=loaded.runs
+            )
         except RequestError as error:
             ui.error(error.message)
             result = None
-        step = show(task, result, predictor)
+        step = show(task, result, loaded.predictor, several)
         if step == "home":
             return
         if step == "task":
             task = None
+        elif step == "model":
+            loaded = None
+
+
+def which(last: str | None) -> str | None:
+    """Ask which of your models forecasts the task. It starts on the one used last, else on the default. None goes
+    back to the task."""
+    names = predictor_names()
+    ui.out()
+    ui.line("Which of your models should forecast it?")
+    ui.out()
+    choices = [keys.Choice(label, when) for label, when in listing.models()] + [keys.Choice("Back")]
+    first = last if last in names else default_name()
+    picked = keys.choose(choices, start=names.index(first) if first in names else 0)
+    return None if picked is None or picked == len(names) else names[picked]
+
+
+NEEDS_TRAINING = "{name} needs training before it can forecast. Choose Update on the home screen to train it."
+
+
+def ready(name: str) -> Ready | None:
+    """The model, loaded to forecast, or None when it can't forecast, with the reason said."""
+    from ..forecast import RequestError, load
+
+    try:
+        predictor = cli.request_predictor(name)
+        model = load(predictor)
+    except RequestError as error:
+        ui.error(NEEDS_TRAINING.format(name=name) if error.code == "not_trained" else error.message)
+        return None
+    pairs, runs, too_few = cli.every_pair(predictor, None, model.meta)
+    verdicts = (model.meta.get("report") or {}).get("models") or {}
+    return Ready(predictor, model, pairs, runs, too_few, verdicts)
 
 
 def describe() -> str:
@@ -115,8 +168,9 @@ def _label(pair: tuple, every: list) -> str:
     return f"{name.ljust(pad)}  {cli.shown_effort(effort)}".rstrip()
 
 
-def show(task: str, result: dict | None, predictor) -> str:
-    """The forecasts, a page at a time, then what's next. Returns task, models or home."""
+def show(task: str, result: dict | None, predictor, several: bool = False) -> str:
+    """The forecasts, a page at a time, then what's next. Returns task, models, model or home. With `several` of
+    your models, another of them can forecast the same task."""
     forecasts = (result or {}).get("forecasts") or []
     page, count = 0, max(1, -(-len(forecasts) // PAGE))
     while True:
@@ -134,8 +188,10 @@ def show(task: str, result: dict | None, predictor) -> str:
         steps += [
             ("task", keys.Choice("Estimate another task")),
             ("models", keys.Choice("Choose other AI models", "for the same task")),
-            ("home", keys.Choice("Back to home")),
         ]
+        if several:
+            steps.append(("model", keys.Choice("Use another of your models", "for the same task")))
+        steps.append(("home", keys.Choice("Back to home")))
         picked = keys.choose([choice for _, choice in steps], footer=[keys.hint("esc home")])
         step = "home" if picked is None else steps[picked][0]
         if step == "next":

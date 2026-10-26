@@ -72,7 +72,7 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
   › _
 ```
 
-Use plain `input()`. Enter on its own goes back home. Then, step by step:
+Use plain `input()`. Enter on its own goes back home. With more than one model, it asks next which of your models should forecast it. The list starts on the one used last, else on the default. With one model it asks nothing. A model that can't forecast yet says it needs training. Then the list comes back. Then, step by step:
 
 ```
   Which AI models should it forecast?
@@ -93,7 +93,7 @@ Each choice opens a list of AI models at their effort levels, 6 to a page, with 
   ↑↓ move · enter forecast this one · space tick several · ←→ page · esc go back
 ```
 
-The forecasts show 6 to a page. Under each are two ranges, named in the effort column. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task or Back to home.
+The forecasts show 6 to a page. Under each are two ranges, named in the effort column. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task, Use another of your models for the same task or Back to home. Use another of your models shows only when you have more than one.
 
 ## 4. Update
 

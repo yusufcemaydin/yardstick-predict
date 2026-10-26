@@ -290,6 +290,48 @@ def test_forecasts_show_six_to_a_page(capsys, monkeypatch, quick, ready):
     assert re.search(r"1\. AI models with enough data\s+8 AI models\n", out)  # too many to name on one line
 
 
+def test_with_several_models_estimate_asks_which_and_another_can_forecast_the_same_task(
+    capsys, monkeypatch, quick, ready
+):
+    trained("main", {"claude-opus-5-5": True})
+    trained("work", {"gpt-6.1-sol": True})
+    set_default("main")
+    asked = typing(monkeypatch, "fix the parser")
+    # Estimate, then work, its AI models with enough data and Enter. Then another of your models: main, which the
+    # list starts on work for, its AI models and Enter. Then home and quit.
+    pressing(monkeypatch, "1", "2", "1", keys.ENTER, "3", keys.UP, keys.ENTER, "1", keys.ENTER, "4", keys.ESC)
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    assert asked == ["›"]  # the task is asked once, and kept for the other model
+    assert out.count("Which of your models should forecast it?") == 2
+    assert re.search(r"1\. main \(default\)\s+not trained yet\n\s+2\. work", out)
+    first, second = out.split("Use another of your models  for the same task", 1)
+    assert re.search(r"gpt-6\.1-sol\s+max\s+60 s", first) and "model work, updated" in first
+    assert re.search(r"claude-opus-5-5\s+max\s+60 s", second) and "model main, updated" in second
+    assert "4. Back to home" in out
+
+
+def test_estimate_says_when_a_model_cant_forecast_and_another_can_be_chosen(capsys, monkeypatch, quick, ready):
+    trained("main", {"claude-opus-5-5": True})
+    Predictor.create("new", [], {"model": "voyage-4", "dimensions": 256}, features=["prompt"], model={"type": "quick"})
+    set_default("main")
+    typing(monkeypatch, "fix the parser")
+    pressing(monkeypatch, "1", "2", "1", "1", keys.ENTER, keys.ESC, keys.ESC)  # new, which can't, then main
+    assert main([]) == 0
+    captured = capsys.readouterr()
+    assert "new needs training before it can forecast. Choose Update on the home screen to train it." in captured.err
+    assert re.search(r"claude-opus-5-5\s+max\s+60 s", plain(captured.out))
+
+
+def test_with_one_model_estimate_asks_nothing_about_models(capsys, monkeypatch, quick, ready):
+    trained("main", {"claude-opus-5-5": True})
+    typing(monkeypatch, "fix the parser")
+    pressing(monkeypatch, "1", "1", keys.ENTER, keys.ESC, keys.ESC)
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    assert "Which of your models" not in out and "Use another of your models" not in out
+
+
 # Fitting the terminal -----------------------------------------------------------------------------------------
 
 LONG_NAME = "a-very-long-model-name-for-testing-12345"
