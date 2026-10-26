@@ -726,6 +726,65 @@ def test_rename_keeps_the_default_even_when_it_was_found_only_by_its_name(capsys
     assert Predictor("main").config["name"] == "main"
 
 
+def test_delete_says_what_goes_asks_with_keep_it_first_and_deletes(capsys, monkeypatch):
+    made("main")
+    made("old")
+    set_default("main")
+    # Models, old, Delete, and Enter keeps it. Then Delete again, down to Delete it for good and Enter. Then home.
+    pressing(monkeypatch, "3", "2", "4", keys.ENTER, "4", keys.DOWN, keys.ENTER, keys.ESC, keys.ESC)
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    squashed = " ".join(out.split())
+    assert re.search(r"4\. Delete\s+Remove it for good", out) and "Delete old" in out
+    assert "This deletes its folder" in squashed and "its settings" in squashed
+    assert "Your records and the feature store stay, and so do your other models." in squashed
+    assert "1. Keep it" in out and "2. Delete it for good" in out and "esc keep it" in out
+    assert "Nothing was deleted." in out and "Deleted old." in out
+    assert predictor_names() == ["main"] and default_name() == "main"
+    assert "1. main (default)" in out.split("Deleted old.")[1]  # back on the list, which shows what's left
+
+
+def test_deleting_the_default_model_says_which_is_the_default_now(capsys, monkeypatch):
+    for name in ("a", "b", "c"):
+        made(name)
+    set_default("a")
+    pressing(monkeypatch, "3", "1", "3", keys.DOWN, keys.ENTER, keys.ESC, keys.ESC)  # Models, a, Delete it for good
+    assert main([]) == 0
+    squashed = " ".join(plain(capsys.readouterr().out).split())
+    assert "It's your default model." in squashed
+    assert "It was your default. There's no default now." in squashed and default_name() is None
+    set_default("b")
+    pressing(monkeypatch, "3", "1", "3", keys.DOWN, keys.ENTER, keys.ESC, keys.ESC)  # b, the default, of two
+    assert main([]) == 0
+    assert "c is your only model now. It's the default." in plain(capsys.readouterr().out)
+    assert predictor_names() == ["c"] and default_name() == "c"
+
+
+def test_a_model_being_updated_isnt_deleted_from_its_screen(capsys, monkeypatch):
+    from yardstick_predict import locks
+
+    made("other")
+    made("work")
+    with locks.held(store.predictor_folder("work") / "refresh.lock"):
+        pressing(monkeypatch, "3", "2", "4", keys.ESC, keys.ESC, keys.ESC)  # Models, work, Delete
+        assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    busy = "work is being set up or updated by another command. Delete it once that's done."
+    assert busy in " ".join(out.split())
+    assert "Keep it" not in out and predictor_names() == ["other", "work"]
+
+
+@pytest.mark.parametrize("width", [80, 45])
+def test_the_delete_question_fits_with_a_long_name(capsys, monkeypatch, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    made(LONG_NAME)
+    made("short")
+    pressing(monkeypatch, "3", "1", "4", keys.ESC, keys.ESC, keys.ESC, keys.ESC)  # Models, the long one, Delete
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert widest(out) < width and "Nothing was deleted." in plain(out) and LONG_NAME in predictor_names()
+
+
 def test_the_rename_command_does_the_same_for_scripts(capsys):
     made("work")
     assert main(["rename", "work", "home"]) == 0

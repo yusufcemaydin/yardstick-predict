@@ -85,7 +85,7 @@ It shows the expected time, tokens and cost on every AI model you've used, at ea
 
 Every week or so, run `yardstick-predict` and choose Update. Before it reads anything, it says where your new work is and how much there is to read. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. It asks once. Cancel spends nothing and saves nothing. `yardstick-predict refresh` in a terminal shows the same summary. With `--yes` it asks nothing.
 
-Models lists your models with `(default)` after the default one. Choose one to update it, make it the default or rename it.
+Models lists your models with `(default)` after the default one. Choose one to update it, make it the default, rename it or delete it. Delete says what goes and what stays, then asks. Your records stay.
 
 ## Features the model learns from
 

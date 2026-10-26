@@ -1,4 +1,4 @@
-"""Models: your models, and for each one Update, Make default and Rename."""
+"""Models: your models, and for each one Update, Make default, Rename and Delete."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def model(name: str) -> str | None:
         for part in ui.wrapped(text):  # long lists of AI models or features are broken to fit
             ui.line(part)
     ui.out()
-    actions = ["update", "default", "rename", "back"]
+    actions = ["update", "default", "rename", "delete", "back"]
     if default_name() == name:
         actions.remove("default")
     picked = keys.choose([CHOICES[action] for action in actions])
@@ -62,15 +62,13 @@ def model(name: str) -> str | None:
         return name
     if action == "default":
         set_default(name)
-        for number, part in enumerate(ui.wrapped(f"{name} is now the default.", 4)):
-            if number == 0:
-                ui.ok(part)
-            else:
-                ui.line(f"  {part}")
+        done(f"{name} is now the default.")
         note("Estimate and Claude Code's status line use it.")
         return name
     if action == "rename":
         return rename(name)
+    if action == "delete":
+        return delete(name)
     return None
 
 
@@ -78,6 +76,7 @@ CHOICES = {
     "update": keys.Choice("Update", "Learn from your newest work"),
     "default": keys.Choice("Make default", "Use it when you don't pick one"),
     "rename": keys.Choice("Rename", "Give it another name"),
+    "delete": keys.Choice("Delete", "Remove it for good"),
     "back": keys.Choice("Back"),
 }
 
@@ -108,14 +107,63 @@ def rename(old: str) -> str:
         except OSError as error:
             ui.error(f"Couldn't rename {old}: {error.strerror or error}. Nothing changed.")
             return old
-        for number, part in enumerate(ui.wrapped(f"Renamed {old} to {new}.", 4)):
-            if number == 0:
-                ui.ok(part)
-            else:
-                ui.line(f"  {part}")
+        done(f"Renamed {old} to {new}.")
         if was_default:
             note(f"{new} is still the default.")
         return new
+
+
+def delete(name: str) -> str | None:
+    """Say exactly what deleting the model removes and what stays, then ask, with keeping it first. Returns the
+    model's name when it's kept, or None once it's deleted, to go back to the list."""
+    from ..store import being_refreshed, contents, delete_predictor
+
+    # A setup or update of it would make it again, so it's refused before anything is asked.
+    if being_refreshed(name):
+        note(f"{name} is being set up or updated by another command. Delete it once that's done.")
+        return name
+    was_default = default_name() == name
+    ui.out()
+    ui.line(ui.bold(ui.cut(f"Delete {name}", ui.columns() - 3)))
+    for quiet, text in cli.what_goes(name, contents(name), was_default, called="model"):
+        indent = len(text) - len(text.lstrip())
+        for part in ui.wrapped(text.strip(), 2 + indent):
+            ui.line(" " * indent + (ui.dim(part) if quiet else part))
+    ui.out()
+    choices = [keys.Choice("Keep it"), keys.Choice("Delete it for good")]
+    if keys.choose(choices, footer=[keys.hint("esc keep it")]) != 1:
+        note("Nothing was deleted.")
+        return name
+    try:
+        delete_predictor(name)
+    except Busy as error:
+        ui.error(str(error))
+        return name
+    except OSError as error:
+        ui.error(
+            f"Couldn't delete all of {name}: {error.strerror or error}. It's still listed. Try again when no other "
+            "program is using its files."
+        )
+        return name
+    done(f"Deleted {name}.")
+    left, now = predictor_names(), default_name()
+    if was_default and now is not None:
+        note(f"{now} is your only model now. It's the default.")
+    elif was_default and left:
+        note(
+            "It was your default. There's no default now. Until you choose one, Claude Code's status line shows no "
+            "forecasts. Choose Make default on the model you want."
+        )
+    return None
+
+
+def done(text: str) -> None:
+    """What worked, with its mark, broken to fit the terminal."""
+    for number, part in enumerate(ui.wrapped(text, 4)):
+        if number == 0:
+            ui.ok(part)
+        else:
+            ui.line(f"  {part}")
 
 
 def note(text: str) -> None:

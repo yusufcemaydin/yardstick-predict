@@ -173,13 +173,15 @@ Choosing one opens its screen:
   › 1. Update        Learn from your newest work
     2. Make default  Use it when you don't pick one
     3. Rename        Give it another name
-    4. Back
+    4. Delete        Remove it for good
+    5. Back
 ```
 
 - **Update** is the same flow as choosing that model in the Update menu.
 - **Make default** shows only on a model that is not the default already. It confirms: "llm is now the default. Estimate and Claude Code's status line use it."
 - **Rename** asks for a new name (with the rules in `name_problem`). It renames the model's folder under `~/.yardstick/predictors` with the locks the code already uses. A default model stays the default, including when the old name was `default` and `default_name` only found it by that name.
 - Add a `rename OLD NEW` command, so scripts can do the same.
+- **Delete** says exactly what goes and what stays, as `delete NAME` does: the model's folder goes. Your records and the feature store stay. Then it asks, with Keep it first. Enter or Esc keeps the model. A model that another command is setting up or updating isn't deleted. After the default is deleted, it says which model is the default now. With several left and none the default, it says Claude Code's status line shows no forecasts until you choose one.
 
 ## 6. Other changes
 

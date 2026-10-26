@@ -2102,13 +2102,20 @@ def cmd_delete(args) -> int:
 def say_what_goes(name: str, found, is_default: bool) -> None:
     """Exactly what deleting a predictor removes, and what stays."""
     ui.heading(f"Delete {name}")
+    for quiet, text in what_goes(name, found, is_default):
+        (ui.note if quiet else ui.line)(text)
+
+
+def what_goes(name: str, found, is_default: bool, called: str = "predictor") -> list[tuple[bool, str]]:
+    """Exactly what deleting a predictor removes, and what stays, as lines, each with whether it's a quiet note.
+    `called` is what a predictor is called where it's said, such as a model on a screen."""
+    default = [(True, f"It's your default {called}.")] if is_default else []
     if found.link_to is not None:
-        ui.line(f"{name} is a link to {found.link_to}, not a folder of its own.")
-        ui.line("This deletes only the link. What it links to stays, with everything in it.")
-        if is_default:
-            ui.note("It's your default predictor.")
-        return
-    ui.line(f"This deletes its folder, {found.folder}, and everything in it:")
+        return [
+            (False, f"{name} is a link to {found.link_to}, not a folder of its own."),
+            (False, "This deletes only the link. What it links to stays, with everything in it."),
+            *default,
+        ]
     goes = ["its settings"] if found.settings else []
     if found.dataset:
         tasks = "" if found.tasks is None else f" of {found.tasks:,} task{'' if found.tasks == 1 else 's'}"
@@ -2117,12 +2124,13 @@ def say_what_goes(name: str, found, is_default: bool) -> None:
         goes.append(f"its prepared dataset, what went into its last training ({ui.size(found.prepared)})")
     if found.model:
         goes.append(f"its trained model ({ui.size(found.model)})")
-    for part in goes:
-        ui.line(f"  {part}")
-    ui.line("Your records and the feature store stay, and so do your other predictors.")
-    ui.note("The embeddings and LLM answers it made stay in the feature store, for any predictor that uses them.")
-    if is_default:
-        ui.note("It's your default predictor.")
+    return [
+        (False, f"This deletes its folder, {found.folder}, and everything in it:"),
+        *((False, f"  {part}") for part in goes),
+        (False, f"Your records and the feature store stay, and so do your other {called}s."),
+        (True, f"The embeddings and LLM answers it made stay in the feature store, for any {called} that uses them."),
+        *default,
+    ]
 
 
 def say_default_after(name: str, before: str | None, after: str | None) -> None:

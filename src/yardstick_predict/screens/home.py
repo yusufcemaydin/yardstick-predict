@@ -37,7 +37,7 @@ def run() -> int:
 CHOICES = {
     "estimate": lambda any_model: keys.Choice("Estimate", "Forecast a task's time and cost"),
     "update": lambda any_model: keys.Choice("Update", "Learn from your newest work"),
-    "models": lambda any_model: keys.Choice("Models", "Update, rename or pick the default"),
+    "models": lambda any_model: keys.Choice("Models", "Update, rename, delete or pick the default"),
     "add": lambda any_model: keys.Choice("Add New", "Make another model" if any_model else "Make your first model"),
 }
 
