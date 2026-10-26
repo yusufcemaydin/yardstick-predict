@@ -26,7 +26,10 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("VOYAGE_API_BASE", raising=False)
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
     monkeypatch.setenv("YARDSTICK_NO_UPDATE_CHECK", "1")  # the home screen never asks PyPI in a test
-    from yardstick_predict import embeddings
+    monkeypatch.delenv("YARDSTICK_NUMBERED_MENUS", raising=False)
+    from yardstick_predict import embeddings, ui
+
+    ui.numbered.cache_clear()  # each test asks for numbered menus, or not, for itself
 
     # Tests never download Voyage's tokenizer. One token per word is close enough here.
     monkeypatch.setattr(embeddings, "count_tokens", lambda texts, model: ([len(t.split()) + 1 for t in texts], True))

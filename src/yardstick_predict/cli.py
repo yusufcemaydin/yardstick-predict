@@ -2949,6 +2949,7 @@ def needs_xgboost(args) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    ui.numbered.cache_clear()  # whether numbered menus were asked for is looked up once a command
     try:
         args = make_parser().parse_args(argv)
     except BadArguments as problem:

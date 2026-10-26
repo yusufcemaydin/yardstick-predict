@@ -2,7 +2,8 @@
 
 A menu is moved with the arrow keys and chosen with Enter. A number key picks its choice at once, and Esc
 goes back. It uses the standard library only: termios and tty on macOS and Linux, msvcrt on Windows. A
-terminal that can't pass single key presses gets the choices numbered, and a number typed in.
+terminal that can't pass single key presses gets the choices numbered, and a number typed in. So does anyone who
+asks for numbered menus, as a screen reader needs: YARDSTICK_NUMBERED_MENUS=1, or numbered_menus in settings.json.
 """
 
 from __future__ import annotations
@@ -41,8 +42,10 @@ def reader() -> Callable[..., str] | None:
 
 def _terminal() -> str | None:
     """How this terminal passes single key presses: windows or posix. None when it can't, or when it can't redraw
-    a menu in place: a dumb terminal, or an old Windows console whose cursor codes won't turn on. Those get the
-    menus numbered, to type a number in."""
+    a menu in place: a dumb terminal, or an old Windows console whose cursor codes won't turn on. None too when
+    numbered menus were asked for, as a screen reader needs. Those get the menus numbered, to type a number in."""
+    if ui.numbered():
+        return None
     try:
         if not sys.stdin.isatty() or not ui.codes_work():
             return None

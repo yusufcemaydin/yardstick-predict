@@ -45,7 +45,8 @@ CHOICES = {
 def greet(names: list[str]) -> None:
     """The box at the top: the tool's name and version, what it does and your models."""
     columns = shutil.get_terminal_size((80, 24)).columns
-    boxed = columns >= NO_BOX_UNDER
+    # A screen reader would read out each line of the box, so numbered menus get none.
+    boxed = columns >= NO_BOX_UNDER and not ui.numbered()
     # A line in the box has its edges and a space on each side. Without the box, two spaces before it.
     room = columns - 1 - (4 if boxed else 2)
     lines = [f"{ui.accent(ui.mark('logo'))} {ui.bold('yardstick-predict')} {ui.dim(__version__)}"]

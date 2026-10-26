@@ -61,6 +61,7 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 - A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then its time, tokens and cost, each with its two ranges beside it, one under the other.
 - Build it with the standard library only: `termios` and `tty` on macOS and Linux, `msvcrt` on Windows. No new dependency.
 - When a terminal cannot pass single key presses, fall back to typing the number. So do a dumb terminal (`TERM=dumb`) and an old Windows console where the codes that move the cursor can't be turned on.
+- Numbered menus can be asked for, as a screen reader needs: `YARDSTICK_NUMBERED_MENUS=1` or `"numbered_menus": true` in `settings.json`. Every menu is typed into. Nothing redraws itself: no progress bar, no box on the home screen. Esc can't stop a long step then. Ctrl+C still does.
 
 ## 3. Estimate
 

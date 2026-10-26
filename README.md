@@ -87,6 +87,8 @@ Every week or so, run `yardstick-predict` and choose Update. Before it reads any
 
 Models lists your models with `(default)` after the default one. Choose one to update it, make it the default, rename it or delete it. Delete says what goes and what stays, then asks. Your records stay.
 
+**With a screen reader,** set `YARDSTICK_NUMBERED_MENUS=1` or add `"numbered_menus": true` to `settings.json` in the yardstick folder. Every menu then lists its choices with numbers. You type the number of the one you want. Nothing on screen redraws itself: there are no progress bars.
+
 ## Features the model learns from
 
 Setup lists each feature with its options under it. Type a number to turn a feature on or off, or a number and a letter for one option. The first three are always on: they cost nothing and send nothing anywhere.

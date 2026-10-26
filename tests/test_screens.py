@@ -1005,3 +1005,44 @@ def test_esc_stops_a_long_step_on_windows_but_an_arrow_doesnt(monkeypatch):
 def test_a_terminal_that_cant_move_the_cursor_gets_numbered_menus(monkeypatch):
     monkeypatch.setenv("TERM", "dumb")
     assert not ui.codes_work() and keys._terminal() is None
+
+
+# Numbered menus on request --------------------------------------------------------------------------------------
+
+
+class Untouched:
+    """Standard input that fails a test if anything asks whether it's a terminal."""
+
+    def isatty(self) -> bool:
+        pytest.fail("It looked at the terminal")
+
+
+def test_numbered_menus_can_be_asked_for_and_nothing_redraws_itself(capsys, monkeypatch):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv(ui.NUMBERED, "1")
+    ui.numbered.cache_clear()
+    monkeypatch.setattr("sys.stdin", Untouched())
+    assert keys._terminal() is None and keys.reader() is None  # every menu is typed into
+    with keys.watching() as watch:
+        watch.stop_if_asked()  # Esc can't stop a long step: Ctrl+C still does
+    ui.working("Reading your records")
+    ui.progress(500, 1000, "bytes")
+    ui.ok("Read 1 KB.")
+    assert plain(capsys.readouterr().out) == "  Reading your records...\n  ✓ Read 1 KB.\n"  # no bar, no line drawn over
+
+
+def test_numbered_menus_are_a_setting_too_and_the_home_screen_has_no_box(capsys, monkeypatch):
+    made("main")
+    store.save_setting("numbered_menus", True)
+    monkeypatch.setattr(cli, "interactive", lambda: True)
+    typing(monkeypatch, "5")  # Quit, typed
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    assert "╭" not in out and "│" not in out and "5. Quit" in out and "Your models" in out
+    store.save_setting("numbered_menus", False)
+    ui.numbered.cache_clear()
+    assert not ui.numbered()
+    monkeypatch.setenv(ui.NUMBERED, "0")  # the variable says no, whatever the setting
+    store.save_setting("numbered_menus", True)
+    ui.numbered.cache_clear()
+    assert not ui.numbered()

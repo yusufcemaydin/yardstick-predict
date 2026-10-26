@@ -2,7 +2,8 @@
 
 A few quiet styles: bold headings, a cyan mark for questions, a green mark for what worked, a red one
 for what didn't, and grey for notes. When the output goes to a file or another program, or NO_COLOR is
-set, it is plain text without marks. FORCE_COLOR turns the styles on anyway.
+set, it is plain text without marks. FORCE_COLOR turns the styles on anyway. With numbered menus asked for, as a
+screen reader needs, nothing redraws itself in place: no progress bar, and every menu is typed into.
 """
 
 from __future__ import annotations
@@ -65,6 +66,29 @@ def codes_work() -> bool:
     if os.environ.get("TERM") == "dumb":
         return False
     return sys.platform != "win32" or _windows_colors()
+
+
+NUMBERED = "YARDSTICK_NUMBERED_MENUS"
+"""Set to 1 for menus with numbers to type, and nothing on screen that redraws itself, as a screen reader needs. The
+setting numbered_menus, true in settings.json, does the same."""
+
+
+@lru_cache(maxsize=1)
+def numbered() -> bool:
+    """Whether numbered menus were asked for: every menu typed into, and nothing that redraws itself in place. It's
+    looked up once a command."""
+    asked = os.environ.get(NUMBERED, "").strip().lower()
+    if asked:
+        return asked not in ("0", "false", "no")
+    from .store import settings
+
+    return settings().get("numbered_menus") is True
+
+
+def redraws() -> bool:
+    """Whether a line may be drawn over, as a progress bar draws over itself: in a styled terminal, unless numbered
+    menus were asked for."""
+    return styled() and not numbered()
 
 
 @lru_cache(maxsize=1)
@@ -198,7 +222,7 @@ def fail(text: str) -> None:
 def working(text: str) -> None:
     """Say what's happening. In a terminal, the next line printed replaces it, and a progress bar keeps saying it."""
     global _transient, _label
-    if styled():
+    if redraws():
         _clear()
         print(f"  {dim(mark('wait') + ' ' + text)}", end="", flush=True)
         _transient = True
@@ -272,14 +296,15 @@ _bar: _Bar | None = None
 
 
 def progress(done: int, total: int, unit: str) -> None:
-    """A bar for a long step, which replaces itself as it moves. It only shows in a terminal.
+    """A bar for a long step, which replaces itself as it moves. It only shows in a terminal, and not with numbered
+    menus, where nothing redraws itself.
 
     Once the step has run a few seconds and done a few percent, it also says about how long is left. A bar
     starts when one with another total or unit comes, or when it goes back, so a step starts its own with
     progress(0, total, unit). A unit of "bytes" shows sizes, such as 120 MB.
     """
     global _transient, _bar
-    if not styled():
+    if not redraws():
         return
     now = _now()
     bar = _bar
