@@ -422,6 +422,69 @@ def test_setup_and_refresh_answer_a_program_in_json(capsys, few, ready, quick):
     assert code == 1 and json.loads(out)["error"]["code"] == "invalid_request"  # a second one needs a name
 
 
+def test_a_spending_limit_stops_before_anything_is_spent(capsys, few, ready, quick):
+    setup = ["create", "--yes", "--json", "--archive", f"claude-code={few}", *quick]
+    code, out = run(capsys, *setup, "--max-cost", "0")
+    error = json.loads(out)["error"]
+    assert code == 1 and error["code"] == "over_max_cost"
+    assert "more than your limit of $0. Nothing was spent or saved. Raise --max-cost" in error["message"]
+    assert predictor_names() == [] and len(ready.requests) == 1  # only the tiny key check was sent
+    for bad in ("-1", "nan"):
+        code, out = run(capsys, *setup, "--max-cost", bad)
+        assert code == 1 and json.loads(out)["error"]["code"] == "invalid_request"
+    code, out = run(capsys, *setup, "--max-cost", "1")
+    answer = json.loads(out)
+    assert code == 0 and answer["done"] and answer["max_cost"] == 1 and 0 < answer["spent"] <= 1
+
+    session = ClaudeSession(few, "brand-new", START + 90 * 86400)
+    for n in range(3):
+        session.prompt(f"new task {n}")
+        session.reply(5)
+    session.save(mtime=START)
+    sent = len(ready.requests)
+    code, out = run(capsys, "refresh", "--yes", "--json", "--max-cost", "0")
+    assert code == 1 and json.loads(out)["error"]["code"] == "over_max_cost"
+    assert len(ready.requests) == sent and Predictor("default").count_tasks() == 40  # nothing spent or saved
+    code, out = run(capsys, "refresh", "--yes", "--max-cost", "0")  # a person gets the same reason
+    assert code == 1 and Predictor("default").count_tasks() == 40
+    code, out = run(capsys, "refresh", "--yes", "--json", "--max-cost", "1")
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and 0 < answer["spent"] <= 1 and Predictor("default").count_tasks() == 43
+
+
+def test_llm_analysis_stops_at_the_spending_limit_and_training_goes_on(capsys, few, ready, quick, monkeypatch):
+    from test_llm import answer_for, ids_in
+
+    reads, writes = llm.TOKENS_PER_TASK
+
+    def costly(model, system, text, shape):  # each task really costs twice the price shown
+        ids = ids_in(text)
+        return {
+            **answer_for(ids),
+            "_usage": {"model": model, "input": 2 * reads * len(ids), "output": 2 * writes * len(ids)},
+        }
+
+    monkeypatch.setattr(llm, "_anthropic", costly)
+    per_task = llm.cost(1, "claude-opus-5-5")
+    limit = 40 * per_task + 0.01  # the price shown fits, with room for the embedding
+    flags = ["--features", "llm:kind", "--llm-provider", "anthropic", "--archive", f"claude-code={few}", *quick]
+    code, out = run(capsys, "create", "--yes", "--json", "--max-cost", f"{limit:.4f}", *flags)
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and answer["analyzed"] < 40
+    assert answer["spent"] <= limit and any("stopped at your spending limit" in note for note in answer["notes"])
+    assert answer["cost"]["analysis"]["usd"] == pytest.approx(40 * per_task)
+
+
+def test_a_spending_limit_cant_be_kept_without_a_price(capsys, few, ready, quick):
+    flags = ["--features", "llm:kind", "--llm-provider", "anthropic", "--llm-model", "claude-not-in-the-list"]
+    code, out = run(
+        capsys, "create", "--yes", "--json", "--max-cost", "5", "--archive", f"claude-code={few}", *flags, *quick
+    )
+    error = json.loads(out)["error"]
+    assert code == 1 and error["code"] == "cost_unknown" and "claude-not-in-the-list" in error["message"]
+    assert predictor_names() == []
+
+
 def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, records, ready, monkeypatch):
     trained: list[int] = []
     stop = {"now": False}

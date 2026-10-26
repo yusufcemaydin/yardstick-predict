@@ -19,6 +19,7 @@ It only asks questions when a person runs it in a terminal. When a program runs 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import getpass
 import importlib.util
@@ -86,6 +87,47 @@ def for_program(args, run) -> int:
         sys.stdout = stdout
     print(json.dumps(answer, indent=2))
     return code
+
+
+_limit = None
+"""The spending limit of the setup or refresh running now, from --max-cost, as a spending.Limit. None without one."""
+
+
+@contextlib.contextmanager
+def limited(args):
+    """Keep to the --max-cost limit while the block runs: each step that costs money checks it first."""
+    global _limit
+    usd = getattr(args, "max_cost", None)
+    if usd is not None and (not math.isfinite(usd) or usd < 0):
+        raise CommandError("invalid_request", "--max-cost is a number of US dollars, 0 or more, such as 1.50.")
+    from . import spending
+
+    _limit = spending.Limit(usd) if usd is not None else None
+    try:
+        yield _limit
+    finally:
+        _limit = None
+
+
+def keep_to_limit(cost, what: str) -> None:
+    """Stop before anything is spent when what's planned may cost more than the --max-cost limit allows. `what` is
+    the command, such as refresh."""
+    from .spending import dollars
+
+    if _limit is None:
+        return
+    if cost.most_usd is None:
+        raise CommandError(
+            "cost_unknown",
+            f"The price of {cost.analysis_model} isn't in yardstick's list. A spending limit can't be kept without "
+            "it. Nothing was spent or saved. To go ahead, leave out --max-cost.",
+        )
+    if not _limit.fits(cost.most_usd):
+        raise CommandError(
+            "over_max_cost",
+            f"This {what} would cost up to {dollars(cost.most_usd)} at list price, more than your limit of "
+            f"{dollars(_limit.usd)}. Nothing was spent or saved. Raise --max-cost to go ahead.",
+        )
 
 
 def interactive() -> bool:
@@ -428,14 +470,28 @@ def say_estimate(
         ui.note(memory)
 
 
-def analyze_with_progress(predictor: Predictor, asks: list) -> tuple[int, str | None]:
+def analyze_with_progress(predictor: Predictor, asks: list, reserve: float = 0.0) -> tuple[int, str | None]:
     """Run LLM analysis with a progress bar. When it can't run, training goes on without it. Returns how many tasks
-    it analyzed, and what went wrong, when something did."""
+    it analyzed, and what went wrong, when something did.
+
+    Under a spending limit, LLM analysis paid with an API key gets what's left of it, less `reserve`, what the
+    embedding still to come may cost. No request starts that may take it past that, and what it really cost counts
+    toward the limit.
+    """
+    from . import llm
     from .pipeline import run_analysis
 
+    how = predictor.config.get("llm") or {}
+    budget = None
+    if _limit is not None and llm.PROVIDERS[how["provider"]].billed:
+        budget = llm.Budget(_limit.left() - reserve, llm.cost(1, how["model"]) or 0.0)
     ui.heading("LLM analysis")
     ui.note("Each batch is saved as it arrives, so you can stop and resume later.")
-    answered, problem = run_analysis(predictor, asks, lambda done, total: ui.progress(done, total, "tasks"))
+    try:
+        answered, problem = run_analysis(predictor, asks, lambda done, total: ui.progress(done, total, "tasks"), budget)
+    finally:
+        if budget is not None:
+            _limit.spent += budget.spent
     if not answered and problem:
         ui.fail(problem)
         ui.note("Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again.")
@@ -764,9 +820,13 @@ def cmd_create(args) -> int:
         with ExitStack() as held:
             return _create(args, held, answer)
 
+    def limited_create(answer: dict) -> int:
+        with limited(args):
+            return create(answer)
+
     if getattr(args, "json", False):
-        return for_program(args, create)
-    return create({})
+        return for_program(args, limited_create)
+    return limited_create({})
 
 
 def _create(args, held, answer: dict) -> int:
@@ -809,6 +869,8 @@ def _create(args, held, answer: dict) -> int:
         trained=False,
         learned_from=None,
         forecasts_for=[],
+        max_cost=None if _limit is None else _limit.usd,
+        spent=None,
         notes=[],
     )
     try:
@@ -951,7 +1013,11 @@ def _create(args, held, answer: dict) -> int:
         if "description" in features.options(settings, "llm"):
             ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
     described = len(asks) if asks and "description" in features.options(settings, "llm") else 0
-    answer["cost"] = spending.cost_of(settings, model_name, plan, asks, described).as_json()
+    cost = spending.cost_of(settings, model_name, plan, asks, described)
+    answer["cost"] = cost.as_json()
+    keep_to_limit(cost, "setup")
+    if _limit is not None:
+        answer["spent"] = 0.0
     checked = len(chosen) - 1 if checking else 0  # every feature but the prompt
     say_estimate(
         found.new_tasks, {**settings, "model": model_settings, "max_tasks": limit}, plan, asks, checked=checked
@@ -1002,17 +1068,22 @@ def _create(args, held, answer: dict) -> int:
     if warning:
         ui.note(warning)
         answer["notes"].append(warning)
-    if asks:
-        answer["analyzed"], problem = analyze_with_progress(predictor, asks)
-        if problem:
-            answer["notes"].append(problem)
-        plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
-    if plan.items:
-        answer["embedded"] = embed_with_progress(predictor, plan, key)
-    if checking:
-        stop = check_and_choose(predictor, key)
-        if stop is not None:
-            return stop
+    try:
+        if asks:
+            reserve = spending.embedding_most_usd(plan, model_name, described)  # kept for the embedding after it
+            answer["analyzed"], problem = analyze_with_progress(predictor, asks, reserve)
+            if problem:
+                answer["notes"].append(problem)
+            plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
+        if plan.items:
+            answer["embedded"] = embed_with_progress(predictor, plan, key)
+        if checking:
+            stop = check_and_choose(predictor, key)
+            if stop is not None:
+                return stop
+    finally:
+        if _limit is not None:
+            answer["spent"] = round(_limit.spent, 6)
     model = train_and_report(predictor, train)
     default_when_ready(predictor)
     say_how_to_use(model, name)
@@ -1055,8 +1126,17 @@ def default_when_ready(predictor: Predictor) -> None:
 def embed_with_progress(predictor: Predictor, plan, key: str) -> int:
     """Embed what the plan holds with a progress bar, and return how many texts went to Voyage. When Voyage stops
     it, it stops the command: what was embedded so far is saved."""
+    from . import spending
     from .pipeline import run_embeddings
 
+    most = spending.embedding_most_usd(plan, predictor.embedding_model)
+    if _limit is not None and not _limit.fits(most):
+        raise CommandError(
+            "over_max_cost",
+            f"Embedding would take the spending past your limit of {spending.dollars(_limit.usd)}. "
+            f"{spending.dollars(_limit.spent)} is spent already. Embedding may cost up to {spending.dollars(most)} at "
+            "list price. What was done so far is saved. With a higher --max-cost, the next refresh goes on from there.",
+        )
     ui.heading("Embedding")
     ui.note("Each batch is saved as it arrives, so you can stop and resume later.")
     seen = {"total": 0}
@@ -1075,6 +1155,8 @@ def embed_with_progress(predictor: Predictor, plan, key: str) -> int:
             f"{explain(error)}\nWhat was embedded so far is saved. "
             f"Run yardstick-predict refresh --predictor {predictor.name} to finish.",
         ) from None
+    if _limit is not None:
+        _limit.spent += most
     ui.ok(f"Embedded {seen['total']:,} texts." if seen["total"] else "Embedded.")
     return seen["total"]
 
@@ -1289,7 +1371,7 @@ def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
     With `sampled`, it read a sample for the feature check. Turned on only after the check, it read nothing yet.
     """
     from . import features
-    from .pipeline import analysis_plan
+    from .pipeline import analysis_plan, plan_embeddings
 
     labels = predictor.llm_labels()
     rest = analysis_plan(predictor.tasks(), predictor.config, labels, predictor.config.get("max_tasks"))
@@ -1302,16 +1384,36 @@ def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
         ui.line(text)
     if "description" in features.options(predictor.config, "llm"):
         ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
+    reserve = 0.0
+    if _limit is not None:
+        from . import spending
+
+        described = len(rest) if "description" in features.options(predictor.config, "llm") else 0
+        cost = spending.cost_of(
+            predictor.config, predictor.embedding_model, plan_embeddings(predictor, None), rest, described
+        )
+        if cost.most_usd is None or not _limit.fits(cost.most_usd):
+            raise CommandError(
+                "over_max_cost",
+                "Reading the rest with LLM analysis would take the spending past your limit. Setup stopped here, "
+                "with your choice of features kept. With a higher --max-cost, finish with: "
+                f"yardstick-predict refresh --predictor {predictor.name}",
+            )
+        reserve = cost.embedding_most_usd  # kept for embedding what's still to come
     if not ui.ask("Analyze them now?", True):
         return False
-    analyze_with_progress(predictor, rest)
+    analyze_with_progress(predictor, rest, reserve)
     return True
 
 
 def cmd_refresh(args) -> int:
+    def run(answer: dict) -> int:
+        with limited(args):
+            return refresh(args, answer)
+
     if args.json:
-        return for_program(args, lambda answer: refresh(args, answer))
-    return refresh(args, {})
+        return for_program(args, run)
+    return run({})
 
 
 def refresh(args, answer: dict) -> int:
@@ -1326,7 +1428,8 @@ def refresh(args, answer: dict) -> int:
             f"{predictor.name} was saved by a newer version of yardstick-predict, so this version leaves it as it "
             "is. Upgrade with: uv tool upgrade yardstick-predict",
         )
-    if interactive() and not args.yes and not args.json:
+    # The Update screen asks once, with every cost. With --max-cost, the command keeps to the limit instead.
+    if interactive() and not args.yes and not args.json and _limit is None:
         from .screens import update
 
         predictor.close()
@@ -1390,6 +1493,8 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
         embedded=0,
         trained=False,
         forecasts_for=trained_facts(predictor, model_meta(predictor))["forecasts_for"],
+        max_cost=None if _limit is None else _limit.usd,
+        spent=None,
         notes=[],
     )
     try:
@@ -1429,6 +1534,8 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
     everything, plan, asks = planned.tasks, planned.embed, planned.asks
     cost = spending.cost_of(predictor.config, model_name, plan, asks, planned.described)
     answer["cost"] = cost.as_json()
+    if _limit is not None:
+        answer["spent"] = 0.0
     if planned.up_to_date:
         # A record file that changed with nothing new in it, such as one that was only touched, isn't read
         # again next time. Nor is every file, after a new version of the reader read them all and found
@@ -1455,6 +1562,7 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
     dataset = predictor.dir / "dataset.sqlite"
     size = dataset.stat().st_size if dataset.is_file() else 0
     say_estimate(everything, predictor.config, plan, asks, found.new_tasks, size)
+    keep_to_limit(cost, "refresh")
     if can_ask:
         if not ui.ask("Refresh now? This adds the new tasks, embeds them and retrains.", True):
             ui.note("Keeping the current model.")
@@ -1471,21 +1579,27 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
     if warning:
         ui.note(warning)
         answer["notes"].append(warning)
-    if asks:
-        answer["analyzed"], problem = analyze_with_progress(predictor, asks)
-        if problem:
-            answer["notes"].append(problem)
-    # The plan priced above is what's left to embed now that the tasks are saved, so its counts are reused.
-    if plan.items:
-        answer["embedded"] += embed_with_progress(predictor, plan, key)
-    # Each text the plan above needed has its vector now, so this one pays only for the descriptions LLM
-    # analysis just wrote.
-    rest = plan_embeddings(predictor, key)
-    if rest.items:
-        key = key or get_key(model_name, can_ask)
-        if not key:
-            return 1
-        answer["embedded"] += embed_with_progress(predictor, rest, key)
+    try:
+        if asks:
+            # What embedding may cost after it is kept out of what LLM analysis may spend.
+            reserve = spending.embedding_most_usd(plan, model_name, planned.described)
+            answer["analyzed"], problem = analyze_with_progress(predictor, asks, reserve)
+            if problem:
+                answer["notes"].append(problem)
+        # The plan priced above is what's left to embed now that the tasks are saved, so its counts are reused.
+        if plan.items:
+            answer["embedded"] += embed_with_progress(predictor, plan, key)
+        # Each text the plan above needed has its vector now, so this one pays only for the descriptions LLM
+        # analysis just wrote.
+        rest = plan_embeddings(predictor, key)
+        if rest.items:
+            key = key or get_key(model_name, can_ask)
+            if not key:
+                return 1
+            answer["embedded"] += embed_with_progress(predictor, rest, key)
+    finally:
+        if _limit is not None:
+            answer["spent"] = round(_limit.spent, 6)
     model = train_and_report(predictor, train)
     default_when_ready(predictor)
     say_how_to_use(model, predictor.name, full=False)
@@ -2907,6 +3021,12 @@ def bad_arguments(problem: BadArguments, argv: list[str]) -> int:
     return 2
 
 
+MAX_COST_HELP = (
+    "Spend at most this many US dollars at list price, such as 1.50. It goes ahead only when the cost fits, and stops "
+    "before any step that could take it past the limit."
+)
+
+
 def make_parser() -> argparse.ArgumentParser:
     from . import features
 
@@ -2944,6 +3064,7 @@ def make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Answer in JSON, for programs. It asks nothing: without --yes it only says what it would do and cost.",
     )
+    create.add_argument("--max-cost", type=float, metavar="USD", help=MAX_COST_HELP)
     create.add_argument(
         "--features",
         help="The optional features, such as conversation,context,skills:named,benchmarks,time,llm. A feature alone "
@@ -2990,6 +3111,7 @@ def make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Answer in JSON, for programs. It asks nothing: without --yes it only says what it would do and cost.",
     )
+    refresh.add_argument("--max-cost", type=float, metavar="USD", help=MAX_COST_HELP)
 
     predict = commands.add_parser("predict", help="Forecast a task. Give it in quotes, or send a JSON request.")
     predict.add_argument("task", nargs="?", help="The task's prompt, in quotes.")

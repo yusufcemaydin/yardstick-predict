@@ -187,6 +187,67 @@ class Analysis:
     """Why a request failed, when one did."""
 
 
+class Budget:
+    """What LLM analysis paid with an API key may spend, in US dollars at list price, under a spending limit.
+
+    A request starts only when what it may cost fits in what's left, with what the requests still running may cost
+    set aside. What a request may cost is judged by what the requests that came back really cost, and never less
+    than the price shown before anything began. So the first request goes alone: until it's back, nothing is known.
+    """
+
+    def __init__(self, usd: float, per_task: float) -> None:
+        self.usd = usd
+        self.per_task = per_task
+        """What a task costs, as the price shown before anything began works it out."""
+        self.spent = 0.0
+        self.held = 0.0
+        """Set aside for the requests still running."""
+        self.tasks = 0
+        """How many tasks the requests that came back held."""
+        self.full = False
+        """Whether a request didn't start because what it may cost didn't fit."""
+
+    def rate(self) -> float:
+        """What a task may cost: the most of the price shown and what the tasks so far really cost."""
+        return max(self.per_task, self.spent / self.tasks) if self.tasks else self.per_task
+
+    def take(self, tasks: int) -> float | None:
+        """Set aside what a request for this many tasks may cost, or None when that doesn't fit in what's left."""
+        most = self.rate() * tasks
+        if self.spent + self.held + most > self.usd + 1e-9:
+            self.full = True
+            return None
+        self.held += most
+        return most
+
+    def paid(self, held: float, tasks: int, usd: float | None) -> None:
+        """A request came back. It cost `usd`, or what was set aside for it when its cost isn't known."""
+        self.held -= held
+        self.spent += held if usd is None else usd
+        self.tasks += tasks
+
+
+def spent(found: dict, model: str) -> float | None:
+    """What a request really cost, from the tokens the answer says it used, at the AI model's list price. None when
+    the answer doesn't say, or the price isn't known."""
+    usage = found.pop("_usage", None) if isinstance(found, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    price = None
+    for name in dict.fromkeys([str(usage.get("model") or model), model]):  # a fallback model, or the one asked for
+        price = prices.call_cost(
+            name,
+            int(usage.get("input") or 0),
+            int(usage.get("cache_write") or 0),
+            0,
+            int(usage.get("cache_read") or 0),
+            int(usage.get("output") or 0),
+        )
+        if price is not None:
+            break
+    return price
+
+
 def access(provider: str | None, model: str | None) -> dict:
     """How LLM analysis runs, from a program's flags. Raises ValueError for a way to pay that doesn't exist."""
     key = (provider or "anthropic").strip().lower()
@@ -311,6 +372,7 @@ def analyze(
     how: dict,
     fields: list[str],
     on_batch: Callable[[dict[str, dict], int], None] | None = None,
+    budget: Budget | None = None,
 ) -> Analysis:
     """Ask the AI model about each task, with every answer saying who gave it.
 
@@ -319,7 +381,8 @@ def analyze(
     every request would meet, such as Claude Code or Codex not signed in, stops it: the requests already sent
     finish, and no more are sent. `on_batch` gets each request's answers as they arrive, and how many tasks are
     done, so a long run can save as it goes. Only a few requests run or wait at a time, so stopping, such as with
-    Ctrl+C, stops it quickly.
+    Ctrl+C, stops it quickly. With a `budget`, no request starts that may take the spending past it, and the tasks
+    it would have held are left for a later run.
     """
     provider = PROVIDERS[how["provider"]]
     call = {"anthropic": _anthropic, "openai": _openai, "claude": _claude_code, "codex": _codex}[provider.key]
@@ -332,14 +395,15 @@ def analyze(
     stopped: list[str] = []  # why it sends no more requests, once a problem every request would meet came
     done = 0
 
-    def run(batch: list[Ask]) -> tuple[dict[str, dict], str | None]:
+    def run(batch: list[Ask]) -> tuple[dict[str, dict], str | None, float | None]:
         unanswered = {"by": by, "fields": fields, "failed": True}
         try:
             answer = call(how["model"], system, _message(batch), shape)
         except LLMError as error:
             if not error.lasting:
                 raise
-            return {ask.id: dict(unanswered) for ask in batch}, str(error)
+            return {ask.id: dict(unanswered) for ask in batch}, str(error), None
+        usd = spent(answer, how["model"])
         wanted, found = {ask.id for ask in batch}, {}
         for entry in answer.get("tasks") or [] if isinstance(answer, dict) else []:
             if isinstance(entry, dict) and entry.get("id") in wanted and entry["id"] not in found:
@@ -348,38 +412,61 @@ def analyze(
                     found[entry["id"]] = {**clean, "by": by, "fields": fields}
         for ask in batch:
             found.setdefault(ask.id, dict(unanswered))  # skipped, or answered with something that makes no sense
-        return found, None
+        return found, None, usd
 
     pool = ThreadPoolExecutor(max_workers=provider.parallel)
     running: dict = {}
+    # Under a budget, the first request goes alone, so the next ones are judged by what it really cost.
+    width = 1 if budget is not None else provider.parallel
+    later: list[Ask] = []
+    """The tasks of requests the budget didn't let start, left for a later run."""
 
-    def start_next() -> None:
-        batch = None if stopped else next(waiting, None)
-        if batch is not None:
-            running[pool.submit(run, batch)] = batch
+    def start_next() -> bool:
+        batch = None if stopped or (budget is not None and budget.full) else next(waiting, None)
+        if batch is None:
+            return False
+        held = budget.take(len(batch)) if budget is not None else 0.0
+        if held is None:
+            later.extend(batch)
+            return False
+        running[pool.submit(run, batch)] = (batch, held)
+        return True
 
     try:
-        for _ in range(provider.parallel):
-            start_next()
+        while len(running) < width and start_next():
+            pass
         while running:
             finished, _ = wait(running, return_when=FIRST_COMPLETED)
             for future in finished:
-                batch = running.pop(future)
+                batch, held = running.pop(future)
+                usd = None
                 try:
-                    found, problem = future.result()
+                    found, problem, usd = future.result()
                 except LLMError as error:
                     found, problem = {}, str(error)
                     if error.stops:
                         stopped.append(problem)
+                if budget is not None:
+                    budget.paid(held, len(batch), usd)
                 if problem:
                     problems.append(problem)
                 done += len(batch)
                 answers.update(found)
                 if on_batch is not None:
                     on_batch(found, done)
-                start_next()
+            width = provider.parallel
+            while len(running) < width and start_next():
+                pass
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+    if budget is not None and budget.full and not stopped:
+        from .spending import dollars
+
+        left = len(later) + sum(len(batch) for batch in waiting)
+        stopped.append(
+            f"LLM analysis stopped at your spending limit, after about {dollars(budget.spent)} at list price. "
+            f"{left:,} task{' is' if left == 1 else 's are'} left for a later run."
+        )
     return Analysis(answers, (stopped or problems or [None])[0])
 
 
@@ -557,7 +644,7 @@ def _anthropic(model: str, system: str, text: str, shape: dict) -> dict:
     if response.stop_reason == "refusal":
         raise LLMError("The AI model declined to describe these tasks.", lasting=True)
     text = next((block.text for block in response.content if block.type == "text"), "")
-    return _json(text)
+    return _with_usage(_json(text), response, model)
 
 
 def _openai(model: str, system: str, text: str, shape: dict) -> dict:
@@ -580,7 +667,24 @@ def _openai(model: str, system: str, text: str, shape: dict) -> dict:
         if "credentials" in str(error).lower() or "api_key" in str(error).lower():
             raise LLMError("No OpenAI API key was found. Set OPENAI_API_KEY to your key.") from None
         raise LLMError(f"OpenAI's library said: {str(error)[:200]}") from None
-    return _json(response.output_text)
+    return _with_usage(_json(response.output_text), response, model)
+
+
+def _with_usage(found: dict, response, model: str) -> dict:
+    """The answer, with the tokens the request used and the AI model that answered, so a spending limit can count
+    what it really cost. They're taken out again before the answer is read."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return found
+    cached = getattr(getattr(usage, "input_tokens_details", None), "cached_tokens", 0) or 0  # OpenAI's, inside input
+    found["_usage"] = {
+        "model": getattr(response, "model", None) or model,
+        "input": max((getattr(usage, "input_tokens", 0) or 0) - cached, 0),
+        "cache_write": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read": (getattr(usage, "cache_read_input_tokens", 0) or 0) + cached,
+        "output": getattr(usage, "output_tokens", 0) or 0,
+    }
+    return found
 
 
 def _claude_code(model: str, system: str, text: str, shape: dict) -> dict:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -365,3 +366,78 @@ def test_setup_says_once_that_claude_code_isnt_signed_in_and_trains_without_it(c
 
 def test_another_services_words_never_hold_a_code_a_terminal_acts_on():
     assert str(llm.LLMError("Anthropic's API said: \x1b[2Jgone\r")) == "Anthropic's API said: gone"
+
+
+# A spending limit -------------------------------------------------------------------------------------------------
+
+OPUS = {"provider": "anthropic", "model": "claude-opus-5-5"}
+
+
+def costing(times: float, calls: list):
+    """Anthropic's API, answering every task, where each task really costs `times` the price shown before."""
+    reads, writes = llm.TOKENS_PER_TASK
+
+    def call(model, system, text, shape):
+        ids = ids_in(text)
+        calls.append(len(ids))
+        usage = {"model": model, "input": int(times * reads * len(ids)), "output": int(times * writes * len(ids))}
+        return {**answer_for(ids), "_usage": usage}
+
+    return call
+
+
+def test_a_budget_lets_no_request_start_that_may_take_the_spending_past_it(monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(llm, "_anthropic", costing(2, calls))  # each task costs twice what was shown
+    per_task = llm.cost(1, "claude-opus-5-5")
+    budget = llm.Budget(24 * per_task, per_task)
+    found = llm.analyze([llm.Ask(f"t{i}", f"Prompt {i}") for i in range(40)], OPUS, FIELDS, budget=budget)
+    # The first request goes alone and costs 16 tasks' worth. A second would cost as much again: too much.
+    assert calls == [8] and len(found.answers) == 8
+    assert budget.spent == pytest.approx(16 * per_task) and budget.spent <= budget.usd
+    assert "stopped at your spending limit" in found.problem and "32 tasks are left for a later run" in found.problem
+
+    calls.clear()
+    monkeypatch.setattr(llm, "_anthropic", costing(1, calls))  # each task costs what was shown
+    budget = llm.Budget(24 * per_task, per_task)
+    found = llm.analyze([llm.Ask(f"t{i}", f"Prompt {i}") for i in range(40)], OPUS, FIELDS, budget=budget)
+    assert sum(calls) == 24 and len(found.answers) == 24 and budget.spent <= budget.usd + 1e-12
+    assert "16 tasks are left" in found.problem
+
+
+def test_under_a_budget_the_first_request_goes_alone(monkeypatch):
+    seen: list[str] = []
+
+    def slow(model, system, text, shape):
+        seen.append("start")
+        time.sleep(0.05)
+        seen.append("end")
+        return answer_for(ids_in(text))
+
+    monkeypatch.setattr(llm, "_anthropic", slow)
+    asks = [llm.Ask(f"t{i}", "x") for i in range(40)]
+    llm.analyze(asks, OPUS, FIELDS, budget=llm.Budget(100.0, 0.01))
+    assert seen[:2] == ["start", "end"]  # nothing else ran until the first came back
+    assert seen.count("start") == 5  # then the rest, side by side
+
+
+def test_what_a_request_really_cost_comes_from_the_tokens_it_used():
+    found = {"tasks": [], "_usage": {"model": "claude-opus-5-5", "input": 1_000_000, "output": 0}}
+    rates = llm.prices.price("claude-opus-5-5")
+    assert llm.spent(found, "claude-opus-5-5") == pytest.approx(rates["input"]) and "_usage" not in found
+    # An answer from a fallback model with no price in the list counts at the price of the one asked for.
+    found = {"_usage": {"model": "some-new-model", "input": 0, "output": 1_000_000}}
+    assert llm.spent(found, "claude-opus-5-5") == pytest.approx(rates["output"])
+    assert llm.spent({"tasks": []}, "claude-opus-5-5") is None  # no usage said
+
+
+def test_a_cost_or_a_limit_is_said_with_the_digits_that_matter():
+    from yardstick_predict.spending import dollars
+
+    assert [dollars(usd) for usd in (0, 1.4231, 0.01, 0.003, 0.00000594)] == [
+        "$0",
+        "$1.42",
+        "$0.01",
+        "$0.0030",
+        "$0.0000059",
+    ]

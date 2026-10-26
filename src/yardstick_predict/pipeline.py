@@ -462,12 +462,13 @@ def analysis_plan(tasks: list[Task], config: dict, labels: dict, limit: int | No
 
 
 def run_analysis(
-    predictor: Predictor, asks: list, on_progress: Callable[[int, int], None] | None = None
+    predictor: Predictor, asks: list, on_progress: Callable[[int, int], None] | None = None, budget=None
 ) -> tuple[int, str | None]:
     """Have the AI model read the tasks. Each request's answers are saved as they arrive, so a stopped run resumes.
 
     Returns how many tasks it answered, and why a request failed, when one did. A task it wouldn't answer is
-    noted with how many times it was tried, so it's skipped after llm.MAX_TRIES.
+    noted with how many times it was tried, so it's skipped after llm.MAX_TRIES. With an llm.Budget, no request
+    starts that may take the spending past it.
     """
     from . import llm
 
@@ -485,7 +486,8 @@ def run_analysis(
     if on_progress and asks:
         on_progress(0, len(asks))  # the bar starts with the step, so it can tell how fast it goes
     try:
-        problem = llm.analyze(asks, predictor.config["llm"], fields, on_batch=save).problem
+        limited = {"budget": budget} if budget is not None else {}
+        problem = llm.analyze(asks, predictor.config["llm"], fields, on_batch=save, **limited).problem
     finally:
         predictor.compact_features(answers=True)  # each batch was saved on its own
     return answered, problem  # counted only once every answer is in

@@ -145,7 +145,7 @@ Seconds, tokens and dollars are forecast as separate curves. They usually move t
 
 ## Setup and refresh
 
-`create --json` and `refresh --json` answer a program in JSON too, in version 1 of an answer of their own. They never ask anything. Without `--yes`, they only say what they'd do and what it costs. Then they exit with code 2. With `--yes` they do it. Then they exit with code 0. What they say on the way goes to the error stream. Standard output holds the answer alone.
+`create --json` and `refresh --json` answer a program in JSON too, in version 1 of an answer of their own. They never ask anything. Without `--yes`, they only say what they'd do and what it costs. Then they exit with code 2. With `--yes` they do it. Then they exit with code 0. With `--max-cost USD`, they keep to that spending limit, at list price. What they say on the way goes to the error stream. Standard output holds the answer alone.
 
 | Field | What it is |
 |---|---|
@@ -163,7 +163,9 @@ Seconds, tokens and dollars are forecast as separate curves. They usually move t
 | `trained` | Whether it trained the model. |
 | `learned_from` | `create` only. How many tasks the model learned from. |
 | `forecasts_for` | The AI models that get forecasts now. |
-| `notes` | Plain words about anything that didn't stop it, such as model facts that didn't download. |
+| `max_cost` | The limit `--max-cost` set, in US dollars. `null` without one. |
+| `spent` | What it spent at list price, counted only under a limit. LLM analysis counts at what each request really cost, from the tokens it used. Embedding counts at the most its texts could cost. `null` without a limit. |
+| `notes` | Plain words about anything that didn't stop it, such as model facts that didn't download or LLM analysis that stopped at the limit. |
 
 When it can't go on, the answer has an `error` instead of these fields, with a `code` and a `message`. The exit code is 1:
 
@@ -182,5 +184,7 @@ When it can't go on, the answer has an `error` instead of these fields, with a `
 | `not_enough_data` | Too few tasks to learn from. |
 | `no_embedding_key` | No Voyage key was found. |
 | `embedding_failed` | Voyage refused the key or stopped embedding. What was embedded is saved. The next refresh goes on from there. |
+| `over_max_cost` | It would cost more than `--max-cost` allows. When that's found before anything is spent, nothing was spent or saved. When it's found before a later step, what was done so far is saved. |
+| `cost_unknown` | The price of the AI model for LLM analysis isn't in yardstick's list. A limit can't be kept without it. |
 | `internal_error` | Something went wrong that the tool didn't expect. Please report it. |
 | `failed` | Anything else that stopped it. The message says what. |
