@@ -305,6 +305,7 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 - **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face, at one fixed version, and OpenRouter's model list if you use benchmarks. The home screen also reads yardstick-predict's public page on PyPI at most once a day, to say when a newer version is out. To turn that off, set `YARDSTICK_NO_UPDATE_CHECK` or `DO_NOT_TRACK`. Adding `"update_check": false` to `settings.json` in the yardstick folder works too.
 - **Saved models are plain JSON and plain numbers.** Loading one runs no code.
 - **Plugins are code you choose to run.** yardstick-predict only imports the modules you name.
+- **What other services say is cleaned before it's shown.** An error from Voyage, Anthropic, OpenAI, Claude Code, Codex, OpenRouter or PyPI keeps its words but loses any hidden codes. Such codes could make your terminal show something else, change its title or write over a line.
 
 ## Cost
 

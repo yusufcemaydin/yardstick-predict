@@ -143,7 +143,11 @@ class LLMError(Exception):
     """
 
     def __init__(self, message: str, lasting: bool = False, stops: bool = False) -> None:
-        super().__init__(message)
+        from . import ui
+
+        # Often in another service's or another command's own words, which are shown, but never codes a terminal
+        # acts on.
+        super().__init__(ui.clean(message))
         self.lasting = lasting
         self.stops = stops
 

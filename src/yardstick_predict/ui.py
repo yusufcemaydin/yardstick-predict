@@ -160,6 +160,24 @@ def plain(text: str) -> str:
     return _ANSI.sub("", text)
 
 
+_ESCAPE = re.compile(
+    r"\x1b(?:"
+    r"\[[0-?]*[ -/]*[@-~]"  # a code that colors text or moves the cursor
+    r"|[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?"  # a string for the terminal itself, such as a window title or a link
+    r"|[ -~]"  # a code of one more character
+    r")?"  # an Esc on its own goes too
+)
+_HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f؜‎‏‪-‮⁦-⁩]")
+"""Characters a terminal acts on instead of showing, other than new lines and tabs: a carriage return, which writes
+over a line, and the marks that turn text the other way round."""
+
+
+def clean(text: str) -> str:
+    """Text from outside this program, such as another service's error, made safe to show: without the codes and
+    hidden characters that could make a terminal show something else, change its title or write over a line."""
+    return _HIDDEN.sub("", _ESCAPE.sub("", str(text)))
+
+
 def cut(text: str, room: int) -> str:
     """Text cut short to fit `room` columns, with a mark where it was cut. Text that fits keeps its colors. Text
     that's cut loses them, so no color code is cut in two."""
@@ -212,7 +230,8 @@ def ok(text: str) -> None:
 
 
 def fail(text: str) -> None:
-    for number, part in enumerate(text.splitlines()):
+    """What didn't work, with its mark. It's cleaned first, as it may hold another service's words."""
+    for number, part in enumerate(clean(text).splitlines()):
         if number == 0:
             line(f"{red(mark('fail'))} {part}" if styled() else part)
         else:
@@ -364,10 +383,11 @@ def table(rows: list[tuple[str, ...]], indent: int = 2, align: str = "", gap: in
 
 
 def error(text: str) -> None:
-    """A problem that stops the command, on the error stream."""
+    """A problem that stops the command, on the error stream. It's cleaned first, as it may hold another service's
+    words."""
     _clear()
     loud = styled() and sys.stderr.isatty()
-    first, *rest = text.splitlines() or [""]
+    first, *rest = clean(text).splitlines() or [""]
     print(f"{_style('31', '39', mark('fail')) if loud else 'Error:'} {first}", file=sys.stderr)
     for part in rest:
         print(f"  {part}", file=sys.stderr)

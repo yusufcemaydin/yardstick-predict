@@ -660,7 +660,10 @@ def _no_forecast(error: Exception, predictor) -> str:
     folder = getattr(predictor, "dir", None)
     if isinstance(folder, Path) and not (folder / "predictor.json").is_file():
         return f"{predictor.name} was deleted"
-    return (getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
+    from . import ui
+
+    # Often in another service's words, such as Voyage's. The status line shows them, but never a code that acts.
+    return ui.clean(getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
 
 
 def _forget_old_forecasts(session: str) -> None:
@@ -1058,7 +1061,9 @@ def _status_line(session: str, model: str, now: float, effort: str, transcript: 
     if found.get("prompt_at") != started:
         return f"{label} {_dim('·')} took {took}" if done is not None else f"{label} {_dim('· forecasting…')}"
     if found.get("error"):
-        return f"{label} {_dim('· no forecast: ' + str(found['error']))}"
+        from . import ui
+
+        return f"{label} {_dim('· no forecast: ' + ui.clean(found['error']))}"
     effort = effort or _str(state.get("effort"))
     name = model.split("[")[0] or _str(state.get("model"))
     pick = _pick(found.get("forecasts"), name, effort)

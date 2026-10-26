@@ -66,6 +66,9 @@ SETTINGS = -1
 
 class VoyageError(Exception):
     def __init__(self, status: int, detail: str, retry_after: float | None = None) -> None:
+        from . import ui
+
+        detail = ui.clean(detail)  # Voyage's own words, shown as they are, but never codes a terminal acts on
         super().__init__(detail if status == SETTINGS else f"Voyage said {status}: {detail}")
         self.status = status
         self.detail = detail

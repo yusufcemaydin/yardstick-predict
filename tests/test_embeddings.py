@@ -627,3 +627,8 @@ def test_vectors_saved_before_hashes_were_kept_are_trusted_for_the_prompt_and_co
     plan = pipeline.plan_embeddings(upgraded, KEY)
     # The skills feature changes what it embeds, so its old vectors are made again. Its text is shared, so once.
     assert sorted({name for _, name, _ in plan.items}) == ["skills"] and plan.texts == ["tdd"]
+
+
+def test_voyages_own_words_are_kept_but_never_a_code_a_terminal_acts_on():
+    error = embeddings.VoyageError(400, "Bad \x1b]0;a title\x07request\x1b[2J")
+    assert error.detail == "Bad request" and str(error) == "Voyage said 400: Bad request"

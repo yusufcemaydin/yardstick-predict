@@ -29,6 +29,7 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 
 ### Fixed
 
+- What other services say is cleaned before it's shown. An error from Voyage, Anthropic, OpenAI, Claude Code, Codex, OpenRouter or PyPI used to be printed as it came, hidden codes included. Such codes could make a terminal show something else, change its title or write over a line. The words stay. The codes go.
 - The README's steps for removing everything start by taking the forecasts out of Claude Code. Without that, Claude Code kept running a program that was gone.
 - The cost shown before an update now counts embedding the descriptions LLM analysis writes. A refresh used to embed them without having priced them.
 

@@ -361,3 +361,7 @@ def test_setup_says_once_that_claude_code_isnt_signed_in_and_trains_without_it(c
     assert out.count("Claude Code isn't signed in here.") == 1
     assert "Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again." in out
     assert predictor.llm_labels() == {}  # nothing noted, so the next refresh asks about every task
+
+
+def test_another_services_words_never_hold_a_code_a_terminal_acts_on():
+    assert str(llm.LLMError("Anthropic's API said: \x1b[2Jgone\r")) == "Anthropic's API said: gone"

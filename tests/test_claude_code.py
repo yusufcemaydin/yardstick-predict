@@ -945,3 +945,10 @@ def test_tidying_forgets_old_sessions_and_prompts_whose_forecast_never_started()
     os.utime(root / "new.400.0.prompt", (now - 7200, now - 7200))
     cc._tidy()  # once a day at most
     assert (root / "new.400.0.prompt").exists()
+
+
+def test_a_forecast_error_in_the_status_line_never_holds_a_code_that_acts():
+    from yardstick_predict.forecast import RequestError
+
+    error = RequestError("embedding_failed", "Voyage said 500: \x1b]0;a title\x07down for now")
+    assert cc._no_forecast(error, None) == "Voyage said 500: down for now"

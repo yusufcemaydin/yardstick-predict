@@ -28,6 +28,9 @@ SETTING = "update_check"
 
 _looking = False
 """Whether this session has started a look at PyPI already."""
+VERSION = re.compile(r"\d+(\.\d+)*([.+!_-]?[0-9A-Za-z]+)*")
+"""What a version looks like, such as 0.5.0 or 1.0.0rc1. Anything else PyPI says, or a damaged file holds, is never
+shown."""
 
 
 def notice() -> str | None:
@@ -41,7 +44,7 @@ def notice() -> str | None:
         _looking = True
         threading.Thread(target=check, daemon=True).start()
     latest = saved.get("latest")
-    if isinstance(latest, str) and newer(latest, __version__):
+    if isinstance(latest, str) and plain_version(latest) and newer(latest, __version__):
         return f"yardstick-predict {latest} is out. You have {__version__}. Update with: {upgrade_command()}"
     return None
 
@@ -94,9 +97,15 @@ def latest_release() -> str:
     request = urllib.request.Request(URL, headers={"Accept": "application/json"})
     with urllib.request.urlopen(request, timeout=5) as answer:
         found = json.loads(answer.read().decode())["info"]["version"]
-    if not isinstance(found, str) or not found.strip():
+    if not isinstance(found, str) or not plain_version(found.strip()):
         raise ValueError("PyPI gave no version")
     return found.strip()
+
+
+def plain_version(text: str) -> bool:
+    """Whether a text is a version and nothing else, so it can be shown as it is: at most 40 letters, digits and dots,
+    with a few marks such as + or -."""
+    return len(text) <= 40 and VERSION.fullmatch(text) is not None
 
 
 def newer(latest: str, current: str) -> bool:

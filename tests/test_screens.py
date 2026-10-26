@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import time
 
 import pytest
 from builders import ClaudeSession, history
@@ -1046,3 +1047,24 @@ def test_numbered_menus_are_a_setting_too_and_the_home_screen_has_no_box(capsys,
     store.save_setting("numbered_menus", True)
     ui.numbered.cache_clear()
     assert not ui.numbered()
+
+
+# Text from outside ---------------------------------------------------------------------------------------------
+
+
+def test_text_from_outside_is_shown_without_codes_a_terminal_acts_on(capsys):
+    link = "\x1b]8;;https://x\x1b\\link\x1b]8;;\x1b\\"  # a link the terminal opens on a click
+    said = f"said: \x1b[31mred\x1b[0m \x1b]0;a title\x07done\r over \u202eback {link} end"
+    assert ui.clean(said) == "said: red done over back link end"
+    assert ui.clean("two\nlines\tand a tab") == "two\nlines\tand a tab"  # new lines and tabs stay
+    ui.error("It broke: \x1b]0;owned\x07for good")
+    assert capsys.readouterr().err == "Error: It broke: for good\n"
+
+
+def test_a_version_from_pypi_shows_only_when_it_looks_like_one(monkeypatch):
+    monkeypatch.delenv(version.OFF, raising=False)
+    monkeypatch.setattr(version, "_looking", True)  # no new look at PyPI
+    for latest, shown in (("99.0.0\x1b]0;a title\x07", False), ("99.0.0", True), ("99.0.0rc1", True)):
+        store.private_home()
+        (store.home() / "update-check.json").write_text(json.dumps({"at": time.time(), "latest": latest}))
+        assert (version.notice() is not None) == shown, latest
