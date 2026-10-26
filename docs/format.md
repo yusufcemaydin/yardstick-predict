@@ -1,6 +1,6 @@
 # The forecast format, version 1
 
-`yardstick-predict predict` reads one JSON request on standard input and writes one JSON answer on standard output. It never asks questions. The answer always says which format version it follows.
+`yardstick-predict predict` reads one JSON request on standard input and writes one JSON answer on standard output. With `--request FILE`, it reads the request from that file instead. It never asks questions. The answer always says which format version it follows.
 
 In a terminal, `yardstick-predict predict "TASK"` shows the same forecasts as a small table. Add `--json` to get this format there too.
 

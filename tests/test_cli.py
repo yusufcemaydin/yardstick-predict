@@ -835,6 +835,29 @@ def test_output_no_one_reads_anymore_ends_quietly(capsys, monkeypatch):
     assert capsys.readouterr().err == ""
 
 
+def test_predict_reads_a_request_from_a_file(capsys, monkeypatch, tmp_path, quick, ready):
+    quick_predictor()
+    request = {"version": 1, "tasks": [{"id": "a", "prompt": "fix it", "models": ["claude-opus-5-5"]}]}
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(request))
+    monkeypatch.setattr(cli, "terminal_output", lambda: True)  # even in a terminal, a request gets JSON back
+    monkeypatch.setattr("sys.stdin", Terminal())
+    assert main(["predict", "--request", str(path)]) == 0
+    forecast = json.loads(capsys.readouterr().out)["forecasts"][0]
+    assert forecast["task"] == "a" and forecast["seconds"] == 60.0
+    assert main(["predict", "--request", str(tmp_path / "missing.json")]) == 1
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error["code"] == "invalid_request" and "Can't read the request file" in error["message"]
+    path.write_text("{not json")
+    assert main(["predict", "--request", str(path)]) == 1
+    assert "isn't valid JSON" in json.loads(capsys.readouterr().out)["error"]["message"]
+    assert main(["predict", "fix it", "--request", str(path)]) == 1  # the task in quotes, or a request: not both
+    assert "not both" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(request)))
+    assert main(["predict", "--request", "-"]) == 0  # - is standard input
+    assert json.loads(capsys.readouterr().out)["forecasts"][0]["task"] == "a"
+
+
 def test_choosing_a_predictor_has_its_own_error_codes(capsys, monkeypatch):
     request = {"version": 1, "predictor": "work", "tasks": [{"id": "a", "prompt": "fix it", "models": ["m"]}]}
     code, out = run(capsys, "predict", stdin=json.dumps(request), monkeypatch=monkeypatch)

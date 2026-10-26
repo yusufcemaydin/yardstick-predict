@@ -1623,7 +1623,7 @@ def cmd_predict(args) -> int:
         first_line = (str(error).strip().splitlines() or [""])[0]
         message = f"Something went wrong that yardstick-predict didn't expect: {type(error).__name__}: {first_line}"
         result, code = RequestError("internal_error", message.rstrip(": ")).as_answer(), 1
-    person = prompt is None and sys.stdin.isatty() and terminal_output() and not args.json
+    person = prompt is None and args.request is None and sys.stdin.isatty() and terminal_output() and not args.json
     if table or person:
         if code:
             ui.error(result["error"]["message"])
@@ -1635,22 +1635,18 @@ def cmd_predict(args) -> int:
 
 
 def forecast_request(args, prompt: str | None, rough: bool = False) -> tuple[Predictor, dict]:
-    """The predictor and the answer for a prompt on the command line, or for a JSON request on standard input.
+    """The predictor and the answer for a prompt on the command line, or for a JSON request from a file or standard
+    input.
 
     With `rough`, for a person's table: every AI model the predictor knows, at each effort level it often ran at,
     with the curves the table's ranges come from. One that failed the test or wasn't tested keeps its reason.
     """
     from .forecast import RequestError, answer, load, parse
 
+    if prompt is not None and getattr(args, "request", None) is not None:
+        raise RequestError("invalid_request", "Give the task in quotes or a request with --request, not both.")
     if prompt is None:
-        if sys.stdin.isatty():
-            raise RequestError("invalid_request", 'Give the task in quotes, like: yardstick-predict predict "Fix it"')
-        try:
-            request = json.load(sys.stdin)
-        except ValueError as error:
-            raise RequestError("invalid_request", f"The request isn't valid JSON: {error}") from None
-        except RecursionError:
-            raise RequestError("invalid_request", "The request is nested too deeply to read.") from None
+        request = read_request(getattr(args, "request", None))
         tasks, distribution, chosen = parse(request)
         predictor = request_predictor(args.predictor or chosen, from_request=True)
         return predictor, answer(predictor, tasks, distribution or args.distribution)
@@ -1668,6 +1664,27 @@ def forecast_request(args, prompt: str | None, rough: bool = False) -> tuple[Pre
     if rough:
         result["too_few"] = too_few
     return predictor, result
+
+
+def read_request(path: str | None):
+    """The JSON request: from the file `path` names, or from standard input when there's no path or it's -."""
+    from .forecast import RequestError
+
+    try:
+        if path is not None and path != "-":
+            with open(os.path.expanduser(path), encoding="utf-8") as found:
+                return json.load(found)
+        if sys.stdin.isatty():
+            raise RequestError("invalid_request", 'Give the task in quotes, like: yardstick-predict predict "Fix it"')
+        return json.load(sys.stdin)
+    except OSError as error:
+        raise RequestError(
+            "invalid_request", f"Can't read the request file {path}: {error.strerror or error}."
+        ) from None
+    except ValueError as error:
+        raise RequestError("invalid_request", f"The request isn't valid JSON: {error}") from None
+    except RecursionError:
+        raise RequestError("invalid_request", "The request is nested too deeply to read.") from None
 
 
 def forecast_pairs(predictor: Predictor, model, prompt: str, pairs: list, args, rough: bool = False, runs=None) -> dict:
@@ -3130,6 +3147,11 @@ def make_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="A skill the prompt invokes, or that the conversation used before it. Repeat for more.",
+    )
+    predict.add_argument(
+        "--request",
+        metavar="FILE",
+        help="Read the JSON request from this file, not from standard input. - means standard input.",
     )
     predict.add_argument("--distribution", action="store_true", help="Also give each forecast's full curve, in JSON.")
     predict.add_argument("--json", action="store_true", help="Print the JSON answer that programs get.")

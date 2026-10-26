@@ -153,7 +153,7 @@ If you installed it with version 0.2.1 or earlier, run `yardstick-predict claude
 
 ## Use it from a program
 
-`predict` reads a JSON request on standard input and writes a JSON answer. It never asks questions.
+`predict` reads a JSON request on standard input and writes a JSON answer. It never asks questions. `--request FILE` reads the request from a file instead, which a program can do without a pipe: `yardstick-predict predict --request tasks.json`.
 
 ```bash
 echo '{"version": 1, "tasks": [
