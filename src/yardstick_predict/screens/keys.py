@@ -8,7 +8,9 @@ terminal that can't pass single key presses gets the choices numbered, and a num
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import textwrap
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -131,15 +133,43 @@ def hint(back: str) -> str:
 
 def _draw(choices: list[Choice], at: int, footer: list[str], drawn: int) -> int:
     """Draw the menu with one choice picked, over the one drawn before when there was one. Returns its lines."""
-    lines = [*_lines(choices, at), "", *(f"  {ui.dim(text)}" for text in footer)]
+    return redraw([*_lines(choices, at), "", *notes(footer)], drawn)
+
+
+def columns() -> int:
+    return shutil.get_terminal_size((80, 24)).columns
+
+
+def notes(texts: list[str]) -> list[str]:
+    """Plain lines under a menu, dimmed and broken to fit the terminal, so none of them wraps on its own."""
+    room = max(columns() - 4, 20)
+    return [f"  {ui.dim(part)}" for text in texts for part in (textwrap.wrap(text, room) or [""])]
+
+
+def redraw(lines: list[str], drawn: int) -> int:
+    """Draw lines over the ones drawn before, when there were some, and return how many there are now.
+
+    Each line fits the terminal, so the count of lines is the count of rows. The rows drawn before are cleared to
+    the end of the screen first, so a shorter drawing leaves nothing of a longer one behind.
+    """
     if drawn:
-        print(f"\033[{drawn}F", end="")  # back to the first line drawn before, to draw again in place
+        print(f"\033[{drawn}F\033[J", end="")  # back to the first row drawn before, and clear from there down
         for text in lines:
-            print(f"\033[2K{text}", flush=True)
+            print(text, flush=True)
     else:
         for text in lines:
             ui.out(text)
     return len(lines)
+
+
+def row(lead: str, name: str, pad: int, hint: str) -> str:
+    """A menu's line: what comes before the name, the name, and its hint lined up after it. A hint too long for the
+    terminal is cut short, so the line never wraps."""
+    room = columns() - 1 - ui.width(lead) - ui.width(name) - 2 - pad
+    if not hint or room < 4:
+        return f"{lead}{name}"
+    shown = hint if ui.width(hint) <= room else hint[: room - 1].rstrip() + ui.mark("wait")
+    return f"{lead}{name}{' ' * (pad + 2)}{ui.dim(shown)}"
 
 
 def _lines(choices: list[Choice], at: int | None) -> list[str]:
@@ -148,11 +178,9 @@ def _lines(choices: list[Choice], at: int | None) -> list[str]:
     found = []
     for number, choice in enumerate(choices, start=1):
         name = f"{number}. {choice.label}"
-        tail = " " * (pad - ui.width(choice.label) + 2) + ui.dim(choice.hint) if choice.hint else ""
-        if number - 1 == at:
-            found.append(f"  {ui.accent(ui.mark('pick'))} {ui.bold(name)}{tail}")
-        else:
-            found.append(f"    {name}{tail}")
+        lead = f"  {ui.accent(ui.mark('pick'))} " if number - 1 == at else "    "
+        shown = ui.bold(name) if number - 1 == at else name
+        found.append(row(lead, shown, pad - ui.width(choice.label), choice.hint))
     return found
 
 

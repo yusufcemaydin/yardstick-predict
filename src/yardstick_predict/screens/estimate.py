@@ -57,8 +57,9 @@ def describe() -> str:
     ui.out()
     ui.line(f"{ui.bold('Estimate')}  {ui.dim('Forecast a task before you run it')}")
     ui.out()
-    ui.line("Describe the task, as you'd ask a coding agent. Press Enter on its own to go back.")
+    ui.line("Describe the task, as you'd ask a coding agent.")
     ui.note("For example: add a dark mode toggle to the settings page")
+    ui.note("Press Enter on its own to go back.")
     return input(f"  {ui.accent(ui.mark('pick'))} ").strip()
 
 
@@ -101,7 +102,7 @@ def pick(pairs: list, runs: dict, verdicts: dict, too_few: list) -> list | None:
             listed = cli.in_words([f"{name} ({count:,})" for name, count in too_few])
             notes.append(f"Too few of your tasks to forecast: {listed}.")
         ui.out()
-        ticked = checklist.tick(rows, set(range(len(shown))) if picked == 0 else set(), notes)
+        ticked = checklist.tick(rows, notes=notes)
         if ticked is not None:
             return [shown[number] for number in ticked]
 

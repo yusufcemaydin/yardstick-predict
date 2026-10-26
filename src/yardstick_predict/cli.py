@@ -25,7 +25,9 @@ import importlib.util
 import json
 import math
 import os
+import shutil
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -1542,8 +1544,8 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
     return known
 
 
-FORECAST_COLUMNS = ("effort", "time", "tokens", "cost", "")
-"""The forecast table's columns after the AI model's name. The last one holds a warning, when there is one."""
+FORECAST_COLUMNS = ("", "effort", "time", "tokens", "cost")
+"""The forecast table's columns after the AI model's name. The first holds the warning mark, when there is one."""
 WARNINGS = {
     "not_accurate_enough": "failed the test",
     "not_enough_data": "not tested yet",
@@ -1555,7 +1557,7 @@ WARNINGS = {
 def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None, screen: bool = False) -> None:
     """The forecasts as a small table, for a person in a terminal. Under each forecast, in grey, is the range it
     lands in 9 times out of 10, when the forecast has a curve. A forecast that failed the test, wasn't tested or
-    rests on few runs has a warning after it.
+    rests on few runs is marked, and why is said under the table. It fits an 80 column terminal.
 
     `screen` is for the Estimate screen: the task was typed just above, so it isn't said again, and the
     predictor is called a model there, as every screen calls it.
@@ -1563,7 +1565,7 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     from .forecast import likely_range
 
     pad = max(len("AI model"), *(len(forecast["model"]) for forecast in result["forecasts"]))
-    rows, missing, previous, ranges, warned = [], {}, None, False, False
+    rows, missing, previous, ranges, why = [], {}, None, False, {}
     for forecast in result["forecasts"]:
         model = forecast["model"]
         seconds, tokens, usd = forecast["seconds"], forecast["tokens"], forecast["usd"]
@@ -1575,50 +1577,69 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
         name = ui.bold(model.ljust(pad)) if model != previous else " " * pad
         previous = model
         warning = rough_warning(forecast)
-        warned = warned or bool(warning)
+        if warning:
+            few = warning.startswith("only")
+            title = "Few runs" if few else warning[0].upper() + warning[1:]
+            who = f"{model} at {forecast.get('effort')} ({forecast.get('runs')})" if few else model
+            why.setdefault(title, {})[who] = True
         rows.append(
             (
                 name,
+                ui.yellow(ui.mark("warn")) if warning else "",
                 forecast.get("effort", ""),
                 duration(seconds) if seconds is not None else ui.dim("-"),
                 short_tokens(tokens) if tokens is not None else ui.dim("-"),
                 money(usd) if usd is not None else ui.dim("-"),
-                ui.yellow(f"{ui.mark('warn')} {warning}") if warning else "",
             )
         )
         spans = [likely_range(forecast.get("distribution"), target) for target in ("seconds", "tokens", "usd")]
         if any(spans):
             ranges = True
-            words = [span_words(span, show) for span, show in zip(spans, (duration, whole_tokens, money))]
-            rows.append(("", "", *(ui.dim(word) for word in words), ""))
+            words = [span_words(span, show) for span, show in zip(spans, (duration, whole_tokens, short_money))]
+            rows.append(("", "", "", *(ui.dim(word) for word in words)))
     if not screen:
         shown = prompt if len(prompt) <= 72 else prompt[:71].rstrip() + ui.mark("wait")
         ui.out()
         ui.line(ui.bold(shown))
     ui.out()
     if rows:
-        ui.table([tuple(ui.dim(title) for title in ("AI model".ljust(pad), *FORECAST_COLUMNS)), *rows], align="llrrrl")
+        header = tuple(ui.dim(title) for title in ("AI model".ljust(pad), *FORECAST_COLUMNS))
+        ui.table([header, *rows], align="lllrrr", gap=2)
     for text in missing.values():
         ui.line(text)
     too_few = result.get("too_few") or []
     if too_few:
-        listed = in_words([f"{model} ({count:,})" for model, count in too_few])
-        ui.line(ui.dim(f"Too few of your tasks to forecast: {listed}."))
+        wrapped_note(f"Too few of your tasks to forecast: {in_words([f'{m} ({n:,})' for m, n in too_few])}.")
     predictor = predictor or Predictor(result["predictor"])
     ui.out()
+    for title, names in why.items():
+        mark = ui.yellow(ui.mark("warn"))
+        for number, part in enumerate(textwrap.wrap(f"{title}: {in_words(list(names))}.", columns() - 6)):
+            ui.line(f"{mark if number == 0 else ' '} {part}")
+    if why:
+        wrapped_note("Those are a rough guide. Plan with a wider margin there.")
     if ranges:
-        ui.note("Under each forecast is the range it lands in 9 times out of 10. Costs are at API prices.")
-    if warned:
-        ui.note(f"{ui.mark('warn')} marks a rough guide. Plan with a wider margin there.")
+        wrapped_note("Under each forecast is the range it lands in 9 times out of 10. Costs are at API prices.")
     named = f"model {predictor.name}" if screen else f"predictor {predictor.name}"
     footer = [
         "Learned from your own runs",
         f"{named}, updated {ago(predictor.config.get('refreshed_at'))}",
         *([] if screen else ["add --json for details"]),
     ]
-    ui.line(ui.join([ui.dim(part) for part in footer]))
+    wrapped_note((f" {ui.mark('dot')} " if ui.styled() else ", ").join(footer))
     newer_settings_note(predictor)
     unknown_features_note(predictor)
+
+
+def columns() -> int:
+    """How wide the terminal is, 80 when it doesn't say."""
+    return shutil.get_terminal_size((80, 24)).columns
+
+
+def wrapped_note(text: str) -> None:
+    """A note broken to fit the terminal, so a long one never runs past its edge."""
+    for part in textwrap.wrap(text, max(columns() - 4, 20)):
+        ui.note(part)
 
 
 def rough_warning(forecast: dict) -> str | None:
@@ -1630,6 +1651,15 @@ def rough_warning(forecast: dict) -> str | None:
     if isinstance(runs, int) and runs < FEW_RUNS:
         return f"only {runs} runs"
     return None
+
+
+def short_money(usd: float) -> str:
+    """Dollars at a glance, such as a range's ends: $0.12, $29.17, $424, $59.0k."""
+    if usd >= 999.5:
+        return f"${usd / 1000:.1f}k"
+    if usd >= 99.5:
+        return f"${usd:.0f}"
+    return money(usd)
 
 
 def whole_tokens(value: float) -> str:

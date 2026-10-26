@@ -198,52 +198,86 @@ def trained(name: str, verdicts: dict[str, bool]) -> Predictor:
 def test_estimate_asks_which_ai_models_then_what_next(capsys, monkeypatch, quick, ready):
     trained("main", {"claude-opus-5-5": True, "gpt-6.1-sol": False})
     asked = typing(monkeypatch, "add a dark mode toggle to the settings page")
-    # Estimate, the tested AI models all ticked, then other AI models for the same task: from the list, tick the
-    # second, then home and quit.
-    pressing(monkeypatch, "1", "1", keys.ENTER, "2", "2", keys.DOWN, keys.SPACE, keys.ENTER, "3", keys.ESC)
+    # Estimate, Enter on the first tested AI model, then other AI models for the same task: from the list, Enter on
+    # the second, then home and quit.
+    pressing(monkeypatch, "1", "1", keys.ENTER, "2", "2", keys.DOWN, keys.ENTER, "3", keys.ESC)
     assert main([]) == 0
     out = plain(capsys.readouterr().out)
     assert asked == ["›"]  # the task is asked once, and kept for other AI models
     assert "Which AI models should it forecast?" in out
     assert "1. Tested AI models    claude-opus-5-5: passed the test" in out
     assert "2. Choose from a list  every one you've used, 2 in all" in out
-    assert re.search(r"● claude-opus-5-5\s+max\s+passed the test", out)  # tested ones start ticked
+    assert re.search(r"○ claude-opus-5-5\s+max\s+passed the test", out)  # nothing starts ticked
     assert re.search(r"○ gpt-6\.1-sol\s+max\s+⚠ failed the test", out)
+    assert "enter forecast this one" in out
     first, second = out.split("Choose other AI models  for the same task", 1)
-    assert re.search(r"claude-opus-5-5\s+max\s+60 s", first) and "gpt-6.1-sol   max" not in first.split("AI model")[-1]
-    assert re.search(r"gpt-6\.1-sol\s+max\s+60 s.*failed the test", second)
+    table = first.split("AI model")[-1]
+    assert re.search(r"claude-opus-5-5\s+max\s+60 s", table) and "gpt-6.1-sol" not in table  # only the one chosen
+    assert re.search(r"gpt-6\.1-sol\s+⚠\s+max\s+60 s", second) and "Failed the test: gpt-6.1-sol." in second
     assert "1. Estimate another task" in out and "3. Back to home" in out
     assert out.count("What would you like to do?") == 2  # home only when asked for
 
 
-def test_the_checklist_ticks_across_pages_and_needs_one_ticked(capsys, monkeypatch):
+def test_enter_picks_the_line_you_are_on_and_space_ticks_several_across_pages(capsys, monkeypatch):
     from yardstick_predict.screens import checklist
 
     rows = [keys.Choice(f"model {number}") for number in range(8)]
-    pressing(monkeypatch, keys.ENTER, keys.DOWN, keys.SPACE, keys.RIGHT, "1", keys.ENTER)
-    assert checklist.tick(rows) == [1, 6]  # the second on page 1, the first on page 2
+    pressing(monkeypatch, keys.DOWN, keys.ENTER)
+    assert checklist.tick(rows) == [1]  # nothing ticked: Enter picks the line it's on
+    pressing(monkeypatch, "3")
+    assert checklist.tick(rows) == [2]  # a number picks at once, as in every menu
+    pressing(monkeypatch, keys.DOWN, keys.SPACE, keys.RIGHT, "1", keys.ENTER)
+    assert checklist.tick(rows) == [1, 6]  # once one is ticked, a number ticks too, on any page
     out = plain(capsys.readouterr().out)
-    assert "Tick at least one first." in out and "Page 1 of 2" in out
-    assert re.search(r"Page 2 of 2(,| ·) 2 ticked", out)
-    assert "space tick" in out and "page" in out
+    assert "enter forecast this one" in out and "enter forecast the 2 ticked" in out
+    assert "Page 1 of 2" in out and re.search(r"Page 2 of 2(,| ·) 2 ticked", out)
     pressing(monkeypatch, keys.ESC)
-    assert checklist.tick(rows, {0}) is None
+    assert checklist.tick(rows) is None
 
 
-def test_a_checklist_without_single_keys_takes_typed_numbers(capsys, monkeypatch):
+def test_a_list_without_single_keys_takes_typed_numbers(capsys, monkeypatch):
     from yardstick_predict.screens import checklist
 
     monkeypatch.setattr(keys, "reader", lambda: None)
     rows = [keys.Choice(f"model {number}") for number in range(8)]
-    typing(monkeypatch, "", "2 n 1", "")
+    typing(monkeypatch, "", "2 n 1")
     assert checklist.tick(rows) == [1, 6]
-    assert "Tick at least one first." in plain(capsys.readouterr().out)
+    assert "Type at least one number." in plain(capsys.readouterr().out)
+
+
+def test_menus_and_the_forecast_table_fit_an_80_column_terminal(capsys, monkeypatch):
+    from yardstick_predict.screens import checklist
+
+    monkeypatch.setenv("COLUMNS", "80")
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    long = "a hint long enough to run past the edge of any terminal that is only eighty columns wide"
+    pressing(monkeypatch, keys.DOWN, keys.ENTER)
+    keys.choose([keys.Choice("Tested AI models", long), keys.Choice("Back")], footer=[long, long])
+    pressing(monkeypatch, keys.ENTER)
+    checklist.tick([keys.Choice(f"claude-sonnet-4-6  default {n}", long) for n in range(9)], notes=[long])
+    made("main")
+    forecasts = [
+        {
+            "model": "claude-sonnet-4-6",
+            "effort": "default",
+            "seconds": 5000.0,
+            "tokens": 123_400_000,
+            "usd": 123.45,
+            "distribution": curve(math.log(5000), 1.5),
+            "reason": "not_accurate_enough",
+        },
+    ]
+    cli.show_forecasts("x" * 120, {"predictor": "main", "forecasts": forecasts, "too_few": [("m" * 30, 3)] * 4})
+    lines = plain(capsys.readouterr().out).replace("\r", "\n").split("\n")
+    assert max(ui.width(line) for line in lines) <= 79
 
 
 def test_forecasts_show_six_to_a_page(capsys, monkeypatch, quick, ready):
     trained("main", {f"claude-model-{number}": True for number in range(8)})
     typing(monkeypatch, "fix the parser")
-    pressing(monkeypatch, "1", "1", keys.ENTER, "1", "4", keys.ESC)  # all 8 ticked, next page, then home
+    # Tested AI models, tick all 8 across the two pages, then the next page of forecasts, then home.
+    ticks = [keys.SPACE, "2", "3", "4", "5", "6", keys.RIGHT, "1", "2", keys.ENTER]
+    pressing(monkeypatch, "1", "1", *ticks, "1", "4", keys.ESC)
     assert main([]) == 0
     out = plain(capsys.readouterr().out)
     pages = out.split("fix the parser  page ")[1:]
@@ -381,16 +415,19 @@ def test_the_forecast_table_shows_ranges_and_warns_on_rough_forecasts(capsys):
     assert re.search(r"AI model\s+effort\s+time\s+tokens\s+cost\s*\n", out)
     assert re.search(r"claude-opus-5-5\s+max\s+16 min\s+23\.0M\s+\$7\.42\s*\n", out)  # it passed on many runs
     # Under it, its range: 900 seconds' curve holds 9 results in 10 from about 466 to 1,738 seconds.
-    assert re.search(r"\n\s+8 to 29 min\s+\d+ to [\d,.]+[kM]?\s+\$[\d.]+ to \$[\d.]+\s*\n", out)
-    assert re.search(r"high\s+5 min\s+7\.7M\s+\$3\.18\s+! only 11 runs", out.replace("⚠", "!"))
-    assert "failed the test" in out and "not tested yet" in out
-    assert "Too few of your tasks to forecast: claude-haiku-5-5 (6) and claude-opus-4-7 (3)." in out
-    assert "Under each forecast is the range it lands in 9 times out of 10. Costs are at API prices." in out
-    assert "marks a rough guide. Plan with a wider margin there." in out
+    assert re.search(r"\n\s+8 to 29 min\s+\d+ to [\d,.]+[kM]?\s+\$[\d.]+k? to \$[\d.]+k?\s*\n", out)
+    assert re.search(r"⚠\s+high\s+5 min\s+7\.7M\s+\$3\.18", out)  # marked, with why under the table
+    assert "⚠ Few runs: claude-opus-5-5 at high (11)." in out
+    assert "⚠ Failed the test: gpt-6.1-sol." in out and "⚠ Not tested yet: gpt-6-astra." in out
+    squashed = " ".join(out.split())  # notes are broken to fit the terminal
+    assert "Too few of your tasks to forecast: claude-haiku-5-5 (6) and claude-opus-4-7 (3)." in squashed
+    assert "Under each forecast is the range it lands in 9 times out of 10." in out
+    assert "Those are a rough guide. Plan with a wider margin there." in out
     assert "Create a fun game" not in out and "model main, updated" in out and "--json" not in out
     cli.show_forecasts("Create a fun game", result)  # the predict command says the task, and names the predictor
     out = plain(capsys.readouterr().out)
-    assert "Create a fun game" in out and "predictor main, updated" in out and "add --json for details" in out
+    squashed = " ".join(out.split())
+    assert "Create a fun game" in out and "predictor main, updated" in out and "add --json for details" in squashed
 
 
 def test_a_program_never_gets_a_forecast_that_failed_the_test_but_a_person_sees_it_marked(
@@ -407,7 +444,7 @@ def test_a_program_never_gets_a_forecast_that_failed_the_test_but_a_person_sees_
     monkeypatch.setattr(cli, "terminal_output", lambda: True)
     assert main(["predict", "fix it", "--model", "gpt-6.1-sol"]) == 0
     out = plain(capsys.readouterr().out)
-    assert re.search(r"gpt-6\.1-sol\s+60 s\s.*failed the test", out)
+    assert re.search(r"gpt-6\.1-sol\s+⚠\s+60 s", out) and "Failed the test: gpt-6.1-sol." in out
 
 
 # Models -------------------------------------------------------------------------------------------------------

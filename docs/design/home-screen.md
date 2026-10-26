@@ -76,18 +76,18 @@ Use plain `input()`. Enter on its own goes back home. Then, step by step:
     3. Back
 ```
 
-Each choice opens a checklist of AI models at their effort levels, 6 to a page. Tested AI models start ticked. The list starts with none ticked. Under it, it names the AI models with too few tasks to forecast. Space or a number ticks. The left and right arrows turn the page. Enter goes on once one is ticked.
+Each choice opens a list of AI models at their effort levels, 6 to a page, with nothing ticked. Enter forecasts the line you're on. A number picks its line at once, as in every menu. To forecast several, tick them with space first. Enter then forecasts the ticked ones. A number ticks too. The left and right arrows turn the page. Under the full list, it names the AI models with too few tasks to forecast. Every line fits an 80 column terminal. So the list redraws in place.
 
 ```
-  › 1. ● claude-opus-5-5   max      passed the test
+  › 1. ○ claude-opus-5-5   max      passed the test
     2. ○ claude-opus-5-5   high     ⚠ only 11 runs
     3. ○ claude-opus-5     max      ⚠ failed the test
 
-  Page 1 of 3 · 1 ticked
-  ↑↓ move · space tick · ←→ page · enter go on · esc go back
+  Page 1 of 3
+  ↑↓ move · enter forecast this one · space tick several · ←→ page · esc go back
 ```
 
-The forecasts show 6 to a page, each with the range it lands in 9 times out of 10 under it. A rough one is marked ⚠ with why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task or Back to home.
+The forecasts show 6 to a page, each with the range it lands in 9 times out of 10 under it. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task or Back to home.
 
 ## 4. Update
 

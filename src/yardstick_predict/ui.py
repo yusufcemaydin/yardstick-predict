@@ -289,8 +289,8 @@ def ask(question: str, default: bool) -> bool:
         note("Please answer y or n.")
 
 
-def table(rows: list[tuple[str, ...]], indent: int = 2, align: str = "") -> None:
-    """Rows in lined-up columns. align has an l or r for each column; the default is l."""
+def table(rows: list[tuple[str, ...]], indent: int = 2, align: str = "", gap: int = 3) -> None:
+    """Rows in lined-up columns, `gap` spaces apart. align has an l or r for each column; the default is l."""
     if not rows:
         return
     columns = max(len(row) for row in rows)
@@ -301,7 +301,7 @@ def table(rows: list[tuple[str, ...]], indent: int = 2, align: str = "") -> None
             pad = " " * (widths[i] - width(cell))
             right = i < len(align) and align[i] == "r"
             cells.append(pad + cell if right else (cell + pad if i < len(row) - 1 else cell))
-        out(" " * indent + "   ".join(cells).rstrip())
+        out(" " * indent + (" " * gap).join(cells).rstrip())
 
 
 def error(text: str) -> None:

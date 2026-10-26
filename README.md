@@ -12,18 +12,21 @@ $ yardstick-predict predict "Add a login page with tests"
 
   Add a login page with tests
 
-  AI model          effort             time         tokens             cost
-  claude-opus-5-5   max               4 min           1.8M            $0.92
-                                 2 to 8 min   703k to 3.6M   $0.37 to $1.93
-                    high              3 min           1.2M            $0.61   ⚠ only 12 runs
-                              72 s to 6 min   483k to 2.5M   $0.25 to $1.27
-  gpt-6.1-sol       xhigh             5 min           950k            $0.41   ⚠ failed the test
-                             85 s to 14 min   269k to 2.7M   $0.12 to $1.17
-  Too few of your tasks to forecast: claude-haiku-5-5 (6).
+  AI model            effort            time        tokens            cost
+  claude-opus-5-5     max              4 min          1.8M           $0.92
+                                  2 to 8 min  703k to 3.6M  $0.37 to $1.93
+                   ⚠  high             3 min          1.2M           $0.61
+                               72 s to 6 min  483k to 2.5M  $0.25 to $1.27
+  gpt-6.1-sol      ⚠  xhigh            5 min          950k           $0.41
+                              85 s to 14 min  269k to 2.7M  $0.12 to $1.17
 
-  Under each forecast is the range it lands in 9 times out of 10. Costs are at API prices.
-  ⚠ marks a rough guide. Plan with a wider margin there.
-  Learned from your own runs · predictor default, updated 2 days ago · add --json for details
+  ⚠ Few runs: claude-opus-5-5 at high (12).
+  ⚠ Failed the test: gpt-6.1-sol.
+  Those are a rough guide. Plan with a wider margin there.
+  Under each forecast is the range it lands in 9 times out of 10. Costs are at
+  API prices.
+  Learned from your own runs · predictor default, updated 2 days ago · add
+  --json for details
 ```
 
 The numbers above are an example. Yours come from your own history.
@@ -66,7 +69,7 @@ yardstick-predict create --express
 yardstick-predict
 ```
 
-The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. When a newer version of yardstick-predict is out, it says so under the box, with the command that updates it. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Estimate asks for a task. Then it asks which AI models: the ones that passed the test or any you tick from a list, 6 to a page. After the forecasts you choose what's next. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
+The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. When a newer version of yardstick-predict is out, it says so under the box, with the command that updates it. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Estimate asks for a task. Then it asks which AI models: the ones that passed the test or any from a list, 6 to a page. Enter forecasts the line you're on. To forecast several, tick them with space first. After the forecasts you choose what's next. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
 When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The check tests the model with each feature and without it, shows what helped for each AI model, and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice: say no, and setup trains with the features you picked.
 
