@@ -1,9 +1,9 @@
 """Estimate: forecast a task before you run it, one step at a time.
 
 Describe the task. Then pick the AI models: the ones with enough data behind them, or any you've used, from a
-list. Either way a list shows them 6 at a time. The forecasts show 6 at a time too, with the range each lands
-in 9 times out of 10. After them you choose what's next: another page, another task, other AI models for the
-same task, or home.
+list. Either way a list shows them 6 at a time. The forecasts show 6 at a time too, each with the ranges the
+real result lands in half the time and 9 times out of 10. After them you choose what's next: another page,
+another task, other AI models for the same task, or home.
 """
 
 from __future__ import annotations

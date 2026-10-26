@@ -285,7 +285,7 @@ def test_forecasts_show_six_to_a_page(capsys, monkeypatch, quick, ready):
     out = plain(capsys.readouterr().out)
     pages = out.split("fix the parser  page ")[1:]
     assert [page[:6] for page in pages] == ["1 of 2", "2 of 2"]
-    assert len(re.findall(r"claude-model-\d\s+max", pages[0].split("Under each")[0].split("AI model")[1])) == 6
+    assert len(re.findall(r"claude-model-\d\s+max", pages[0].split("Half the time")[0].split("AI model")[1])) == 6
     assert re.search(r"1\. Next page\s+forecasts 7 on", out) and "1. Previous page" in pages[1]
     assert re.search(r"1\. AI models with enough data\s+8 AI models\n", out)  # too many to name on one line
 
@@ -395,9 +395,11 @@ def test_a_narrow_terminal_gets_each_forecast_as_a_block(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert widest(out) < 60 and "AI model" not in out  # no table: it wouldn't fit
     text = plain(out)
-    assert re.search(r"claude-opus-5  ⚠  xhigh\n    time\s+4 min  \S+ to \S+ min\n    tokens\s+20\.6M", text)
+    # Each value has its two ranges after it, one under the other, each named.
+    ranges = r"time\s+4 min  1 in 2: \S+ to \S+ min\n\s+9 in 10: \S+ to \S+ min\n    tokens\s+20\.6M"
+    assert re.search(r"claude-opus-5  ⚠  xhigh\n    " + ranges, text)
     assert re.search(r"claude-opus-5-5  max\n    time\s+16 min", text)  # names are never cut
-    assert "Beside each forecast is the range" in " ".join(text.split())
+    assert cli.RANGES_NOTE in " ".join(text.split())
 
 
 @pytest.mark.parametrize("width", [80, 45])
@@ -573,6 +575,9 @@ def test_the_range_is_where_the_curve_holds_9_results_in_10():
     assert low == pytest.approx(600 * math.exp(-1.6449 * 0.5), rel=1e-3)
     assert high == pytest.approx(600 * math.exp(1.6449 * 0.5), rel=1e-3)
     assert likely_range(None, "seconds") is None and likely_range({"shape": "x"}, "seconds") is None
+    low, high = likely_range(curve(math.log(600), 0.5), "seconds", 0.5)  # the middle half
+    assert low == pytest.approx(600 * math.exp(-0.6745 * 0.5), rel=1e-3)
+    assert high == pytest.approx(600 * math.exp(0.6745 * 0.5), rel=1e-3)
 
 
 def test_the_forecast_table_shows_ranges_and_warns_on_rough_forecasts(capsys):
@@ -612,13 +617,15 @@ def test_the_forecast_table_shows_ranges_and_warns_on_rough_forecasts(capsys):
     out = plain(capsys.readouterr().out)
     assert re.search(r"AI model\s+effort\s+time\s+tokens\s+cost\s*\n", out)
     assert re.search(r"claude-opus-5-5\s+max\s+16 min\s+23\.0M\s+\$7\.42\s*\n", out)  # it passed on many runs
-    # Under it, its range: 900 seconds' curve holds 9 results in 10 from about 466 to 1,738 seconds.
-    assert re.search(r"\n\s+8 to 29 min\s+\d+ to [\d,.]+[kM]?\s+\$[\d.]+k? to \$[\d.]+k?\s*\n", out)
+    # Under it, its ranges: 900 seconds' curve holds half the results from about 687 to 1,179 seconds, and 9 in
+    # 10 from about 466 to 1,738 seconds.
+    assert re.search(r"\n\s+1 in 2\s+11 to 20 min\s+\d+ to [\d,.]+[kM]?\s+\$[\d.]+k? to \$[\d.]+k?\s*\n", out)
+    assert re.search(r"\n\s+9 in 10\s+8 to 29 min\s+\d+ to [\d,.]+[kM]?\s+\$[\d.]+k? to \$[\d.]+k?\s*\n", out)
     assert re.search(r"⚠\s+high\s+5 min\s+7\.7M\s+\$3\.18", out)  # marked, with why under the table
     squashed = " ".join(out.split())
     assert "⚠ Not enough data: claude-opus-5-5 at high, gpt-6.1-sol and gpt-6-astra." in squashed
     assert "Not enough data to forecast claude-haiku-5-5 (6 runs) and claude-opus-4-7 (3 runs)." in squashed
-    assert "Under each forecast is the range it lands in 9 times out of 10." in out
+    assert cli.RANGES_NOTE in squashed
     assert "Those are a rough guide. Plan with a wider margin there." in out
     assert "Create a fun game" not in out and "model main, updated" in out and "--json" not in out
     cli.show_forecasts("Create a fun game", result)  # the predict command says the task, and names the predictor

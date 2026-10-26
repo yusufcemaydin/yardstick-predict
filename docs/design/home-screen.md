@@ -58,7 +58,7 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 - Arrow keys and Enter, number keys jump to a choice, and Esc goes back or quits.
 - A menu of more than 9 choices shows 6 at a time. The left and right arrows turn its page.
 - Every line fits the terminal at any width. A long hint or name is cut short. A long note is broken onto more lines. A line that wrapped on its own would break the redraw in place.
-- A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then its time, tokens and cost, each with its range beside it.
+- A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then its time, tokens and cost, each with its two ranges beside it, one under the other.
 - Build it with the standard library only: `termios` and `tty` on macOS and Linux, `msvcrt` on Windows. No new dependency.
 - When a terminal cannot pass single key presses, fall back to typing the number. So do a dumb terminal (`TERM=dumb`) and an old Windows console where the codes that move the cursor can't be turned on.
 
@@ -93,7 +93,7 @@ Each choice opens a list of AI models at their effort levels, 6 to a page, with 
   ↑↓ move · enter forecast this one · space tick several · ←→ page · esc go back
 ```
 
-The forecasts show 6 to a page, each with the range it lands in 9 times out of 10 under it. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task or Back to home.
+The forecasts show 6 to a page. Under each are two ranges, named in the effort column. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task or Back to home.
 
 ## 4. Update
 

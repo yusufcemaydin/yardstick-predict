@@ -1610,6 +1610,12 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
 
 FORECAST_COLUMNS = ("", "effort", "time", "tokens", "cost")
 """The forecast table's columns after the AI model's name. The first holds the warning mark, when there is one."""
+RANGES = (("1 in 2", 0.5), ("9 in 10", 0.9))
+"""The ranges under each forecast in a person's table, each with the share of real results that land in it."""
+RANGES_NOTE = (
+    "Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range."
+)
+"""What the ranges under each forecast mean, in the note under the table."""
 WARNINGS = {
     "not_accurate_enough": "not enough data",
     "not_enough_data": "not enough data",
@@ -1620,9 +1626,10 @@ whose forecasts were often wrong on your past tasks, and one with too few of the
 
 
 def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None, screen: bool = False) -> None:
-    """The forecasts as a small table, for a person in a terminal. Under each forecast, in grey, is the range it
-    lands in 9 times out of 10, when the forecast has a curve. A forecast with not enough data behind it is marked,
-    and the AI models that have too little are named under the table. It fits the terminal at any width.
+    """The forecasts as a small table, for a person in a terminal. Under each forecast, in grey, are the ranges the
+    real result lands in half the time and 9 times out of 10, when the forecast has a curve. A forecast with not
+    enough data behind it is marked, and the AI models that have too little are named under the table. It fits the
+    terminal at any width.
 
     `screen` is for the Estimate screen: the task was typed just above, so it isn't said again, and the
     predictor is called a model there, as every screen calls it.
@@ -1655,12 +1662,16 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
             money(usd) if usd is not None else ui.dim("-"),
         )
         rows.append((name, mark, effort, *values))
-        spans = [likely_range(forecast.get("distribution"), target) for target in ("seconds", "tokens", "usd")]
-        words = ("", "", "")
-        if any(spans):
+        # Each range goes on a row of its own, named in the effort column, which is empty there.
+        curve = forecast.get("distribution")
+        spans = [[likely_range(curve, target, share) for target in ("seconds", "tokens", "usd")] for _, share in RANGES]
+        words = []
+        if any(any(found) for found in spans):
             ranges = True
-            words = tuple(span_words(span, show) for span, show in zip(spans, (duration, whole_tokens, short_money)))
-            rows.append(("", "", "", *(ui.dim(word) for word in words)))
+            for (label, _), found in zip(RANGES, spans):
+                shows = (duration, whole_tokens, short_money)
+                words.append(tuple(span_words(span, show) for span, show in zip(found, shows)))
+                rows.append(("", "", ui.dim(label), *(ui.dim(word) for word in words[-1])))
         blocks.append((model, mark, effort, values, words))
     # A table needs room for every column. A terminal too narrow for it gets each forecast as a block of its own.
     others = sum(max((ui.width(r[i]) for r in rows), default=0) + 2 for i in range(1, 6))
@@ -1693,8 +1704,7 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
             ui.line(f"{mark if number == 0 else ' '} {part}")
         wrapped_note("Those are a rough guide. Plan with a wider margin there.")
     if ranges:
-        where = "Beside" if stacked else "Under"
-        wrapped_note(f"{where} each forecast is the range it lands in 9 times out of 10. Costs are at API prices.")
+        wrapped_note(f"{RANGES_NOTE} Costs are at API prices.")
     named = f"model {predictor.name}" if screen else f"predictor {predictor.name}"
     footer = [
         "Learned from your own runs",
@@ -1719,14 +1729,17 @@ def wrapped_note(text: str) -> None:
 
 def show_blocks(blocks: list) -> None:
     """Each forecast as a block of its own, for a terminal too narrow for the table: the AI model with its mark and
-    effort level, then its time, tokens and cost, each with its range after it."""
+    effort level, then its time, tokens and cost. After each are its ranges, each named, one under the other."""
     for number, (model, mark, effort, values, words) in enumerate(blocks):
         if number:
             ui.out()
         name = ui.bold(ui.cut(model, ui.columns() - 16))
         ui.line(f"{name}{f'  {mark}' if mark else ''}{f'  {effort}' if effort else ''}")
-        labels = ("time", "tokens", "cost")
-        rows = [(ui.dim(label), value, ui.dim(word)) for label, value, word in zip(labels, values, words)]
+        rows = []
+        for place, (label, value) in enumerate(zip(("time", "tokens", "cost"), values)):
+            spans = [f"{title}: {found[place]}" for (title, _), found in zip(RANGES, words) if found[place]]
+            rows.append((ui.dim(label), value, ui.dim(spans[0]) if spans else ""))
+            rows += [("", "", ui.dim(span)) for span in spans[1:]]
         ui.table(rows, indent=4, align="lrl", gap=2)
 
 
