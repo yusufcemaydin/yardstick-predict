@@ -18,7 +18,7 @@
         "null"
       ],
       "minLength": 1,
-      "description": "Which predictor to use. Default: your default predictor, set with `yardstick-predict default NAME`."
+      "description": "Which of your models to use, by name. Default: your default model, set with `yardstick-predict default NAME`."
     },
     "distribution": {
       "type": [
@@ -58,7 +58,7 @@
               "type": "string",
               "minLength": 1
             },
-            "description": "The AI models to forecast the task on. A model named twice is forecast once."
+            "description": "The AI models to forecast the task on. An AI model named twice is forecast once."
           },
           "context": {
             "type": [
@@ -72,14 +72,14 @@
               "string",
               "null"
             ],
-            "description": "The thinking level. Default: the model's most common one."
+            "description": "The thinking level. Default: the AI model's most common one."
           },
           "agent": {
             "type": [
               "string",
               "null"
             ],
-            "description": "claude-code or codex. Default: the model's most common one."
+            "description": "claude-code or codex. Default: the AI model's most common one."
           },
           "origin": {
             "type": [
@@ -101,7 +101,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Skills known before the task runs, by name: the ones the conversation used before it. The ones the prompt invokes, such as a typed /command, are read from the prompt, so they may be left out. A predictor with the skills feature embeds their descriptions."
+            "description": "Skills known before the task runs, by name: the ones the conversation used before it. The ones the prompt invokes, such as a typed /command, are read from the prompt, so they may be left out. A model with the skills feature embeds their descriptions."
           },
           "extra": {
             "type": [
@@ -122,7 +122,7 @@
               "string",
               "null"
             ],
-            "description": "The conversation the task is in, by its id in the agent's records. A predictor with the conversation feature uses what its earlier tasks took."
+            "description": "The conversation the task is in, by its id in the agent's records. A model with the conversation feature uses what its earlier tasks took."
           },
           "conversation_tokens": {
             "type": [
@@ -130,7 +130,7 @@
               "null"
             ],
             "minimum": 0,
-            "description": "How big the conversation is so far, in tokens. 0, null or left out for a new one. A predictor with the conversation feature uses it."
+            "description": "How big the conversation is so far, in tokens. 0, null or left out for a new one. A model with the conversation feature uses it."
           }
         }
       }

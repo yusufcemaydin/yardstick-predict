@@ -4,11 +4,11 @@ This is the design of yardstick-predict's terminal screens. It was agreed on 24 
 
 ## Why
 
-Before 0.5.0, a bare `yardstick-predict` refreshed every predictor at once. The first thing it showed was a bar like `0 KB / 6.2 GB` with no label. That number was the size of your Claude Code and Codex records that it was about to read. It looked like a download. It then asked "Refresh now?" once per predictor and printed a long test report for every AI model. The screens replace that with a greeting and clear choices, the way other coding agents' commands work: hint texts, clearly labelled options and nothing heavy before you choose.
+Before 0.5.0, a bare `yardstick-predict` refreshed every model at once. The first thing it showed was a bar like `0 KB / 6.2 GB` with no label. That number was the size of your Claude Code and Codex records that it was about to read. It looked like a download. It then asked "Refresh now?" once per model and printed a long test report for every AI model. The screens replace that with a greeting and clear choices, the way other coding agents' commands work: hint texts, clearly labelled options and nothing heavy before you choose.
 
 ## Words
 
-- Every screen calls a predictor a **model**, as people do. The models a forecast is about, such as claude-opus-5-5, stay **AI models**. Add New calls it a model too, from its first question to its last line.
+- Every screen says **model** for what yardstick-predict trains from your runs, as people do. The models a forecast is about, such as claude-opus-5-5, stay **AI models**. Add New calls it a model too, from its first question to its last line.
 - Screens never talk about the test. These show **not enough data**: an AI model whose forecasts were often wrong on your past tasks, one with too few tasks to check and one that ran fewer than 30 tasks at an effort level. One never used shows **no data**. One with enough data needs no word.
 - The **default** effort level is what the records call a task run without one set. No one picks it. Lists leave it out when the AI model ran at a named level too. An AI model that ran only at the default level shows with no level.
 - A long list numbers its choices on from one page to the next. Two digits typed quickly pick a number above 9.

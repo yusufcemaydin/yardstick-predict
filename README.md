@@ -5,7 +5,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/yusufcemaydin/yardstick-predict/blob/main/LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://github.com/yusufcemaydin/yardstick-predict/blob/main/pyproject.toml)
 
-yardstick-predict learns from your own past Claude Code and Codex runs. Give it a task and it forecasts the time, tokens and dollars on each AI model you use. It's built for orchestrators: programs that run many coding agents and pick a model, a time limit or a budget for each task.
+yardstick-predict learns from your own past Claude Code and Codex runs. Give it a task and it forecasts the time, tokens and dollars on each AI model you use. It's built for orchestrators: programs that run many coding agents and pick an AI model, a time limit or a budget for each task.
 
 ```console
 $ yardstick-predict predict "Add a login page with tests"

@@ -6,7 +6,7 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ### Fixed
 
-- Every message and every command's help calls a predictor a model, as the home screen does. They used to say predictor. Where a message spoke of a predictor's model, it now speaks of the model's training. The status line, for one, says a model isn't trained yet. The `--predictor` option, the names in a program's JSON and the error codes stay as they were. Programs and scripts that use them keep working.
+- Every message, every command's help and the docs call a predictor a model, as the home screen does. They used to say predictor. Where a message spoke of a predictor's model, it now speaks of the model's training. The status line, for one, says a model isn't trained yet. Where the docs meant an AI model, such as claude-opus-5-5, they now say AI model. The `--predictor` option, the names in a program's JSON and the error codes stay as they were. Programs and scripts that use them keep working.
 
 ## [0.5.1] - 2026-10-27
 

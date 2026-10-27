@@ -32,22 +32,22 @@ The [request schema](../schemas/forecast-request.v1.json) and the [answer schema
 | `tasks` | yes | 1 to 1,000 tasks. |
 | `tasks[].id` | yes | Your name for the task. Each id must be unique in the request. |
 | `tasks[].prompt` | yes | The prompt the agent will get. It needs some text, not only spaces. As in training, the spaces at its ends are left out and only its first 24,000 characters count. |
-| `tasks[].models` | yes | 1 to 50 AI models to forecast the task on, by the model's API name. A model named twice is forecast once. |
-| `tasks[].context` | no | The conversation so far, if the task continues one. Used when the predictor has the `context` feature. Only its last 24,000 characters count. |
-| `tasks[].skills` | no | The skills known before the task runs, by name: the ones the conversation used before it. Used when the predictor has the `skills` feature. The ones the prompt invokes, such as a typed `/review`, are read from the prompt, so they may be left out. |
-| `tasks[].effort` | no | The thinking level, such as `high`, `xhigh` or `max`. Default: the level this model ran at most often, with recent tasks counting more. |
-| `tasks[].agent` | no | `claude-code` or `codex`. Default: the agent this model ran in most often. |
+| `tasks[].models` | yes | 1 to 50 AI models to forecast the task on, by the AI model's API name. An AI model named twice is forecast once. |
+| `tasks[].context` | no | The conversation so far, if the task continues one. Used when the model has the `context` feature. Only its last 24,000 characters count. |
+| `tasks[].skills` | no | The skills known before the task runs, by name: the ones the conversation used before it. Used when the model has the `skills` feature. The ones the prompt invokes, such as a typed `/review`, are read from the prompt, so they may be left out. |
+| `tasks[].effort` | no | The thinking level, such as `high`, `xhigh` or `max`. Default: the level this AI model ran at most often, with recent tasks counting more. |
+| `tasks[].agent` | no | `claude-code` or `codex`. Default: the agent this AI model ran in most often. |
 | `tasks[].origin` | no | `program` when a program starts the task, `person` when a person types it. Default: `program`. |
 | `tasks[].project` | no | The project's folder name. The forecast uses the project's recent tasks from your records, and your own features get it too. |
-| `tasks[].session` | no | The conversation the task is in, by its id in the agent's records. Used when the predictor has the `conversation` feature: the forecast uses what the conversation's earlier tasks took. |
-| `tasks[].conversation_tokens` | no | How big the conversation is so far, in tokens. 0 or left out for a new one. Used when the predictor has the `conversation` feature. |
+| `tasks[].session` | no | The conversation the task is in, by its id in the agent's records. Used when the model has the `conversation` feature: the forecast uses what the conversation's earlier tasks took. |
+| `tasks[].conversation_tokens` | no | How big the conversation is so far, in tokens. 0 or left out for a new one. Used when the model has the `conversation` feature. |
 | `tasks[].extra` | no | Any values your own features need. They reach them as `info.extra`. Past tasks have no extra, so a feature should also work its value out from the task itself. |
 | `distribution` | no | `true` to get each forecast's full curve. Default: `false`. |
-| `predictor` | no | Which predictor to use. Default: your default predictor, set with `yardstick-predict default NAME`. |
+| `predictor` | no | Which of your models to use, by name. Default: your default model, set with `yardstick-predict default NAME`. |
 
 A field that isn't needed may also be `null`. That means the same as leaving it out. Any other value of the wrong kind, such as `[]` for `extra` or `""` for `skills`, is an `invalid_request`.
 
-When the predictor has the `time` feature, each task is forecast as if it starts the moment the request is read.
+When the model has the `time` feature, each task is forecast as if it starts the moment the request is read.
 
 ## The answer
 
@@ -63,17 +63,17 @@ When the predictor has the `time` feature, each task is forecast as if it starts
 }
 ```
 
-These numbers are an example. There is one forecast for each pair of task and model, in the order of the request.
+These numbers are an example. There is one forecast for each pair of task and AI model, in the order of the request.
 
 | Field | What it is |
 |---|---|
-| `effort` | The effort level the forecast is for: the one in the request, or the level this model ran at most often. |
+| `effort` | The effort level the forecast is for: the one in the request, or the level this AI model ran at most often. |
 | `seconds` | Expected seconds from the prompt until the agent stops and hands control back. In Claude Code runs, time spent waiting for a person to answer or approve is left out. |
 | `tokens` | Expected tokens of every kind: new input, cache writes, cache reads and output, including helper agents. A whole number. |
-| `usd` | Expected cost in US dollars at the model's list price. `null` when the model's price isn't in the price list. `0` for a model whose list price is 0 for everything, with no curve for it in `distribution`. |
+| `usd` | Expected cost in US dollars at the AI model's list price. `null` when the AI model's price isn't in the price list. `0` for an AI model whose list price is 0 for everything, with no curve for it in `distribution`. |
 | `reason` | Only when the forecast isn't given: why the numbers are `null`. |
 
-A predictor can be set to forecast only some of `seconds`, `tokens` and `usd`. The others are always `null`. A value the test couldn't check for an AI model is `null` too, such as `usd` on a model whose cost it couldn't test.
+A model can be set to forecast only some of `seconds`, `tokens` and `usd`. The others are always `null`. A value the test couldn't check for an AI model is `null` too, such as `usd` on an AI model whose cost it couldn't test.
 
 Expected values are averages, not middles. A few long runs pull the average above the typical run. Expected values add up: the expected total of several tasks is the sum of their forecasts.
 
@@ -81,9 +81,9 @@ Expected values are averages, not middles. A few long runs pull the average abov
 
 | Reason | What it means |
 |---|---|
-| `unknown_model` | The predictor has never seen a task on this model. |
-| `not_enough_data` | Too few tasks on this model to test its forecasts. A model needs 30 earlier tasks and 30 test tasks. A request for an effort level the model never ran at gets it too. |
-| `not_accurate_enough` | The forecasts on this model didn't pass the test. `yardstick-predict status` shows which check failed. |
+| `unknown_model` | The model has never seen a task on this AI model. |
+| `not_enough_data` | Too few tasks on this AI model to test its forecasts. An AI model needs 30 earlier tasks and 30 test tasks. A request for an effort level the AI model never ran at gets it too. |
+| `not_accurate_enough` | The forecasts on this AI model didn't pass the test. `yardstick-predict status` shows which check failed. |
 
 ### Errors
 
@@ -96,23 +96,23 @@ When the whole request can't be answered, the answer has an `error` instead of `
 | Code | What it means |
 |---|---|
 | `invalid_request` | The request breaks a rule above. The message says which. A program gets it too when it runs `predict` with a command line it can't read, such as a flag it doesn't know. |
-| `no_predictor` | No predictor exists yet. |
-| `no_default_predictor` | There are several predictors, none is the default, and the request names none. Name one in `predictor`, or choose a default with `yardstick-predict default NAME`. |
-| `unknown_predictor` | The request names a predictor that doesn't exist, or the predictor was deleted while the request was answered. |
-| `broken_predictor` | The predictor's settings file can't be read, or is empty or broken. The message says which file. |
-| `plugin_failed` | A plugin the predictor uses couldn't be loaded. The message says which, and why. |
-| `not_trained` | The predictor has no model yet. Or its model was made by a version before the previous release and has to be trained again. Or a file of its model is missing or can't be read. `yardstick-predict refresh --predictor NAME` trains it. |
+| `no_predictor` | There's no model yet. |
+| `no_default_predictor` | There are several models, none is the default, and the request names none. Name one in `predictor`, or choose a default with `yardstick-predict default NAME`. |
+| `unknown_predictor` | The request names a model that doesn't exist, or the model was deleted while the request was answered. |
+| `broken_predictor` | The model's settings file can't be read, or is empty or broken. The message says which file. |
+| `plugin_failed` | A plugin the model uses couldn't be loaded. The message says which, and why. |
+| `not_trained` | The model isn't trained yet. Or it has to be trained again, because a version before the previous release trained it. Or a file from its training is missing or can't be read. `yardstick-predict refresh --predictor NAME` trains it. |
 | `no_embedding_key` | No Voyage key was found. |
 | `embedding_failed` | Voyage couldn't embed the request's text. The message gives Voyage's reason. |
 | `missing_library` | A library the model needs is missing. The message says how to add it. |
-| `model_too_new` | The predictor's model was saved by a newer version of yardstick-predict. Upgrade with `uv tool upgrade yardstick-predict`. |
+| `model_too_new` | A newer version of yardstick-predict trained the model. Upgrade with `uv tool upgrade yardstick-predict`. |
 | `internal_error` | Something went wrong that the tool didn't expect. The message says what. Please report it. |
 
 Whatever goes wrong, a program that runs `predict` finds only the JSON answer on standard output, never a traceback or other text.
 
 ## The distribution
 
-With `"distribution": true`, each forecast that's given also has a `distribution`. It is `null` when the forecast isn't given, or when the predictor forecasts expected values only.
+With `"distribution": true`, each forecast that's given also has a `distribution`. It is `null` when the forecast isn't given, or when the model forecasts expected values only.
 
 ```json
 "distribution": {
@@ -149,36 +149,36 @@ Seconds, tokens and dollars are forecast as separate curves. They usually move t
 
 | Field | What it is |
 |---|---|
-| `predictor` | The predictor's name. |
+| `predictor` | The model's name. |
 | `done` | `true` once it did what it said or found nothing to do. `false` when it only said what it would do. |
 | `up_to_date` | `refresh` only. `true` when there was nothing new. Then nothing changed. |
 | `new_tasks`, `changed_tasks`, `removed_tasks` | `refresh` only. The tasks it found since the last refresh, the saved ones that changed and the saved ones gone from their records. |
 | `found_tasks` | `create` only. How many finished tasks it found in your records. |
-| `default` | `create` only. Whether it's your default predictor, now or once it's trained. |
+| `default` | `create` only. Whether it's your default model, now or once it's trained. |
 | `cost.usd` | Every paid step together, worked out before anything is spent: at list price, in US dollars. `null` when the price of the AI model for LLM analysis isn't in yardstick's list. |
-| `cost.analysis` | LLM analysis: how many `tasks` it reads, the `model`, what it's `paid_with` and its `usd`. `anthropic` and `openai` mean an API key. `claude` and `codex` mean a subscription, which adds no bill. Its `usd` is `0` then. `null` when no task needs LLM analysis. |
-| `cost.embedding` | Voyage: how many `texts` go to it, each once, their `tokens`, whether that count is `exact`, the `model` and the `usd`. Voyage's free tokens aren't taken off. The descriptions LLM analysis writes count too. They make the count an estimate. |
+| `cost.analysis` | LLM analysis: how many `tasks` it reads, the AI `model` it asks, what it's `paid_with` and its `usd`. `anthropic` and `openai` mean an API key. `claude` and `codex` mean a subscription, which adds no bill. Its `usd` is `0` then. `null` when no task needs LLM analysis. |
+| `cost.embedding` | Voyage: how many `texts` go to it, each once, their `tokens`, whether that count is `exact`, the Voyage `model` and the `usd`. Voyage's free tokens aren't taken off. The descriptions LLM analysis writes count too. They make the count an estimate. |
 | `analyzed` | How many tasks LLM analysis read. |
 | `embedded` | How many texts went to Voyage. A text the cache of vectors holds costs nothing and isn't counted. |
 | `trained` | Whether it trained the model. |
 | `learned_from` | `create` only. How many tasks the model learned from. |
 | `forecasts_for` | The AI models that get forecasts now. |
-| `retrain_reason` | `refresh` only. Why it trains the model. `new_work` means new or changed tasks. With nothing new, it's `no_model` when there's no model yet, `unfinished` when training didn't finish last time, `outdated` when a version before the previous release made the model, `previous` when the previous release made it and `damaged` when a file of it is missing or can't be read. `null` when the model is up to date. |
+| `retrain_reason` | `refresh` only. Why it trains the model. `new_work` means new or changed tasks. With nothing new, it's `no_model` when the model isn't trained yet, `unfinished` when training didn't finish last time, `outdated` when a version before the previous release trained it, `previous` when the previous release trained it and `damaged` when a file from its training is missing or can't be read. `null` when the model is up to date. |
 | `max_cost` | The limit `--max-cost` set, in US dollars. `null` without one. |
 | `spent` | What it spent at list price, counted only under a limit. LLM analysis counts at what each request really cost, from the tokens it used. Embedding counts at the most its texts could cost. `null` without a limit. |
-| `notes` | Plain words about anything that didn't stop it, such as model facts that didn't download, LLM analysis that stopped at the limit or a folder of records that isn't there. |
+| `notes` | Plain words about anything that didn't stop it, such as AI model facts that didn't download, LLM analysis that stopped at the limit or a folder of records that isn't there. |
 
 When it can't go on, the answer has an `error` instead of these fields, with a `code` and a `message`. The exit code is 1:
 
 | Code | What it means |
 |---|---|
 | `invalid_request` | A flag, a name or a folder can't be used, such as a folder `--archive` names that isn't there. The message says which. |
-| `no_predictor` | No predictor exists yet. |
-| `no_default_predictor` | There are several predictors and none is the default. Name one with `--predictor`. |
-| `unknown_predictor` | There's no predictor with that name. Or it was deleted meanwhile. |
-| `broken_predictor` | The predictor's settings file can't be read. |
-| `predictor_exists` | `create` only. A predictor with that name exists already. |
-| `newer_version` | A newer version of yardstick-predict saved the predictor. This version leaves it as it is. |
+| `no_predictor` | There's no model yet. |
+| `no_default_predictor` | There are several models and none is the default. Name one with `--predictor`. |
+| `unknown_predictor` | There's no model with that name. Or it was deleted meanwhile. |
+| `broken_predictor` | The model's settings file can't be read. |
+| `predictor_exists` | `create` only. A model with that name exists already. |
+| `newer_version` | A newer version of yardstick-predict saved the model. This version leaves it as it is. |
 | `busy` | Another command is setting it up or refreshing it. Try again when it's done. |
 | `plugin_failed` | A plugin couldn't be loaded. |
 | `no_records` | `create` only. There are no records to learn from. Or they hold no finished tasks. |
@@ -199,22 +199,22 @@ A flag the command doesn't know gets `invalid_request` in JSON too, for every co
 
 ### status
 
-`yardstick-predict status --json` describes every predictor. With `--predictor NAME`, it describes that one.
+`yardstick-predict status --json` describes every model. With `--predictor NAME`, it describes that one.
 
 | Field | What it is |
 |---|---|
-| `predictors` | One entry for each predictor, in name order. |
+| `predictors` | One entry for each model, in name order. |
 | `notes` | Plain words about anything that didn't stop it, such as a stored file that can't be read. |
 
 Each entry has these fields:
 
 | Field | What it is |
 |---|---|
-| `name`, `default` | The predictor's name and whether it's the default. |
+| `name`, `default` | The model's name and whether it's the default. |
 | `embedding_model` | The Voyage model that embeds its texts. |
 | `features`, `options` | The features it learns from, the prompt first. Then the options chosen for each, by feature. |
-| `llm` | How LLM analysis runs: its `provider` and `model`. `null` without LLM analysis. |
-| `model` | The settings of its model, such as its `type`. |
+| `llm` | How LLM analysis runs: its `provider` and the AI `model` it asks. `null` without LLM analysis. |
+| `model` | Its settings for experts, such as its `type`. |
 | `archives` | The records it reads, each with its `name`, `format` and `path`. |
 | `tasks` | How many tasks its dataset holds. |
 | `refreshed_at` | When it last learned from your work, in seconds since 1970. `null` before that. |
@@ -223,46 +223,46 @@ Each entry has these fields:
 | `prepared_bytes` | The size of the prepared dataset on disk. `null` before the first training. |
 | `coverage` | The share of its tasks with a value for each feature, as `features` counts it, with how many `tasks` it learns from. `null` when it can't be counted now. A note says why. |
 
-A predictor whose settings can't be read has only `name`, `default` and `error`. The exit code is 1 then.
+A model whose settings can't be read has only `name`, `default` and `error`. The exit code is 1 then.
 
 ### list
 
-`yardstick-predict list --json` gives a shorter entry for each predictor, in `predictors`:
+`yardstick-predict list --json` gives a shorter entry for each model, in `predictors`:
 
 | Field | What it is |
 |---|---|
-| `name`, `default` | The predictor's name and whether it's the default. |
+| `name`, `default` | The model's name and whether it's the default. |
 | `features` | The features it learns from, the prompt first. |
-| `learned_from` | How many tasks its model learned from. `null` without a model. |
-| `trained_at` | When it was last trained, in seconds since 1970. `null` without a model. |
+| `learned_from` | How many tasks it learned from. `null` before it's trained. |
+| `trained_at` | When it was last trained, in seconds since 1970. `null` before it's trained. |
 | `forecasts_for` | The AI models that get forecasts. A model that has to be trained again gives none. |
 
-A predictor whose settings can't be read has `error` instead of the last four fields. The exit code is 1 then.
+A model whose settings can't be read has `error` instead of the last four fields. The exit code is 1 then.
 
 ### delete
 
-`yardstick-predict delete NAME --yes --json` deletes the predictor and answers:
+`yardstick-predict delete NAME --yes --json` deletes the model and answers:
 
 | Field | What it is |
 |---|---|
-| `deleted.name` | The predictor's name. |
+| `deleted.name` | The model's name. |
 | `deleted.folder` | Its folder, which is gone. |
 | `deleted.link_to` | When its folder was a link, where it pointed. Only the link went. `null` otherwise. |
 | `deleted.tasks`, `deleted.bytes` | How many tasks its dataset held and how much room its folder took. |
-| `default` | The default predictor now. `null` when there's none. |
+| `default` | The default model now. `null` when there's none. |
 
 ### features
 
-`yardstick-predict features --json` lists the feature store and each predictor's features:
+`yardstick-predict features --json` lists the feature store and each model's features:
 
 | Field | What it is |
 |---|---|
 | `folder` | The feature store's folder. |
-| `stored` | Each stored feature: its `id`, its `kind` (`embedding` or `llm`), what it was `made_with`, whether its files are `missing`, how many `tasks` and `rows` it holds, its size in `bytes`, when it `changed_at`, the files of it that are `unreadable` and the predictors it's `used_by`. |
-| `predictors` | Each predictor's `name`, `default`, how many `tasks` it learns from and its `features`. A feature has its `name`, `title` and what it `says`, whether it's `kept` in the store (`stored`) or worked out at `training`, the ids it's `stored` under, how many tasks have a value for it (`tasks_with_value`) and that share of the tasks (`coverage`). |
+| `stored` | Each stored feature: its `id`, its `kind` (`embedding` or `llm`), what it was `made_with`, whether its files are `missing`, how many `tasks` and `rows` it holds, its size in `bytes`, when it `changed_at`, the files of it that are `unreadable` and the models it's `used_by`. |
+| `predictors` | Each model's `name`, `default`, how many `tasks` it learns from and its `features`. A feature has its `name`, `title` and what it `says`, whether it's `kept` in the store (`stored`) or worked out at `training`, the ids it's `stored` under, how many tasks have a value for it (`tasks_with_value`) and that share of the tasks (`coverage`). |
 | `notes` | Plain words about anything that didn't stop it. |
 
-`yardstick-predict features delete ID --yes --json` deletes a stored feature. It answers with `deleted`, the feature as `stored` shows it. Its `remake` says what making it again takes at the next refresh of each predictor that uses it. `remake` has how many `tasks` get it again, how many `texts` are embedded again and how many of those the cache of vectors holds (`cached`), the `tokens` that go to Voyage, whether they were counted `exact`ly and the `usd` it costs at list price. For LLM answers, `analyses` and `analyses_least` are the most and the fewest readings of the tasks, when the predictors refresh one at a time. `remake` is `null` when no predictor uses the feature.
+`yardstick-predict features delete ID --yes --json` deletes a stored feature. It answers with `deleted`, the feature as `stored` shows it. Its `remake` says what making it again takes at the next refresh of each model that uses it. `remake` has how many `tasks` get it again, how many `texts` are embedded again and how many of those the cache of vectors holds (`cached`), the `tokens` that go to Voyage, whether they were counted `exact`ly and the `usd` it costs at list price. For LLM answers, `analyses` and `analyses_least` are the most and the fewest readings of the tasks, when the models refresh one at a time. `remake` is `null` when no model uses the feature.
 
 ### check
 
@@ -270,7 +270,7 @@ A predictor whose settings can't be read has `error` instead of the last four fi
 
 | Field | What it is |
 |---|---|
-| `predictor` | The predictor's name. |
+| `predictor` | The model's name. |
 | `checked_at` | When the check ran, in seconds since 1970. |
 | `tested_on` | How many of the newest tasks it was tested on. |
 | `features` | The features it tested the model without, one at a time. |
@@ -288,4 +288,4 @@ Besides the codes above, these commands may answer with:
 | `needs_yes` | `delete` or `features delete` without `--yes`. Nothing was deleted. The exit code is 2. |
 | `delete_failed` | A file couldn't be deleted, as when another program is using it. The rest is still there. The delete can be tried again. |
 | `unknown_feature` | `features delete` names no stored feature. |
-| `unsupported_model_type` | `check` only. The predictor uses a model type from a plugin. The check works with the built-in model only. |
+| `unsupported_model_type` | `check` only. The model's type comes from a plugin. The check works with the built-in type only. |

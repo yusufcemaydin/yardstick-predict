@@ -2,7 +2,7 @@
 
 This guide covers what the [README](../README.md) leaves out. [How it works](how-it-works.md) explains the model behind it.
 
-A predictor is what yardstick-predict trains from your runs. Its screens, messages and help call it a model. The `--predictor` option and the JSON keep the word predictor. The models a forecast is about, such as claude-opus-5-5, are AI models.
+A model is what yardstick-predict trains from your runs. It makes your forecasts. The `--predictor` option and the names in the JSON call it a predictor, for the programs that use them. The models a forecast is about, such as claude-opus-5-5, are AI models.
 
 ## The home screen
 
@@ -40,7 +40,7 @@ yardstick-predict predict "Add a login page with tests"
 
 It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. A column after the effort level names each line of a forecast. The expected line comes first. It's what to expect on average. Under it are the 25%, median and 75% lines. A quarter of real results come in under the 25% line, half under the median and three quarters under the 75% line. The effort level shows once, on the expected line. A forecast with not enough data behind it is marked ⚠ as a rough guide. The default effort level, which no one picks, isn't shown.
 
-`--model` and `--effort` name them yourself. `--predictor` picks another predictor. `--json` prints the answer programs get. Use it to pick a model, set a time limit or see what a batch of tasks will cost before you start.
+`--model` and `--effort` name the AI models and effort levels yourself. `--predictor` picks another of your models. `--json` prints the answer programs get. Use it to pick an AI model, set a time limit or see what a batch of tasks will cost before you start.
 
 ## Features the model learns from
 
@@ -54,14 +54,14 @@ Setup lists each feature with its options under it. Type a number to turn a feat
 | `conversation`, Conversation | The conversation so far, such as how long its last task took and how big it has grown. With `context`, also how close the prompt is to the end of the conversation. It costs nothing and sends nothing anywhere. | On |
 | `context`, Context | The last 1,500 characters of the conversation before the prompt, embedded. | On |
 | `skills`, Skills | The skills known before the task runs, embedded by their descriptions. Option `named` reads the skills the prompt invokes, such as a typed `/review`. Option `earlier` reads the skills used earlier in the conversation. | Off |
-| `benchmarks`, Model facts | Public facts about each AI model from [OpenRouter's model list](https://openrouter.ai/models): prices, context size, longest answer and release date. They are the same for old and new models. | Off |
+| `benchmarks`, Model facts | Public facts about each AI model from [OpenRouter's model list](https://openrouter.ai/models): prices, context size, longest answer and release date. They are the same for old and new AI models. | Off |
 | `time`, Time | When the task started. Option `trend` is the days since 1 January 2020. Option `clock` is the hour of the day and the day of the week, in your computer's time zone. A forecast's task starts the moment you ask. It costs nothing and sends nothing anywhere. | Off |
 | `llm`, LLM analysis | An AI model reads each task before it starts and describes the work. Option `kind` is the kind of task and its expected size. Option `description` is a few sentences on the work, embedded. | Off |
 | your own | Any text or number you compute from a task. See [Plugins](#plugins). | Off |
 
-Training uses exactly the features you choose. The conversation tells a lot about a person's sessions and can mislead about a program's one-off runs. So a predictor that mostly forecasts programs' runs may forecast better without `conversation`. With LLM analysis, training also makes the same model without it, with a test of its own, for the tasks that LLM analysis can't read.
+Training uses exactly the features you choose. The conversation tells a lot about a person's sessions and can mislead about a program's one-off runs. So a model that mostly forecasts programs' runs may forecast better without `conversation`. With LLM analysis, training also makes a second version of the model without it, with a test of its own, for the tasks that LLM analysis can't read.
 
-To find out which features help your own forecasts, run the feature check. Setup offers it. `yardstick-predict check` runs it on a predictor you already have. The Features screen shows each feature's latest verdicts. [How it works](how-it-works.md#5-the-feature-check) explains how to read them.
+To find out which features help your own forecasts, run the feature check. Setup offers it. `yardstick-predict check` runs it on a model you already have. The Features screen shows each feature's latest verdicts. [How it works](how-it-works.md#5-the-feature-check) explains how to read them.
 
 Choose features at setup or with flags. A feature named alone gets all its options:
 
@@ -69,28 +69,28 @@ Choose features at setup or with flags. A feature named alone gets all its optio
 yardstick-predict create --yes --features conversation,context,skills:named,llm --llm-provider claude
 ```
 
-A predictor keeps its embedding model for good. To change its features, create a new predictor.
+A model always embeds with the Voyage model it was made with. To change its features, create a new model.
 
-Embeddings and LLM answers cost money or time. So each is made once and kept in a feature store that all your predictors share. A second predictor over the same records pays for nothing it already has. `yardstick-predict features` lists every feature of every predictor: what's stored and its coverage. Coverage is the share of the predictor's tasks that have a value for it. `yardstick-predict status` shows each predictor's coverage too.
+Embeddings and LLM answers cost money or time. So each is made once and kept in a feature store that all your models share. A second model over the same records pays for nothing it already has. `yardstick-predict features` lists every feature of every model: what's stored and its coverage. Coverage is the share of the model's tasks that have a value for it. `yardstick-predict status` shows each model's coverage too.
 
-`yardstick-predict features delete ID` deletes a stored feature, by the id the listing shows. First it says which predictors use it and what making it again would cost. An embedding usually comes back from the cache of vectors for free. LLM answers have to be asked for again. It asks before it deletes anything.
+`yardstick-predict features delete ID` deletes a stored feature, by the id the listing shows. First it says which models use it and what making it again would cost. An embedding usually comes back from the cache of vectors for free. LLM answers have to be asked for again. It asks before it deletes anything.
 
 ### LLM analysis
 
 It sends each task's prompt and the end of the conversation before it to the AI model you pick. It never sends what the task went on to do. Pay for it one of four ways:
 
-| `--llm-provider` | How it's paid | Models |
+| `--llm-provider` | How it's paid | AI models |
 |---|---|---|
 | `anthropic` | An Anthropic API key, per use. Setup and refresh show the cost first. | Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 |
 | `openai` | An OpenAI API key, per use. Setup and refresh show the cost first. | GPT 6.1 Sol (the default), GPT 6 Astra, GPT 6 Luna |
 | `claude` | Your Claude subscription, through the Claude Code command. No extra bill. It counts toward your plan's usage limits. | Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 |
 | `codex` | Your ChatGPT subscription, through the Codex command. No extra bill. It counts toward your plan's usage limits. | Codex's own model |
 
-With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price. With Claude Haiku 5.5, it's about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks and no saved session. So these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in and stop asking. They train without LLM analysis for now. The next refresh asks again.
+With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price. With Claude Haiku 5.5, it's about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks and no saved session. So these calls never show up in the records your model learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in and stop asking. They train without LLM analysis for now. The next refresh asks again.
 
 ## Forecasts in Claude Code
 
-`yardstick-predict claude-code install` puts the forecast in Claude Code's status line. When you send a prompt, it shows the forecast for the model and effort level you're on, counts up while the agent works, then shows how long the task really took:
+`yardstick-predict claude-code install` puts the forecast in Claude Code's status line. When you send a prompt, it shows the forecast for the AI model and effort level you're on, counts up while the agent works, then shows how long the task really took:
 
 ```text
 yardstick · 1:12 of ~4 min · ~$1.23
@@ -115,7 +115,7 @@ echo '{"version": 1, "tasks": [
 ]}' | yardstick-predict predict
 ```
 
-From Python, an orchestrator can pick the cheapest model for a task like this:
+From Python, an orchestrator can pick the cheapest AI model for a task like this:
 
 ```python
 import json
@@ -134,18 +134,18 @@ priced = [f for f in answer["forecasts"] if f["usd"] is not None]
 if priced:
     cheapest = min(priced, key=lambda f: f["usd"])
     print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minutes and ${cheapest['usd']:.2f}.")
-else:  # no model has enough data yet. Each forecast says why.
+else:  # no AI model has enough data yet. Each forecast says why.
     print("No forecast yet:", ", ".join(f["reason"] for f in answer["forecasts"]))
 ```
 
-- **`effort`** is the effort level the forecast is for: the request's or the level the model ran at most often.
+- **`effort`** is the effort level the forecast is for: the request's or the level the AI model ran at most often.
 - **`seconds`, `tokens` and `usd`** are expected values: averages, not middles. They add up. So the expected total of ten tasks is the sum of their ten forecasts.
 - **`tokens`** counts every kind: new input, cache writes, cache reads and output, including helper agents.
-- **`usd`** is the cost at the model's list price.
+- **`usd`** is the cost at the AI model's list price.
 - **`reason`** appears only when a forecast isn't given. Then the numbers are `null` and it says why: `unknown_model`, `not_enough_data` or `not_accurate_enough`.
 - **`"distribution": true`** adds each forecast's full curve. A program can then work out any chance or any range.
 
-One request can hold up to 1,000 tasks, each on up to 50 models. The format is fixed and versioned: within version 1, fields may be added but are never renamed or removed. Schemas for the [request](../schemas/forecast-request.v1.json) and the [answer](../schemas/forecast-response.v1.json) let a program check every answer. [The format](format.md) explains every field.
+One request can hold up to 1,000 tasks, each on up to 50 AI models. The format is fixed and versioned: within version 1, fields may be added but are never renamed or removed. Schemas for the [request](../schemas/forecast-request.v1.json) and the [answer](../schemas/forecast-response.v1.json) let a program check every answer. [The format](format.md) explains every field.
 
 ### Set up and refresh from a program
 
@@ -195,7 +195,7 @@ Voyage gives every account 200 million free tokens. yardstick-predict can't see 
 
 Before it embeds anything, it shows the exact token count and the price. The count comes from Voyage's own tokenizer. If a big history won't fit in your free tokens, it offers to embed only your newest tasks. Each refresh shows the cost of just the new tasks.
 
-A text is paid for once. The same text in many tasks, such as a prompt that says only "continue", is sent once. A text embedded before with the same Voyage model, for any predictor or for a forecast, comes from a cache on your computer and costs nothing.
+A text is paid for once. The same text in many tasks, such as a prompt that says only "continue", is sent once. A text embedded before with the same Voyage model, for any model or for a forecast, comes from a cache on your computer and costs nothing.
 
 An account without a payment method gets low limits, such as a few requests and 10,000 tokens a minute. When Voyage says a limit is reached, yardstick-predict waits for it to come back. So a big first setup on such an account can take a while.
 
@@ -203,9 +203,9 @@ An account without a payment method gets low limits, such as a few requests and 
 
 ## How it tests itself
 
-A forecast you can't trust is worse than none, because a program acts on it. Much of how long an agent takes is chance. A predictor's job is to be honest about that spread and to narrow it where your data allows.
+A forecast you can't trust is worse than none, because a program acts on it. Much of how long an agent takes is chance. A model's job is to be honest about that spread and to narrow it where your data allows.
 
-Before it gives any forecast, a predictor replays each AI model's newest tasks and checks three things. Its forecasts must beat a simple rule that gives every task the same forecast. Its ranges must hold the real results often enough. Its expected values must add up to about the real total. An AI model that fails gets no forecast. Each AI model needs 60 tasks of its own before it can pass. `yardstick-predict status` shows the scores and which check failed. [How it works](how-it-works.md#4-the-test) gives the exact rules.
+Before it gives any forecast, a model replays each AI model's newest tasks and checks three things. Its forecasts must beat a simple rule that gives every task the same forecast. Its ranges must hold the real results often enough. Its expected values must add up to about the real total. An AI model that fails gets no forecast. Each AI model needs 60 tasks of its own before it can pass. `yardstick-predict status` shows the scores and which check failed. [How it works](how-it-works.md#4-the-test) gives the exact rules.
 
 ## Settings for experts
 
@@ -244,9 +244,9 @@ register_feature("project", "text", lambda info: info.project)
 yardstick-predict create --yes --plugin my_features --features conversation,context,words,project
 ```
 
-`--plugin` takes a module in the current folder, as here. It also takes the path of a `.py` file. The predictor remembers where the file is. So the plugin also loads when a forecast runs from another folder, as the status line's do.
+`--plugin` takes a module in the current folder, as here. It also takes the path of a `.py` file. The model remembers where the file is. So the plugin also loads when a forecast runs from another folder, as the status line's do.
 
-A text feature is embedded like the prompt. A number feature goes to the model as it is. Your function gets the task's prompt, context, skills, project, model, thinking level and agent, from past records when training and from the request when forecasting. It also gets when the task started, as `info.started_at`, in seconds since 1970: a forecast's task starts the moment you ask. A request can also carry an `"extra"` object for your features, which reaches them as `info.extra`. Past tasks have no extra. So a feature should also work its value out from the task itself. Training says so when one of your features had no value for any past task.
+A text feature is embedded like the prompt. A number feature goes to the model as it is. Your function gets the task's prompt, context, skills, project, AI model, thinking level and agent, from past records when training and from the request when forecasting. It also gets when the task started, as `info.started_at`, in seconds since 1970: a forecast's task starts the moment you ask. A request can also carry an `"extra"` object for your features, which reaches them as `info.extra`. Past tasks have no extra. So a feature should also work its value out from the task itself. Training says so when one of your features had no value for any past task.
 
 A plugin can also add a model type with `yardstick_predict.model_types.register_model_type(name, train, load)`, then use it with `--model-type`. [`model_types.py`](../src/yardstick_predict/model_types.py) describes what a model type provides.
 
@@ -254,18 +254,18 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 
 | Command | What it does |
 |---|---|
-| `yardstick-predict` | In a terminal, the home screen: Estimate, Update, Models and Add New. A program gets one line per predictor. |
-| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express` or `--yes` takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. A folder that isn't there stops it before anything is read. `--json` answers a program in JSON. `--max-cost USD` keeps it to a spending limit. |
-| `yardstick-predict refresh` | Adds new runs, embeds them and retrains. It says when a folder of records isn't there. The predictor keeps the tasks it read from there. `--yes` for programs, with `--json` for an answer in JSON. `--max-cost USD` keeps it to a spending limit. |
+| `yardstick-predict` | In a terminal, the home screen: Estimate, Update, Models and Add New. A program gets one line per model. |
+| `yardstick-predict create [NAME]` | Creates a model. In a terminal it asks for a name first. `--express` or `--yes` takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. A folder that isn't there stops it before anything is read. `--json` answers a program in JSON. `--max-cost USD` keeps it to a spending limit. |
+| `yardstick-predict refresh` | Adds new runs, embeds them and retrains. It says when a folder of records isn't there. The model keeps the tasks it read from there. `--yes` for programs, with `--json` for an answer in JSON. `--max-cost USD` keeps it to a spending limit. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
-| `yardstick-predict status` | Shows each predictor, its features with their coverage, the size of its prepared dataset and how close its forecasts came on your newest tasks. `--json` for programs. |
-| `yardstick-predict list` | Lists your predictors, one line each: features, how many tasks each learned from, when it was last trained and which AI models get forecasts. `--json` for programs. |
-| `yardstick-predict delete NAME` | Deletes a predictor: its settings, its dataset of tasks, its prepared dataset and its model. Your records and the feature store stay. In a terminal it says what goes and asks first. `--yes` for programs, with `--json` for an answer in JSON. |
-| `yardstick-predict check [NAME]` | Checks which of a predictor's features help its forecasts: it compares forecasts with each feature and without it. It's advice only and changes nothing. `--json` for programs. |
-| `yardstick-predict features` | Lists every feature of every predictor. A stored one shows what made it, how big it is and when it changed. Training works out the others for free. It shows the share of each predictor's tasks each feature covers. `--json` for programs. |
-| `yardstick-predict features delete ID` | Deletes a stored feature. It says which predictors use it and what making it again costs. It asks before it deletes. `--yes` for programs. |
-| `yardstick-predict default [NAME]` | Shows or sets your default predictor: the one commands use when they name none. `--predictor NAME` picks another for one command. |
-| `yardstick-predict rename OLD NEW` | Gives a predictor another name. The default stays the default. |
+| `yardstick-predict status` | Shows each model, its features with their coverage, the size of its prepared dataset and how close its forecasts came on your newest tasks. `--json` for programs. |
+| `yardstick-predict list` | Lists your models, one line each: features, how many tasks each learned from, when it was last trained and which AI models get forecasts. `--json` for programs. |
+| `yardstick-predict delete NAME` | Deletes a model: its settings, its dataset of tasks, its prepared dataset and what it learned. Your records and the feature store stay. In a terminal it says what goes and asks first. `--yes` for programs, with `--json` for an answer in JSON. |
+| `yardstick-predict check [NAME]` | Checks which of a model's features help its forecasts: it compares forecasts with each feature and without it. It's advice only and changes nothing. `--json` for programs. |
+| `yardstick-predict features` | Lists every feature of every model. A stored one shows what made it, how big it is and when it changed. Training works out the others for free. It shows the share of each model's tasks each feature covers. `--json` for programs. |
+| `yardstick-predict features delete ID` | Deletes a stored feature. It says which models use it and what making it again costs. It asks before it deletes. `--yes` for programs. |
+| `yardstick-predict default [NAME]` | Shows or sets your default model: the one commands use when they name none. `--predictor NAME` picks another for one command. |
+| `yardstick-predict rename OLD NEW` | Gives a model another name. The default stays the default. |
 | `yardstick-predict claude-code install` | Shows forecasts in Claude Code's status line. `--here` for one folder, `remove` to turn it off. |
 
 ## Update or remove it
@@ -282,11 +282,11 @@ If you installed 0.3.0 or an earlier version from GitHub, switch to PyPI once wi
 
 If you added the `llm` extra before 0.5.0, the upgrade may warn that the package has no extra named `llm`. That's fine: its libraries come with every install now. To stop the warning, install once more with `uv tool install --force yardstick-predict`.
 
-Upgrading keeps your predictors. When a new version reads records more accurately, the next refresh reads them all again, once. It embeds only the texts that changed. When a new version reads new features or trains the model another way, the next refresh trains it again. Until then, a model the previous version trained keeps forecasting as it did. A model from an older version gives no forecasts until it's trained again.
+Upgrading keeps your models. When a new version reads records more accurately, the next refresh reads them all again, once. It embeds only the texts that changed. When a new version reads new features or trains another way, the next refresh trains each model again. Until then, a model the previous version trained keeps forecasting as it did. A model an older version trained gives no forecasts until it's trained again.
 
-From 0.4 on, going back to an older version is safe too. It reads what it can of a predictor that a newer version saved and never changes it. It skips any feature it doesn't know, with a note. It won't refresh that predictor.
+From 0.4 on, going back to an older version is safe too. It reads what it can of a model that a newer version saved and never changes it. It skips any feature it doesn't know, with a note. It won't refresh that model.
 
-To remove one predictor, run `yardstick-predict delete NAME`. Your records, the feature store and your other predictors stay.
+To remove one model, run `yardstick-predict delete NAME`. Your records, the feature store and your other models stay.
 
 To remove everything, first take the forecasts out of Claude Code, if you added them. Otherwise Claude Code keeps trying to run yardstick-predict once it's gone:
 
@@ -306,12 +306,12 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 
 ## Privacy and safety
 
-- **Your records stay on your computer.** The dataset, the feature store and the model live in `~/.yardstick` or wherever `YARDSTICK_HOME` points. The folder is readable only by you, on Windows too.
+- **Your records stay on your computer.** Your models, their datasets and the feature store live in `~/.yardstick` or wherever `YARDSTICK_HOME` points. The folder is readable only by you, on Windows too.
 - **The cache of embeddings holds no text.** For each text it keeps a one-way hash and the text's vector, in the same private folder.
 - **Only the text you choose is sent,** over an encrypted connection. It goes to Voyage to be embedded. With LLM analysis, each task's prompt and the end of its conversation also go to the AI model you pick.
 - **Your Voyage key** is read from `VOYAGE_API_KEY` or kept in your computer's password store. yardstick-predict never writes it to a file of its own.
 - **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face at one fixed version and OpenRouter's model list if you use benchmarks. The home screen also reads yardstick-predict's public page on PyPI at most once a day, to say when a newer version is out. To turn that off, set `YARDSTICK_NO_UPDATE_CHECK` or `DO_NOT_TRACK`. Adding `"update_check": false` to `settings.json` in the yardstick folder works too.
-- **Saved models are plain JSON and plain numbers.** Loading one runs no code.
+- **What a model learned is saved as plain JSON and plain numbers.** Loading it runs no code.
 - **Plugins are code you choose to run.** yardstick-predict only imports the modules you name.
 - **What other services say is cleaned before it's shown.** An error from Voyage, Anthropic, OpenAI, Claude Code, Codex, OpenRouter or PyPI keeps its words but loses any hidden codes. Such codes could make your terminal show something else, change its title or write over a line.
 

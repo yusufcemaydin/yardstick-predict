@@ -36,22 +36,22 @@ MAX_TASKS = 1000
 MAX_MODELS = 50
 TARGETS = ("seconds", "tokens", "usd")
 REASONS = {
-    "unknown_model": "This predictor has never seen a task on this model.",
-    "not_enough_data": "Too few tasks on this model to test its forecasts.",
-    "not_accurate_enough": "Its forecasts on this model didn't pass the test.",
+    "unknown_model": "This model has never seen a task on this AI model.",
+    "not_enough_data": "Too few tasks on this AI model to test its forecasts.",
+    "not_accurate_enough": "Its forecasts on this AI model didn't pass the test.",
 }
 ERRORS = {
     "invalid_request": "The request breaks a rule of the format.",
-    "no_predictor": "No predictor exists yet.",
-    "no_default_predictor": "There are several predictors, none is the default, and the request names none.",
-    "unknown_predictor": "The request names a predictor that doesn't exist.",
-    "broken_predictor": "The predictor's settings file can't be read, or is empty or broken.",
-    "plugin_failed": "A plugin the predictor uses couldn't be loaded.",
-    "not_trained": "The predictor has no model yet. Or its model has to be trained again.",
+    "no_predictor": "There's no model yet.",
+    "no_default_predictor": "There are several models, none is the default, and the request names none.",
+    "unknown_predictor": "The request names a model that doesn't exist.",
+    "broken_predictor": "The model's settings file can't be read, or is empty or broken.",
+    "plugin_failed": "A plugin the model uses couldn't be loaded.",
+    "not_trained": "The model isn't trained yet. Or it has to be trained again.",
     "no_embedding_key": "No Voyage key was found.",
     "embedding_failed": "Voyage couldn't embed the request's text.",
     "missing_library": "A library the model needs is missing.",
-    "model_too_new": "The predictor's model was saved by a newer version of yardstick-predict.",
+    "model_too_new": "A newer version of yardstick-predict trained the model.",
     "internal_error": "Something went wrong that the tool didn't expect.",
 }
 """Every error code an answer can have, as the answer schema and docs/format.md list them."""

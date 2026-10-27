@@ -76,11 +76,11 @@ To run it before every push, give git a pre-push hook: a script git runs before 
 YARDSTICK_PRIVATE_TERMS="$HOME/private-terms.txt" uv run pytest -q tests/test_privacy.py
 ```
 
-## Predictors and models saved by past releases
+## Models saved by past releases
 
 Each version keeps forecasting with the models the previous release saved, until a refresh trains them again. Anything older is asked to train again first. A version that meets a feature it doesn't know skips it, with a note.
 
-The tests check this against what past releases really saved. `tests/fixtures` holds a predictor that 0.3.0's own code made, and what it forecast. When a release changes how predictors or models are saved, add that release's fixture the same way, with tests that this version still reads it. [The fixtures' README](tests/fixtures/README.md) shows how the 0.3.0 one was made. Its model files are plain JSON and plain numbers, as the tool saves them, never pickle files.
+The tests check this against what past releases really saved. `tests/fixtures` holds a model that 0.3.0's own code made, and what it forecast. When a release changes how it saves a model or what the model learned, add that release's fixture the same way, with tests that this version still reads it. [The fixtures' README](tests/fixtures/README.md) shows how the 0.3.0 one was made. Its model files are plain JSON and plain numbers, as the tool saves them, never pickle files.
 
 ## Report a problem or suggest an idea
 
@@ -115,7 +115,7 @@ These changes get a much closer review, and may be turned down:
 - new dependencies,
 - model files.
 
-A trained model is saved as JSON and as NumPy arrays read without pickle, which hold only numbers. Model files must keep to that. Pull requests that add pickle files will be closed. These usually end in `.pkl`, `.pt` or `.pth`. They can run code when someone opens them.
+What a model learns is saved as JSON and as NumPy arrays read without pickle, which hold only numbers. Model files must keep to that. Pull requests that add pickle files will be closed. These usually end in `.pkl`, `.pt` or `.pth`. They can run code when someone opens them.
 
 Code that's minified, obfuscated or generated without its source will be closed too. Every line has to be readable.
 

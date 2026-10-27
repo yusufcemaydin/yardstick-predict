@@ -48,7 +48,7 @@
           },
           "effort": {
             "type": "string",
-            "description": "The effort level the forecast is for: the request's, or the level this model ran at most often. Left out for a model with no past tasks when the request names no level."
+            "description": "The effort level the forecast is for: the request's, or the level this AI model ran at most often. Left out for an AI model with no past tasks when the request names no level."
           },
           "seconds": {
             "type": [
@@ -72,7 +72,7 @@
               "null"
             ],
             "minimum": 0,
-            "description": "Expected cost at the model's list price."
+            "description": "Expected cost at the AI model's list price."
           },
           "reason": {
             "type": "string",
