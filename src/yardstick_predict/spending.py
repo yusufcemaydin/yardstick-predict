@@ -5,9 +5,9 @@ tokens aren't taken off, as yardstick can't see how many are left. LLM analysis 
 bill, so it counts as nothing.
 
 A limit is kept three ways. Before anything is spent, what's planned must fit in it, with every text Voyage gets at
-the most tokens it can take. While LLM analysis runs, no request starts that may take the spending past it, judged
-by what the requests before it really cost. And before each step that embeds, what it may cost must fit in what's
-left. A step that doesn't fit stops the command, and what was done is kept.
+the most tokens it can take. While LLM analysis runs, no request starts unless the most it can cost fits in what's
+left, as llm.Budget says. And before each step that embeds, the most it may cost must fit in what's left. A step
+that doesn't fit stops the command, and what was done is kept.
 """
 
 from __future__ import annotations

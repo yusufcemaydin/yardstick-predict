@@ -256,9 +256,12 @@ def rename_predictor(old: str, new: str) -> None:
     """Give a predictor another name: its folder moves to the new name, with everything in it. The default stays
     the default, also when it was found only by being called default or by being the only one.
 
-    It raises ValueError with a plain reason when the new name can't be used or is taken, and Busy while a setup
-    or refresh of the predictor runs. It waits for a forecast that is reading its model. Both names' locks are
-    held, so no setup of either name and no delete runs meanwhile.
+    It raises ValueError with a plain reason when the new name can't be used or is taken, or when the predictor's
+    settings can't be read, and Busy while a setup or refresh of the predictor runs. Each is said before anything
+    moves. It waits for a forecast that is reading its model. Both names' locks are held, so no setup of either
+    name and no delete runs meanwhile. A predictor that is a link to another folder has only the link renamed:
+    nothing in the folder it leads to changes. When the settings can't be saved after the move, the folder moves
+    back, and the OSError says why.
     """
     problem = name_problem(new)
     if problem:
@@ -274,6 +277,10 @@ def rename_predictor(old: str, new: str) -> None:
             raise ValueError(f"There's already a predictor called {new}. Pick another name.")
         was_default = default_name() == old
         link = is_link(source)
+        try:
+            Predictor(old)  # settings that can't be read are said before anything moves
+        except BrokenPredictor as error:
+            raise ValueError(f"{error} It wasn't renamed.") from None
         refresh_lock, model_lock = (source / lock for lock in LOCKS)
         with _lock(refresh_lock, wait=False, make=not link) as mine:
             if not mine:
@@ -285,9 +292,14 @@ def rename_predictor(old: str, new: str) -> None:
             # Windows can't move a folder while a file in it is open, such as a lock that's held. So it moves once
             # they're let go. A command that opened one meanwhile makes the move fail, and nothing changes.
             source.rename(target)
-        predictor = Predictor(new)
-        predictor.config["name"] = new
-        predictor.save_config()
+        if not link:  # a link's settings are the folder's it leads to, which keep their own name
+            try:
+                predictor = Predictor(new)
+                predictor.config["name"] = new
+                predictor.save_config()
+            except OSError:
+                target.rename(source)  # so nothing changed
+                raise
         if was_default:
             set_default(new)
 

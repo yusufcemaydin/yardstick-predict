@@ -131,6 +131,7 @@ BEHIND = {
     "unfinished": "Training didn't finish last time.",
     "outdated": "An older version made its model. It gives no forecasts until it's trained again.",
     "previous": "The previous version made its model. Training again brings this one's improvements.",
+    "damaged": "A file of its model is missing or can't be read. Training again repairs it.",
 }
 
 

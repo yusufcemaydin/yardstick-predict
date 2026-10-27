@@ -457,7 +457,7 @@ def test_llm_analysis_stops_at_the_spending_limit_and_training_goes_on(capsys, f
 
     reads, writes = llm.TOKENS_PER_TASK
 
-    def costly(model, system, text, shape):  # each task really costs twice the price shown
+    def costly(model, system, text, shape, **limits):  # each task really costs twice the price shown
         ids = ids_in(text)
         return {
             **answer_for(ids),
@@ -754,6 +754,39 @@ def fails_after_the_key_check(monkeypatch):
 
     monkeypatch.setattr(embeddings, "_post", flaky)
     return real_post
+
+
+class FragileModel(QuickModel):
+    """A quick model saved in two files, so a test can take one away."""
+
+    def save(self, folder):
+        super().save(folder)
+        (folder / "trees.json").write_text("{}")
+
+
+def load_fragile(folder):
+    json.loads((folder / "trees.json").read_text())  # FileNotFoundError when it's gone
+    return FragileModel(json.loads((folder / "model.json").read_text()))
+
+
+def test_a_damaged_model_says_so_and_a_refresh_trains_it_again(capsys, monkeypatch, few, ready):
+    train = lambda tasks, rows, settings: FragileModel(quick_train(tasks, rows, settings).meta)  # noqa: E731
+    monkeypatch.setitem(model_types._TYPES, "fragile", (train, load_fragile))
+    assert main(["create", "--express", "--archive", f"claude-code={few}", "--model-type", "fragile"]) == 0
+    capsys.readouterr()
+    (Predictor("default").model_dir / "trees.json").unlink()
+    code, out = run(
+        capsys,
+        "predict",
+        stdin=json.dumps({"version": 1, "tasks": [{"id": "a", "prompt": "fix it", "models": ["claude-opus-5-5"]}]}),
+        monkeypatch=monkeypatch,
+    )
+    error = json.loads(out)["error"]
+    assert code == 1 and error["code"] == "not_trained" and "has a damaged model" in error["message"]
+    code, out = run(capsys, "refresh", "--yes", "--json")
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and answer["retrain_reason"] == "damaged" and answer["new_tasks"] == 0
+    assert (Predictor("default").model_dir / "trees.json").is_file()  # made again
 
 
 class Terminal(io.StringIO):

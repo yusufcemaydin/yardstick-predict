@@ -391,6 +391,17 @@ def test_prompts_wrapped_in_tags_are_still_prompts(tmp_path):
     assert [t.prompt for t in tasks] == ["<task>Fix the flaky test</task>"]
 
 
+def test_a_codex_field_of_another_type_is_passed_over_and_the_rest_is_read(tmp_path):
+    session = CodexSession(tmp_path, "c1", START)
+    session.turn("t1", "Fix the failing test", calls=[(1000, 9000, 200)], seconds=40)
+    session.turn("t2", "Explain the error", calls=[(300, 20_000, 80)], seconds=5, model={"name": "odd"}, effort=7)
+    session.save(mtime=START)
+    tasks = {t.prompt: t for t in read_archive(codex_archive(tmp_path), now=LATER)}
+    assert tasks["Fix the failing test"].model == "gpt-6.1-sol"
+    # The odd fields are passed over, as missing ones are: the turn keeps the model and effort it had.
+    assert tasks["Explain the error"].model == "gpt-6.1-sol" and tasks["Explain the error"].effort == "xhigh"
+
+
 def test_codex_helper_threads_add_to_the_parent_task(tmp_path):
     parent = CodexSession(tmp_path, "parent", START)
     parent.turn("t1", "Split the work", calls=[(1000, 0, 100)], seconds=100)

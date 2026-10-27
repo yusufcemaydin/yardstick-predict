@@ -324,6 +324,48 @@ def test_estimate_says_when_a_model_cant_forecast_and_another_can_be_chosen(caps
     assert re.search(r"claude-opus-5-5\s+max\s+60 s", plain(captured.out))
 
 
+def test_estimate_with_no_ai_model_that_has_enough_data_says_so(capsys, monkeypatch, quick, ready):
+    trained("main", {"claude-opus-5-5": False, "gpt-6.1-sol": False})
+    typing(monkeypatch, "fix the parser", "")
+    # AI models with enough data, which says there are none, then back to the task, home and quit.
+    pressing(monkeypatch, "1", "1", keys.ESC, keys.ESC)
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    assert re.search(r"1\. AI models with enough data\s+none yet", out)
+    assert "No AI model has enough data yet." in out
+
+
+def test_estimate_with_ai_models_that_ran_too_few_tasks_says_so_and_goes_home(capsys, monkeypatch, quick, ready):
+    predictor = trained("main", {"claude-opus-5-5": True})
+    meta = json.loads((predictor.model_dir / "model.json").read_text())
+    meta["effort_counts"] = {"claude-opus-5-5": [["max", 5]]}  # under the 10 runs a person's list needs
+    (predictor.model_dir / "model.json").write_text(json.dumps(meta))
+    typing(monkeypatch, "fix the parser")
+    pressing(monkeypatch, "1", keys.ESC)
+    assert main([]) == 0
+    squashed = " ".join(plain(capsys.readouterr().out).split())
+    assert "Not enough data to forecast with main yet. Each AI model needs 10 runs." in squashed
+    assert "These ran fewer: claude-opus-5-5 (5 runs)." in squashed
+    monkeypatch.setattr(cli, "terminal_output", lambda: True)
+    assert main(["predict", "fix the parser"]) == 0  # the command says the same, in its table's place
+    assert "Not enough data to forecast claude-opus-5-5 (5 runs)." in " ".join(plain(capsys.readouterr().out).split())
+    assert main(["predict", "  "]) == 1
+    assert "Give the task some text" in capsys.readouterr().err
+
+
+def test_a_key_that_looks_like_a_digit_but_isnt_one_is_passed_over(capsys, monkeypatch):
+    from yardstick_predict.screens import checklist
+
+    pressing(monkeypatch, "²", "2")
+    assert keys.choose(CHOICES) == 1
+    pressing(monkeypatch, "²", keys.ENTER)
+    assert checklist.tick([keys.Choice("a"), keys.Choice("b")]) == [0]
+    assert checklist.tick([]) is None  # nothing to pick from
+    monkeypatch.setattr(keys, "reader", lambda: None)
+    typing(monkeypatch, "²", "3")
+    assert keys.choose(CHOICES) == 2
+
+
 def test_with_one_model_estimate_asks_nothing_about_models(capsys, monkeypatch, quick, ready):
     trained("main", {"claude-opus-5-5": True})
     typing(monkeypatch, "fix the parser")

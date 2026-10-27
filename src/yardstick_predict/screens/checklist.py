@@ -22,6 +22,8 @@ def tick(
     """Show the choices with a box before each and return the numbers of the ones picked, from 0, in order: the
     ticked ones, or the one Enter was pressed on when none is ticked. None when Esc goes back. `ticked` are ticked
     at the start. `notes` go under the page, such as what a mark means."""
+    if not choices:
+        return None  # nothing to pick from
     ticked = set(ticked or ())
     read = keys.reader()
     if read is None:
@@ -45,7 +47,7 @@ def tick(
             at = max(first - PAGE, 0)
         elif key == keys.SPACE:
             ticked ^= {at}
-        elif key.isdigit():
+        elif ui.number_typed(key):
             picked, after = keys.number(key, read, len(choices))
             if not 1 <= picked <= len(choices):
                 continue
@@ -125,7 +127,7 @@ def _typed(choices: list[keys.Choice], notes: list[str]) -> list[int]:
                 first += PAGE
             elif word == "p":
                 first = max(first - PAGE, 0)
-            elif word.isdigit() and 1 <= int(word) <= len(choices):
+            elif ui.number_typed(word) and 1 <= int(word) <= len(choices):
                 picked.add(int(word) - 1)
         if picked:
             return sorted(picked)

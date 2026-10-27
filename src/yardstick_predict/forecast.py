@@ -279,10 +279,19 @@ def load(predictor: Predictor):
         raise RequestError("model_too_new", str(error)) from None
     except OutdatedModel as error:  # trained by a version before the previous release, which read other features
         raise RequestError("not_trained", str(error)) from None
-    except FileNotFoundError:
-        if (predictor.dir / "predictor.json").is_file():
-            raise  # a model with a file missing, which a refresh makes again
-        raise deleted(predictor) from None
+    except (OSError, ValueError, KeyError, EOFError):
+        if not (predictor.dir / "predictor.json").is_file():
+            raise deleted(predictor) from None
+        # A file of the model is missing or can't be read. A refresh sees that, and trains the model again.
+        raise RequestError("not_trained", damaged(predictor)) from None
+
+
+def damaged(predictor: Predictor) -> str:
+    """What to say about a model with a file missing or that can't be read."""
+    return (
+        f"Predictor {predictor.name!r} has a damaged model: a file of it is missing or can't be read. Train it "
+        f"again with: yardstick-predict refresh --predictor {predictor.name}"
+    )
 
 
 def deleted(predictor: Predictor) -> RequestError:

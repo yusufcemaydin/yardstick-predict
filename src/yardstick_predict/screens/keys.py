@@ -128,7 +128,7 @@ def number(first: str, read: Callable[..., str], most: int) -> tuple[int, str]:
     typed = first
     while int(typed) * 10 <= most:
         more = read(NEXT_DIGIT)
-        if not more.isdigit():
+        if not ui.number_typed(more):
             return int(typed), more
         typed += more
     return int(typed), ""
@@ -163,7 +163,7 @@ def choose(choices: list[Choice], footer: list[str] | None = None, start: int = 
             at = first + PAGE
         elif key == LEFT and paged:
             at = max(first - PAGE, 0)
-        elif key.isdigit():
+        elif ui.number_typed(key):
             picked, _ = number(key, keys, len(choices))
             if 1 <= picked <= len(choices):
                 _draw(choices, picked - 1, footer, drawn, paged)
@@ -253,7 +253,7 @@ def _typed(choices: list[Choice]) -> int:
     ui.out()
     while True:
         reply = input(ui.prompt("Type a number:", "[1]")).strip() or "1"
-        if reply.isdigit() and 1 <= int(reply) <= len(choices):
+        if ui.number_typed(reply) and 1 <= int(reply) <= len(choices):
             return int(reply) - 1
         ui.note(f"Type a number from 1 to {len(choices)}.")
 

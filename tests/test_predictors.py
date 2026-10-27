@@ -861,3 +861,26 @@ def test_what_making_a_feature_again_costs_counts_a_shared_text_once():
     found = pipeline.remake(prompts, [predictor, other])
     assert found.cached == 1 and found.tokens == sum(len(f"task {n}".split()) + 1 for n in (0, 2, 4))
     assert pipeline.remake(feature_store.embedding("context", "voyage-4", 256), [predictor]).texts == 1
+
+
+def test_a_predictor_whose_settings_cant_be_read_isnt_renamed(capsys):
+    quick_predictor("default")
+    work = quick_predictor("work")
+    store.set_default("work")
+    (work.dir / "predictor.json").write_text("{not json")
+    assert main(["rename", "work", "fixed"]) == 1
+    assert "It wasn't renamed." in capsys.readouterr().err
+    assert predictor_names() == ["default", "work"] and store.settings()["default"] == "work"  # nothing moved
+
+
+@pytest.mark.usefixtures("quick")
+def test_renaming_a_link_leaves_the_folder_it_leads_to_as_it_was(capsys, tmp_path):
+    if not can_link(tmp_path):
+        pytest.skip("This computer doesn't let the tests make links.")
+    default = quick_predictor("default")
+    default.close()
+    store.predictor_folder("work").symlink_to(default.dir, target_is_directory=True)
+    before = (default.dir / "predictor.json").read_text()
+    assert main(["rename", "work", "home"]) == 0
+    assert store.predictor_folder("home").is_symlink() and predictor_names() == ["default", "home"]
+    assert (default.dir / "predictor.json").read_text() == before  # its name is still default

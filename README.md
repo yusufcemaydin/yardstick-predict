@@ -227,7 +227,7 @@ yardstick-predict refresh --yes --json
 - **`forecasts_for`** lists the AI models that get forecasts now.
 - **`notes`** holds anything worth knowing that didn't stop it.
 
-**A spending limit.** `--max-cost 1.50` keeps a setup or a refresh to $1.50 at list price. It goes ahead only when what it would cost fits. While LLM analysis runs, it counts what each request really costs. The first request goes alone. No request starts that could take the spending past the limit. Before each step that embeds, it checks what's left. When a step doesn't fit, it stops there and keeps what was done. With the limit, the answer also says what was spent, in `spent`.
+**A spending limit.** `--max-cost 1.50` keeps a setup or a refresh to $1.50 at list price. It goes ahead only when what it would cost fits. While LLM analysis runs, no request starts unless the most it can cost fits in what's left. That counts every byte of its text as a token and its answer at the longest it may be. Under a limit, a request the AI model declines isn't tried again on another one. So no request can take the spending past the limit. Before each step that embeds, it checks what's left. When a step doesn't fit, it stops there and keeps what was done. With the limit, the answer also says what was spent, in `spent`.
 
 When it can't go on, the answer is an `error` with a `code` and a `message`. The exit code is 1 then. [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md#setup-and-refresh) lists every field and code. It also says what `create --json` adds.
 

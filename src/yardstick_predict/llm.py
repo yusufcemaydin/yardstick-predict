@@ -12,14 +12,17 @@ they never show up in the records the predictor learns from.
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import os
+import queue
 import shutil
 import subprocess
 import tempfile
+import threading
+from collections import deque
 from collections.abc import Callable
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -188,43 +191,46 @@ class Analysis:
 
 
 class Budget:
-    """What LLM analysis paid with an API key may spend, in US dollars at list price, under a spending limit.
+    """What LLM analysis paid with an API key may spend under a spending limit, in US dollars at list price.
 
-    A request starts only when what it may cost fits in what's left, with what the requests still running may cost
-    set aside. What a request may cost is judged by what the requests that came back really cost, and never less
-    than the price shown before anything began. So the first request goes alone: until it's back, nothing is known.
+    A request starts only when the most it can cost fits in what's left, with the most the requests still running
+    can cost set aside. The most a request can cost counts each byte of its text as a token, since no token is
+    shorter than a byte, and its answer at the most tokens it may hold. So the spending never goes past the limit,
+    however long a task's text or its answer is. When a whole request doesn't fit, one with fewer of its tasks may.
     """
 
-    def __init__(self, usd: float, per_task: float) -> None:
+    def __init__(self, usd: float) -> None:
         self.usd = usd
-        self.per_task = per_task
-        """What a task costs, as the price shown before anything began works it out."""
         self.spent = 0.0
         self.held = 0.0
-        """Set aside for the requests still running."""
-        self.tasks = 0
-        """How many tasks the requests that came back held."""
+        """Set aside for the requests still running: the most each can cost."""
         self.full = False
-        """Whether a request didn't start because what it may cost didn't fit."""
+        """Whether a request didn't start because the most it can cost didn't fit."""
 
-    def rate(self) -> float:
-        """What a task may cost: the most of the price shown and what the tasks so far really cost."""
-        return max(self.per_task, self.spent / self.tasks) if self.tasks else self.per_task
+    def fits(self, most: float) -> bool:
+        """Whether a request that can cost at most this much may start now."""
+        return self.spent + self.held + most <= self.usd + 1e-12
 
-    def take(self, tasks: int) -> float | None:
-        """Set aside what a request for this many tasks may cost, or None when that doesn't fit in what's left."""
-        most = self.rate() * tasks
-        if self.spent + self.held + most > self.usd + 1e-9:
-            self.full = True
-            return None
+    def take(self, most: float) -> None:
         self.held += most
-        return most
 
-    def paid(self, held: float, tasks: int, usd: float | None) -> None:
-        """A request came back. It cost `usd`, or what was set aside for it when its cost isn't known."""
+    def paid(self, held: float, usd: float | None) -> None:
+        """A request came back. It cost `usd`, or the most it could, when what it cost isn't known."""
         self.held -= held
         self.spent += held if usd is None else usd
-        self.tasks += tasks
+
+
+ANSWER_TOKENS = 2_000
+"""Under a spending limit, the most tokens an answer may hold for each task in its request, thinking included."""
+MOST_ANSWER_TOKENS = 16_000
+"""The most tokens a whole answer may hold."""
+FRAMING_TOKENS = 200
+"""Room for what a provider wraps around a request's text, such as its roles and the answer's shape."""
+
+
+def answer_tokens(tasks: int) -> int:
+    """The most tokens the answer to a request for this many tasks may hold, under a spending limit."""
+    return min(MOST_ANSWER_TOKENS, ANSWER_TOKENS * tasks)
 
 
 def spent(found: dict, model: str) -> float | None:
@@ -389,7 +395,7 @@ def analyze(
     system = INSTRUCTIONS.format(fields="\n".join(f"- {FIELDS[name]}" for name in fields))
     shape = schema(fields)
     by = f"{provider.key}:{how['model']}"
-    waiting = iter(batches(asks, provider.batch))
+    waiting = deque(batches(asks, provider.batch))
     answers: dict[str, dict] = {}
     problems: list[str] = []
     stopped: list[str] = []  # why it sends no more requests, once a problem every request would meet came
@@ -397,8 +403,10 @@ def analyze(
 
     def run(batch: list[Ask]) -> tuple[dict[str, dict], str | None, float | None]:
         unanswered = {"by": by, "fields": fields, "failed": True}
+        # Under a budget, an answer can't run longer than was set aside, and no other AI model is asked instead.
+        limits = {"most_tokens": answer_tokens(len(batch)), "fallback": False} if budget is not None else {}
         try:
-            answer = call(how["model"], system, _message(batch), shape)
+            answer = call(how["model"], system, _message(batch), shape, **limits)
         except LLMError as error:
             if not error.lasting:
                 raise
@@ -414,55 +422,84 @@ def analyze(
             found.setdefault(ask.id, dict(unanswered))  # skipped, or answered with something that makes no sense
         return found, None, usd
 
-    pool = ThreadPoolExecutor(max_workers=provider.parallel)
-    running: dict = {}
-    # Under a budget, the first request goes alone, so the next ones are judged by what it really cost.
-    width = 1 if budget is not None else provider.parallel
-    later: list[Ask] = []
-    """The tasks of requests the budget didn't let start, left for a later run."""
+    def most(batch: list[Ask]) -> float | None:
+        """The most a request for these tasks can cost. None when the AI model's price isn't known."""
+        text = system + _message(batch) + json.dumps(shape)
+        tokens = len(text.encode("utf-8", "surrogatepass")) + FRAMING_TOKENS
+        return prices.call_cost(how["model"], tokens, 0, 0, 0, answer_tokens(len(batch)))
+
+    results: queue.Queue = queue.Queue()
+    running: dict[int, tuple[list[Ask], float]] = {}
+    numbers = itertools.count()
+
+    def work(number: int, batch: list[Ask]) -> None:
+        try:
+            results.put((number, run(batch), None))
+        except BaseException as error:  # said where the results are read
+            results.put((number, None, error))
+
+    def next_batch() -> tuple[list[Ask], float] | None:
+        """The next request to send and the most it can cost, or None when there's none to send now."""
+        if stopped or not waiting or (budget is not None and budget.full):
+            return None
+        batch = waiting.popleft()
+        if budget is None:
+            return batch, 0.0
+        for size in range(len(batch), 0, -1):  # the whole request, else one with fewer of its tasks
+            cost = most(batch[:size])
+            if cost is not None and budget.fits(cost):
+                if size < len(batch):
+                    waiting.appendleft(batch[size:])
+                return batch[:size], cost
+        waiting.appendleft(batch)
+        if not running:  # nothing set aside will come free: it can't fit
+            budget.full = True
+        return None
 
     def start_next() -> bool:
-        batch = None if stopped or (budget is not None and budget.full) else next(waiting, None)
-        if batch is None:
+        found = next_batch()
+        if found is None:
             return False
-        held = budget.take(len(batch)) if budget is not None else 0.0
-        if held is None:
-            later.extend(batch)
-            return False
-        running[pool.submit(run, batch)] = (batch, held)
+        batch, held = found
+        if budget is not None:
+            budget.take(held)
+        number = next(numbers)
+        running[number] = (batch, held)
+        # Python doesn't wait for this thread before it exits, so Ctrl+C never waits for a request to come back.
+        threading.Thread(target=work, args=(number, batch), daemon=True).start()
         return True
 
-    try:
-        while len(running) < width and start_next():
+    while len(running) < provider.parallel and start_next():
+        pass
+    while running:
+        try:
+            number, outcome, error = results.get(timeout=0.5)  # a wait that Ctrl+C stops, on Windows too
+        except queue.Empty:
+            continue
+        batch, held = running.pop(number)
+        usd = None
+        if error is None:
+            found, problem, usd = outcome
+        elif isinstance(error, LLMError):
+            found, problem = {}, str(error)
+            if error.stops:
+                stopped.append(problem)
+        else:
+            raise error
+        if budget is not None:
+            budget.paid(held, usd)
+        if problem:
+            problems.append(problem)
+        done += len(batch)
+        answers.update(found)
+        if on_batch is not None:
+            on_batch(found, done)
+        while len(running) < provider.parallel and start_next():
             pass
-        while running:
-            finished, _ = wait(running, return_when=FIRST_COMPLETED)
-            for future in finished:
-                batch, held = running.pop(future)
-                usd = None
-                try:
-                    found, problem, usd = future.result()
-                except LLMError as error:
-                    found, problem = {}, str(error)
-                    if error.stops:
-                        stopped.append(problem)
-                if budget is not None:
-                    budget.paid(held, len(batch), usd)
-                if problem:
-                    problems.append(problem)
-                done += len(batch)
-                answers.update(found)
-                if on_batch is not None:
-                    on_batch(found, done)
-            width = provider.parallel
-            while len(running) < width and start_next():
-                pass
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
     if budget is not None and budget.full and not stopped:
         from .spending import dollars
 
-        left = len(later) + sum(len(batch) for batch in waiting)
+        left = sum(len(batch) for batch in waiting)
         stopped.append(
             f"LLM analysis stopped at your spending limit, after about {dollars(budget.spent)} at list price. "
             f"{left:,} task{' is' if left == 1 else 's are'} left for a later run."
@@ -612,19 +649,23 @@ def analyze_requests(predictor, tasks) -> dict[str, dict]:
 # The four ways to call an AI model ------------------------------------------------------------------------
 
 
-def _anthropic(model: str, system: str, text: str, shape: dict) -> dict:
+def _anthropic(
+    model: str, system: str, text: str, shape: dict, most_tokens: int = MOST_ANSWER_TOKENS, fallback: bool = True
+) -> dict:
+    """Ask Anthropic's API. `most_tokens` is the longest the answer may be. Without `fallback`, a request its safety
+    checks decline isn't tried again on another AI model, as under a spending limit."""
     import anthropic
 
     request = {
         "model": model,
-        "max_tokens": 16000,
+        "max_tokens": most_tokens,
         "system": system,
         "messages": [{"role": "user", "content": text}],
         "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": shape}},
     }
     try:
         client = anthropic.Anthropic()
-        if model.startswith("claude-haiku"):
+        if model.startswith("claude-haiku") or not fallback:
             response = client.messages.create(**request)  # Haiku has no fallback model to retry a decline on
         else:
             # A request its safety checks decline is retried on the model Anthropic recommends for it.
@@ -647,15 +688,20 @@ def _anthropic(model: str, system: str, text: str, shape: dict) -> dict:
     return _with_usage(_json(text), response, model)
 
 
-def _openai(model: str, system: str, text: str, shape: dict) -> dict:
+def _openai(
+    model: str, system: str, text: str, shape: dict, most_tokens: int | None = None, fallback: bool = True
+) -> dict:
+    """Ask OpenAI's API. `most_tokens`, when given, is the longest the answer may be, its reasoning included."""
     import openai
 
+    limited = {"max_output_tokens": most_tokens} if most_tokens is not None else {}
     try:
         response = openai.OpenAI().responses.create(
             model=model,
             instructions=system,
             input=text,
             text={"format": {"type": "json_schema", "name": "task_analysis", "schema": shape, "strict": True}},
+            **limited,
         )
     except openai.AuthenticationError:
         raise LLMError("OpenAI didn't accept the API key. Set OPENAI_API_KEY to a working key.") from None
@@ -687,7 +733,7 @@ def _with_usage(found: dict, response, model: str) -> dict:
     return found
 
 
-def _claude_code(model: str, system: str, text: str, shape: dict) -> dict:
+def _claude_code(model: str, system: str, text: str, shape: dict, **limits) -> dict:
     command = shutil.which("claude")
     if command is None:
         raise LLMError("Paying with a Claude subscription needs Claude Code. Install it, then sign in.")
@@ -729,7 +775,7 @@ def _claude_code(model: str, system: str, text: str, shape: dict) -> dict:
     return _json(str(result.get("result") or "") if isinstance(result, dict) else "")
 
 
-def _codex(model: str, system: str, text: str, shape: dict) -> dict:
+def _codex(model: str, system: str, text: str, shape: dict, **limits) -> dict:
     command = shutil.which("codex")
     if command is None:
         raise LLMError("Paying with a ChatGPT subscription needs Codex. Install it, then sign in.")

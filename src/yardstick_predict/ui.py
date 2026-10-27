@@ -145,6 +145,12 @@ def yellow(text: str) -> str:
     return _style("33", "39", text)
 
 
+def number_typed(text: str) -> bool:
+    """Whether a key or an answer is a whole number in the digits 0 to 9. Python's own test also takes ² and other
+    marks that look like digits, which int() can't read, as a key on some keyboards types."""
+    return text.isascii() and text.isdigit()
+
+
 def width(text: str) -> int:
     """How many columns a text takes on screen, leaving out color codes."""
     return len(_ANSI.sub("", text))

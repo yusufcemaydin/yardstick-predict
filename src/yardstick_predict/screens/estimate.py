@@ -49,6 +49,9 @@ def run() -> None:
                 task = None  # back to describing the task
                 continue
             loaded = ready(name)
+            if loaded is not None and not loaded.pairs:
+                too_few(name, loaded.too_few)
+                loaded = None
             if loaded is None:  # it can't forecast, and the reason was said
                 if not several:
                     return
@@ -137,9 +140,9 @@ def pick(pairs: list, runs: dict, verdicts: dict, too_few: list) -> list | None:
         ui.out()
         ui.line("Which AI models should it forecast?")
         ui.out()
-        named = cli.in_words(names) if len(names) <= 3 else f"{len(names)} AI models"
+        named = (cli.in_words(names) if len(names) <= 3 else f"{len(names)} AI models") if names else "none yet"
         choices = [
-            keys.Choice("AI models with enough data", named if names else "none yet"),
+            keys.Choice("AI models with enough data", named),
             keys.Choice("Choose from a list", f"every one you've used, {len(pairs)} in all"),
             keys.Choice("Back"),
         ]
@@ -159,6 +162,15 @@ def pick(pairs: list, runs: dict, verdicts: dict, too_few: list) -> list | None:
         ticked = checklist.tick(rows, notes=notes)
         if ticked is not None:
             return [shown[number] for number in ticked]
+
+
+def too_few(name: str, found: list) -> None:
+    """Say that no AI model ran enough tasks for the model to forecast it yet, with how many each ran."""
+    listed = cli.in_words([f"{model} ({count:,} run{'' if count == 1 else 's'})" for model, count in found])
+    text = f"Not enough data to forecast with {name} yet. Each AI model needs {cli.SHOWN_FROM} runs."
+    text += f" These ran fewer: {listed}." if listed else ""
+    for part in ui.wrapped(f"{text} Update it once there are more."):
+        ui.note(part)
 
 
 def _label(pair: tuple, every: list) -> str:

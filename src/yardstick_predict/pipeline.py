@@ -539,7 +539,8 @@ class Refresh:
     """What the saved model says about itself, or None without one."""
     behind: str | None
     """Why the model is trained again even with nothing new: unfinished when training didn't finish last time,
-    outdated when a version before the previous release made it, previous when the previous release did."""
+    outdated when a version before the previous release made it, previous when the previous release did, damaged
+    when a file of it is missing or can't be read."""
 
     @property
     def up_to_date(self) -> bool:
@@ -560,6 +561,8 @@ def plan_refresh(predictor: Predictor, found: Scan, key: str | None) -> Refresh:
         behind = "outdated"
     elif meta is not None and from_previous_version(predictor, meta):
         behind = "previous"
+    elif meta is not None and not loads(predictor):
+        behind = "damaged"
     chosen = chosen_features(predictor)
     # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished.
     updated = {task.id: task for task in found.updated_tasks}
@@ -1106,6 +1109,15 @@ def model_ready(predictor: Predictor) -> bool:
     """Whether the predictor has a model. While a new one is being swapped in, it waits for it."""
     with _model_lock(predictor, shared=True):
         return (predictor.model_dir / "model.json").is_file()
+
+
+def loads(predictor: Predictor) -> bool:
+    """Whether the predictor's model loads, every file of it. False when one is missing or can't be read."""
+    try:
+        load_model(predictor)
+    except (OSError, ValueError, KeyError, EOFError):
+        return False
+    return True
 
 
 def model_meta(predictor: Predictor) -> dict | None:

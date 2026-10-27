@@ -484,7 +484,7 @@ def analyze_with_progress(predictor: Predictor, asks: list, reserve: float = 0.0
     how = predictor.config.get("llm") or {}
     budget = None
     if _limit is not None and llm.PROVIDERS[how["provider"]].billed:
-        budget = llm.Budget(_limit.left() - reserve, llm.cost(1, how["model"]) or 0.0)
+        budget = llm.Budget(_limit.left() - reserve)
     ui.heading("LLM analysis")
     ui.note("Each batch is saved as it arrives, so you can stop and resume later.")
     try:
@@ -969,7 +969,7 @@ def _create(args, held, answer: dict) -> int:
         ui.note("The predictor keeps this model for good. To change it later, create a new predictor.")
         while model_name is None:
             reply = input(ui.prompt("Which Voyage model should embed your tasks?", "[1]")).strip() or "1"
-            if reply.isdigit() and 1 <= int(reply) <= len(options):
+            if ui.number_typed(reply) and 1 <= int(reply) <= len(options):
                 model_name = options[int(reply) - 1]
             else:
                 ui.note(f"Type a number from 1 to {len(options)}.")
@@ -1460,8 +1460,19 @@ BEHIND_NOTES = {
         "This model was made by the previous version. It still forecasts, and training it again brings",
         "this version's improvements.",
     ],
+    "damaged": ["A file of this model is missing or can't be read. Training it again repairs it."],
 }
 """What a refresh says when the model is trained again even with nothing new, by the reason plan_refresh gives."""
+
+
+def retrain_reason(planned) -> str | None:
+    """Why a refresh trains the model, for a program: new_work, no_model, unfinished, outdated, previous or damaged.
+    None when it's up to date."""
+    if planned.up_to_date:
+        return None
+    if planned.model is None:
+        return "no_model"
+    return planned.behind or "new_work"
 
 
 def gone(predictor: Predictor) -> bool:
@@ -1489,6 +1500,7 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
         changed_tasks=0,
         removed_tasks=0,
         cost=None,
+        retrain_reason=None,
         analyzed=0,
         embedded=0,
         trained=False,
@@ -1534,6 +1546,7 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
     everything, plan, asks = planned.tasks, planned.embed, planned.asks
     cost = spending.cost_of(predictor.config, model_name, plan, asks, planned.described)
     answer["cost"] = cost.as_json()
+    answer["retrain_reason"] = retrain_reason(planned)
     if _limit is not None:
         answer["spent"] = 0.0
     if planned.up_to_date:
@@ -1645,6 +1658,10 @@ def forecast_request(args, prompt: str | None, rough: bool = False) -> tuple[Pre
 
     if prompt is not None and getattr(args, "request", None) is not None:
         raise RequestError("invalid_request", "Give the task in quotes or a request with --request, not both.")
+    if prompt is not None and not prompt.strip():
+        raise RequestError(
+            "invalid_request", 'Give the task some text, like: yardstick-predict predict "Fix the login bug"'
+        )
     if prompt is None:
         request = read_request(getattr(args, "request", None))
         tasks, distribution, chosen = parse(request)
@@ -1660,6 +1677,9 @@ def forecast_request(args, prompt: str | None, rough: bool = False) -> tuple[Pre
         models = list(dict.fromkeys(args.model)) or forecast_models(predictor, model.meta)
         pairs = effort_pairs(predictor, models, args.effort, model.meta)
         pairs = for_people(pairs) if rough else pairs
+    if rough and not pairs:  # no AI model ran enough tasks to show: the table says so, with how many each ran
+        empty = {"version": 1, "predictor": predictor.name, "embedding_model": predictor.embedding_model}
+        return predictor, {**empty, "forecasts": [], "too_few": too_few}
     result = forecast_pairs(predictor, model, prompt, pairs, args, rough, runs)
     if rough:
         result["too_few"] = too_few
@@ -1876,7 +1896,7 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     """
     from .forecast import likely_range
 
-    pad = max(len("AI model"), *(len(forecast["model"]) for forecast in result["forecasts"]))
+    pad = max([len("AI model"), *(len(forecast["model"]) for forecast in result["forecasts"])])
     rows, missing, previous, ranges, blocks = [], {}, None, False, []
     thin: dict[str, bool] = {}
     """The AI models with not enough data, and the effort levels with too few runs, to name under the table."""
@@ -2269,8 +2289,10 @@ def cmd_list(args) -> int:
 
 
 def in_words(names: list[str]) -> str:
-    """Names as a person lists them: a, b and c."""
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    """Names as a person lists them: a, b and c. Nothing for no names."""
+    if len(names) < 2:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def answer_error(args, code: str, message: str, exit_code: int = 1) -> int:

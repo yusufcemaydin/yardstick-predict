@@ -373,52 +373,73 @@ def test_another_services_words_never_hold_a_code_a_terminal_acts_on():
 OPUS = {"provider": "anthropic", "model": "claude-opus-5-5"}
 
 
-def costing(times: float, calls: list):
-    """Anthropic's API, answering every task, where each task really costs `times` the price shown before."""
-    reads, writes = llm.TOKENS_PER_TASK
+def most(asks: list) -> float:
+    """The most a request for these tasks can cost on Claude Opus 5.5, worked out as the budget does."""
+    system = llm.INSTRUCTIONS.format(fields="\n".join(f"- {llm.FIELDS[name]}" for name in FIELDS))
+    text = system + llm._message(asks) + json.dumps(llm.schema(FIELDS))
+    tokens = len(text.encode()) + llm.FRAMING_TOKENS
+    return llm.prices.call_cost("claude-opus-5-5", tokens, 0, 0, 0, llm.answer_tokens(len(asks)))
 
-    def call(model, system, text, shape):
+
+def answering(calls: list, at_most: bool):
+    """Anthropic's API, answering every task. With `at_most`, each request uses the most tokens it could."""
+
+    def call(model, system, text, shape, most_tokens=llm.MOST_ANSWER_TOKENS, fallback=True):
         ids = ids_in(text)
-        calls.append(len(ids))
-        usage = {"model": model, "input": int(times * reads * len(ids)), "output": int(times * writes * len(ids))}
+        calls.append({"tasks": len(ids), "most_tokens": most_tokens, "fallback": fallback})
+        used = len((system + text + json.dumps(shape)).encode()) + llm.FRAMING_TOKENS if at_most else 10
+        usage = {"model": model, "input": used, "output": most_tokens if at_most else 10}
         return {**answer_for(ids), "_usage": usage}
 
     return call
 
 
-def test_a_budget_lets_no_request_start_that_may_take_the_spending_past_it(monkeypatch):
-    calls: list[int] = []
-    monkeypatch.setattr(llm, "_anthropic", costing(2, calls))  # each task costs twice what was shown
-    per_task = llm.cost(1, "claude-opus-5-5")
-    budget = llm.Budget(24 * per_task, per_task)
-    found = llm.analyze([llm.Ask(f"t{i}", f"Prompt {i}") for i in range(40)], OPUS, FIELDS, budget=budget)
-    # The first request goes alone and costs 16 tasks' worth. A second would cost as much again: too much.
-    assert calls == [8] and len(found.answers) == 8
-    assert budget.spent == pytest.approx(16 * per_task) and budget.spent <= budget.usd
-    assert "stopped at your spending limit" in found.problem and "32 tasks are left for a later run" in found.problem
-
-    calls.clear()
-    monkeypatch.setattr(llm, "_anthropic", costing(1, calls))  # each task costs what was shown
-    budget = llm.Budget(24 * per_task, per_task)
-    found = llm.analyze([llm.Ask(f"t{i}", f"Prompt {i}") for i in range(40)], OPUS, FIELDS, budget=budget)
-    assert sum(calls) == 24 and len(found.answers) == 24 and budget.spent <= budget.usd + 1e-12
-    assert "16 tasks are left" in found.problem
+def test_a_budget_lets_no_request_start_unless_the_most_it_can_cost_fits(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(llm, "_anthropic", answering(calls, at_most=True))  # every request costs the most it can
+    asks = [llm.Ask(f"t{i}", f"Prompt {i}") for i in range(40)]
+    budget = llm.Budget(2.5 * most(asks[:8]))
+    found = llm.analyze(asks, OPUS, FIELDS, budget=budget)
+    assert budget.spent <= budget.usd + 1e-12  # never past the limit, though every answer was as long as it may be
+    assert 16 < len(found.answers) < 40  # two whole requests, then smaller ones while they fit
+    assert "stopped at your spending limit" in found.problem and "left for a later run" in found.problem
+    # Each answer may be no longer than was set aside for it, and a declined request goes to no other AI model.
+    assert all(call["most_tokens"] == llm.answer_tokens(call["tasks"]) and not call["fallback"] for call in calls)
 
 
-def test_under_a_budget_the_first_request_goes_alone(monkeypatch):
-    seen: list[str] = []
+def test_a_budget_gives_back_what_a_request_didnt_cost(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(llm, "_anthropic", answering(calls, at_most=False))  # every request costs very little
+    asks = [llm.Ask(f"t{i}", f"Prompt {i}") for i in range(40)]
+    budget = llm.Budget(1.5 * most(asks[:8]))  # not room for two whole requests at the most they can cost
+    found = llm.analyze(asks, OPUS, FIELDS, budget=budget)
+    assert len(found.answers) == 40 and found.problem is None and budget.spent < 0.01
+    assert budget.held == pytest.approx(0, abs=1e-9)  # what was set aside came back with each answer
 
-    def slow(model, system, text, shape):
-        seen.append("start")
-        time.sleep(0.05)
-        seen.append("end")
-        return answer_for(ids_in(text))
 
-    monkeypatch.setattr(llm, "_anthropic", slow)
-    asks = [llm.Ask(f"t{i}", "x") for i in range(40)]
-    llm.analyze(asks, OPUS, FIELDS, budget=llm.Budget(100.0, 0.01))
-    assert seen[:2] == ["start", "end"]  # nothing else ran until the first came back
-    assert seen.count("start") == 5  # then the rest, side by side
+def test_ctrl_c_during_llm_analysis_doesnt_wait_for_a_request_to_come_back(tmp_path):
+    import sys
+
+    script = tmp_path / "stop.py"
+    script.write_text(
+        "import sys, time\n"
+        "from yardstick_predict import llm\n"
+        "def slow(model, system, text, shape, **limits):\n"
+        "    if 't0' not in text:\n"
+        "        time.sleep(5)\n"
+        "    return {'tasks': []}\n"
+        "llm._anthropic = slow\n"
+        "def stop(found, done):\n"
+        "    raise KeyboardInterrupt\n"
+        "asks = [llm.Ask(f't{i}', 'x', conversation=f'c{i}') for i in range(2)]\n"
+        "try:\n"
+        "    llm.analyze(asks, {'provider': 'anthropic', 'model': 'claude-opus-5-5'}, ['description'], stop)\n"
+        "except KeyboardInterrupt:\n"
+        "    sys.exit(130)\n"
+    )
+    started = time.monotonic()
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, timeout=30)
+    assert done.returncode == 130 and time.monotonic() - started < 4  # it didn't wait 5 seconds for the slow one
 
 
 def test_what_a_request_really_cost_comes_from_the_tokens_it_used():

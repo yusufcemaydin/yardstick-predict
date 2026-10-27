@@ -185,6 +185,6 @@ def ask_access() -> dict:
 def _pick(question: str, count: int) -> int:
     while True:
         reply = input(ui.prompt(question, "[1]")).strip() or "1"
-        if reply.isdigit() and 1 <= int(reply) <= count:
+        if ui.number_typed(reply) and 1 <= int(reply) <= count:
             return int(reply)
         ui.note(f"Type a number from 1 to {count}.")
