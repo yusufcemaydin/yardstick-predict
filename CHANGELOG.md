@@ -38,6 +38,7 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - On a Mac, a forecast and the status line start faster. XGBoost loads without scikit-learn, which yardstick never uses. scikit-learn stays installed there for its copy of OpenMP.
 - Costs under a cent show their first digits, such as $0.0021, instead of $0.00.
 - Every progress bar keeps its step's label. Reading your records used to show a bar like `0 KB / 6.2 GB` with no word of what it was.
+- After the feature check, setup says which features stay on and which go off, then asks once whether to go on and make the predictor. It used to open the Features screen again, which looked like starting over. Saying no still opens it, to change them first.
 
 ### Fixed
 

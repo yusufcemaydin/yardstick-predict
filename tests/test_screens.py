@@ -1385,6 +1385,21 @@ def test_a_version_from_pypi_shows_only_when_it_looks_like_one(monkeypatch):
         assert (version.notice() is not None) == shown, latest
 
 
+@pytest.mark.parametrize("width", [80, 45])
+def test_after_the_check_one_question_keeps_what_helped(capsys, monkeypatch, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    asked = typing(monkeypatch, "", "n")  # Enter keeps it, then no
+    assert cli.keep_what_helped(["prompt", "conversation", "context", "llm"], ["context", "llm"], "model")
+    out = capsys.readouterr().out
+    said = "The features that helped an AI model stay on. The rest go off. On: context and LLM analysis."
+    assert f"{said} Off: conversation." in " ".join(out.split()) and widest(out) < width
+    assert not cli.keep_what_helped(["prompt", "conversation"], [], "model")
+    out = capsys.readouterr().out
+    said = "None of the features you chose helped an AI model. The model learns from the three always on."
+    assert f"{said} Off: conversation." in " ".join(out.split()) and widest(out) < width
+    assert "Keep this and go on to make the model? [Y/n]" in " ".join(" ".join(asked).split())
+
+
 def test_notes_never_break_an_ai_models_name_at_a_hyphen(capsys, monkeypatch):
     monkeypatch.setenv("COLUMNS", "45")
     names = ["claude-haiku-5-5", "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-4-6", "gpt-6-astra"]

@@ -1302,7 +1302,7 @@ def offer_check(chosen: list[str], tasks: list, limit: int | None) -> bool:
     if max(counts.values(), default=0) < min_tasks_to_test():
         return False
     ui.heading("Feature check")
-    ui.note("Some features carry no signal for your kind of work, and with few tasks a feature can't show anything.")
+    ui.note("Some features carry no signal for your kind of work. With few tasks, a feature can't show anything.")
     return ui.ask("Check which of these features actually help? Recommended.", True)
 
 
@@ -1388,9 +1388,10 @@ def show_check(result) -> None:
 
 
 def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") -> int | None:
-    """In setup: run the feature check, then let the person keep the features it suggests or change them.
+    """In setup: run the feature check, then ask once whether to keep the features that helped. No opens the Features
+    screen to change them.
 
-    The features that helped at least one AI model start on. When the check can't test any AI model, the features
+    The features that helped at least one AI model stay on. When the check can't test any AI model, the features
     stay as chosen. Whatever the final choice still needs is shown with its cost and asked for first: LLM analysis
     of the tasks its sample left out, and embedding any text the check didn't have. Returns None to go on and
     train, or the command's exit code when it stops.
@@ -1406,11 +1407,11 @@ def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") 
         options = {name: chosen for name, chosen in (config.get("options") or {}).items() if name in helped}
         start = menu.Picked([features.REQUIRED, *helped], options, dict(config.get("llm") or {}))
         ui.line()
-        if helped:
-            ui.note("The features that helped are on below. Press Enter to keep them. Or change them first.")
+        if keep_what_helped(config["features"], helped, called):
+            picked = menu.Picked(start.features, start.options, start.llm if "llm" in helped else {})
         else:
-            ui.note("None of them helped. They're off below. Press Enter to keep it that way. Or turn some on.")
-        picked = menu.ask(custom_features(), start, called=called)
+            ui.note("Change them below. Press Enter when they're as you want them.")
+            picked = menu.ask(custom_features(), start, called=called)
         config.pop("llm", None)
         config.update(picked.config())
         predictor.save_config()
@@ -1439,6 +1440,24 @@ def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") 
     if plan.items:
         embed_with_progress(predictor, plan, key)
     return None
+
+
+def keep_what_helped(chosen: list[str], helped: list[str], called: str) -> bool:
+    """After the feature check, in setup: say which of the chosen features stay on and which go off, then ask once
+    whether to go on with that. Enter says yes. No opens the Features screen to change them first."""
+    from .screens.listing import LEARNS_FROM
+
+    optional = [name for name in chosen if name != "prompt"]
+    kept = [LEARNS_FROM.get(name, name) for name in optional if name in helped]
+    dropped = [LEARNS_FROM.get(name, name) for name in optional if name not in helped]
+    if kept:
+        ui.line("The features that helped an AI model stay on. The rest go off.")
+        ui.line(f"On: {in_words(kept)}.")
+    else:
+        ui.line(f"None of the features you chose helped an AI model. The {called} learns from the three always on.")
+    if dropped:
+        ui.line(f"Off: {in_words(dropped)}.")
+    return ui.ask(f"Keep this and go on to make the {called}?", True)
 
 
 def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
