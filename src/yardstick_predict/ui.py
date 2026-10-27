@@ -455,7 +455,7 @@ def prompt(question: str, hint: str = "") -> str:
     lead = 4 if styled() else 2
     parts = [question]
     if lead + width(question) + width(hint) + 2 > columns() - 1:
-        parts = wrapped(plain(question), lead)
+        parts = wrapped(plain(question), lead + 1)  # with a column for the space before the answer
         if hint and lead + width(parts[-1]) + width(hint) + 2 > columns() - 1:
             parts.append("")  # the hint goes on a line of its own
     if hint:

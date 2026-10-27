@@ -73,7 +73,7 @@ yardstick-predict
 
 The home screen opens. It greets you, lists your models and offers Estimate, Update, Models, Add New and Quit. When a newer version of yardstick-predict is out, it says so under the box, with the command that updates it the way you installed it: with uv, pipx or pip. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. Estimate asks for a task. With more than one model, it asks which of your models should forecast it. Then it asks which AI models: the ones with enough data or any from a list, 6 to a page, numbered on from page to page. Enter forecasts the line you're on. To forecast several, tick them with space first. After the forecasts you choose what's next. Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
-When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The check compares forecasts with each feature and without it. It shows what helped for each AI model and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice: say no, and setup trains with the features you picked.
+When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work. With few tasks, a feature can't show anything. The check compares forecasts with each feature and without it. It shows what helped for each AI model and turns on only the features that helped. You confirm or change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice. When you say no, setup trains with the features you picked.
 
 **Then, before you start a task, ask what it will take:**
 
@@ -81,7 +81,7 @@ When you pick features beyond the three that are always on, setup offers to chec
 yardstick-predict predict "Add a login page with tests"
 ```
 
-It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. Under each forecast are two ranges. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A forecast with not enough data behind it is marked ⚠ as a rough guide. The default effort level, which no one picks, isn't shown. `--model` and `--effort` name them yourself, `--predictor` picks another predictor, and `--json` prints the answer programs get. Use it to pick a model, set a time limit, or see what a batch of tasks will cost before you start.
+It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. Under each forecast are two ranges. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A forecast with not enough data behind it is marked ⚠ as a rough guide. The default effort level, which no one picks, isn't shown. `--model` and `--effort` name them yourself. `--predictor` picks another predictor. `--json` prints the answer programs get. Use it to pick a model, set a time limit or see what a batch of tasks will cost before you start.
 
 Every week or so, run `yardstick-predict` and choose Update. Before it reads anything, it says where your new work is and how much there is to read. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. It asks once. Cancel spends nothing and saves nothing. `yardstick-predict refresh` in a terminal shows the same summary. With `--yes` it asks nothing.
 
@@ -91,7 +91,7 @@ Models lists your models with `(default)` after the default one. Choose one to u
 
 ## Features the model learns from
 
-Setup lists each feature with its options under it. Type a number to turn a feature on or off, or a number and a letter for one option. The first three are always on. For them, each prompt goes to Voyage, which works out what it means.
+Setup lists each feature with its options under it. Type a number to turn a feature on or off. Type a number and a letter for one option. The first three are always on. For them, each prompt goes to Voyage, which works out what it means.
 
 | Feature | What it is | Default |
 |---|---|---|
@@ -133,7 +133,7 @@ It sends each task's prompt and the end of the conversation before it to the AI 
 | `claude` | Your Claude subscription, through the Claude Code command. No extra bill, but it counts toward your plan's usage limits. | Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 |
 | `codex` | Your ChatGPT subscription, through the Codex command. No extra bill, but it counts toward your plan's usage limits. | Codex's own model |
 
-With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price. With Claude Haiku 5.5, it's about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session. So these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in and stop asking. They train without LLM analysis for now. The next refresh asks again.
+With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price. With Claude Haiku 5.5, it's about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks and no saved session. So these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in and stop asking. They train without LLM analysis for now. The next refresh asks again.
 
 ## Forecasts in Claude Code
 
@@ -181,7 +181,7 @@ priced = [f for f in answer["forecasts"] if f["usd"] is not None]
 if priced:
     cheapest = min(priced, key=lambda f: f["usd"])
     print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minutes and ${cheapest['usd']:.2f}.")
-else:  # no model has enough data yet, and each forecast says why
+else:  # no model has enough data yet. Each forecast says why.
     print("No forecast yet:", ", ".join(f["reason"] for f in answer["forecasts"]))
 ```
 
@@ -296,7 +296,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | Command | What it does |
 |---|---|
 | `yardstick-predict` | In a terminal, the home screen: Estimate, Update, Models and Add New. A program gets one line per predictor. |
-| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express`, or `--yes`, takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. `--json` answers a program in JSON. `--max-cost USD` keeps it to a spending limit. |
+| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express` or `--yes` takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. `--json` answers a program in JSON. `--max-cost USD` keeps it to a spending limit. |
 | `yardstick-predict refresh` | Adds new runs, embeds them and retrains. `--yes` for programs, with `--json` for an answer in JSON. `--max-cost USD` keeps it to a spending limit. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each predictor, its features with their coverage, the size of its prepared dataset and how close its forecasts came on your newest tasks. `--json` for programs. |
@@ -349,7 +349,7 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 - **The cache of embeddings holds no text.** For each text it keeps a one-way hash and the text's vector, in the same private folder.
 - **Only the text you choose is sent,** over an encrypted connection: to Voyage to embed it, and with LLM analysis, each task's prompt and the end of its conversation to the AI model you pick.
 - **Your Voyage key** is read from `VOYAGE_API_KEY` or kept in your computer's password store. yardstick-predict never writes it to a file of its own.
-- **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face, at one fixed version, and OpenRouter's model list if you use benchmarks. The home screen also reads yardstick-predict's public page on PyPI at most once a day, to say when a newer version is out. To turn that off, set `YARDSTICK_NO_UPDATE_CHECK` or `DO_NOT_TRACK`. Adding `"update_check": false` to `settings.json` in the yardstick folder works too.
+- **Other downloads** are public data, made only when needed: Voyage's tokenizer from Hugging Face at one fixed version and OpenRouter's model list if you use benchmarks. The home screen also reads yardstick-predict's public page on PyPI at most once a day, to say when a newer version is out. To turn that off, set `YARDSTICK_NO_UPDATE_CHECK` or `DO_NOT_TRACK`. Adding `"update_check": false` to `settings.json` in the yardstick folder works too.
 - **Saved models are plain JSON and plain numbers.** Loading one runs no code.
 - **Plugins are code you choose to run.** yardstick-predict only imports the modules you name.
 - **What other services say is cleaned before it's shown.** An error from Voyage, Anthropic, OpenAI, Claude Code, Codex, OpenRouter or PyPI keeps its words but loses any hidden codes. Such codes could make your terminal show something else, change its title or write over a line.
@@ -358,7 +358,7 @@ If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the 
 
 Voyage gives every account 200 million free tokens. yardstick-predict can't see your balance, so it keeps its own count and asks once whether your account is new.
 
-Before it embeds anything, it shows the exact token count, counted with Voyage's own tokenizer, and the price. To put a limit on what a setup or a refresh may spend, add `--max-cost` with a number of US dollars, as [Set up and refresh from a program](#set-up-and-refresh-from-a-program) says. If a big history won't fit in your free tokens, it offers to embed only your newest tasks. Each refresh shows the cost of just the new tasks.
+Before it embeds anything, it shows the exact token count and the price. The count comes from Voyage's own tokenizer. To put a limit on what a setup or a refresh may spend, add `--max-cost` with a number of US dollars, as [Set up and refresh from a program](#set-up-and-refresh-from-a-program) says. If a big history won't fit in your free tokens, it offers to embed only your newest tasks. Each refresh shows the cost of just the new tasks.
 
 A text is paid for once. The same text in many tasks, such as a prompt that says only "continue", is sent once. A text embedded before with the same Voyage model, for any predictor or for a forecast, comes from a cache on your computer and costs nothing.
 

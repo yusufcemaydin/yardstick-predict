@@ -240,6 +240,22 @@ def test_paths_with_spaces_stay_one_word_for_the_shell():
     assert cc.installed_home({"statusLine": {"command": windows}}) == "C:/My Home"
 
 
+def test_a_windows_path_a_shell_would_read_as_more_than_text_is_refused(tmp_path, monkeypatch, capsys):
+    for path in (r"C:\Tools\$work\python.exe", r"C:\100%\python.exe", 'C:\\a"b\\python.exe', r"C:\Hi!\py"):
+        assert cc.unsafe_path(path, windows=True) is not None
+        assert cc.unsafe_path(path, windows=False) is None  # elsewhere single quotes keep every character
+    assert cc.unsafe_path(r"C:\Program Files\Python 3.12\python.exe", windows=True) is None
+    assert cc.unsafe_path(r"C:\$a\b`c", windows=True).startswith(r"The path C:\$a\b`c has $ and ` in it.")
+    # The install refuses such a yardstick folder before it changes anything.
+    monkeypatch.setenv("YARDSTICK_HOME", str(tmp_path / "100%"))
+    Predictor.create("main", [], {"model": "voyage-4", "dimensions": 256})
+    real = cc.unsafe_path
+    monkeypatch.setattr(cc, "unsafe_path", lambda path, windows=None: real(path, windows=True))  # as on Windows
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["claude-code", "install", "--here", "--yes"]) == 1
+    assert "Nothing was added." in capsys.readouterr().err and not (tmp_path / ".claude").exists()
+
+
 def test_install_and_remove_in_this_folder(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     settings = tmp_path / ".claude" / "settings.local.json"

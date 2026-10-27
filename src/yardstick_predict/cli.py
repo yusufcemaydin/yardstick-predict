@@ -284,7 +284,7 @@ def get_key(model: str, can_ask: bool, check: bool = True) -> str | None:
         )
         ui.out(ui.prompt("Has this account used any of its free tokens before?").rstrip())
         ui.line(f"    {ui.accent('n')}   no, it's a new account")
-        ui.line(f"    {ui.accent('y')}   yes, or not sure. Costs then count no free tokens.")
+        ui.line(f"    {ui.accent('y')}   yes or not sure. Costs then count no free tokens.")
         # Pressing Enter counts no free tokens, so a cost is never shown lower than it may be.
         reply = input(f"    {ui.dim('[n/Y]')} ").strip().lower()
         embeddings.set_free_tokens(key, "new" if reply in ("n", "no") else "unknown")
@@ -762,8 +762,11 @@ def relaunch_with_openmp(argv: list[str]) -> None:
 
 def xgboost_problem(argv: list[str]) -> str | None:
     """Why XGBoost can't load, in plain words, or None when it loads."""
+    from .model_types import without_scikit_learn
+
     try:
-        import xgboost  # noqa: F401
+        with without_scikit_learn():
+            import xgboost  # noqa: F401
     except Exception as error:
         if "libomp" in str(error):
             relaunch_with_openmp(argv)
@@ -3027,6 +3030,10 @@ def cmd_claude_code(args) -> int:
     # Claude Code may run the hook without your YARDSTICK_HOME, so the commands name the folder themselves.
     home = os.environ.get("YARDSTICK_HOME")
     home = os.path.abspath(os.path.expanduser(home)) if home else None
+    for used in (sys.executable, home or ""):
+        problem = claude_code.unsafe_path(used)
+        if problem:
+            raise SystemExit(f"{problem} Nothing was added.")
     ui.out(ui.bold("Forecasts in Claude Code"))
     ui.line(f"This adds a status line and two hooks to {where}.")
     ui.note(f"They go in {path}." + (" A copy of the file as it is now is kept next to it." if path.is_file() else ""))
@@ -3142,11 +3149,14 @@ class Parser(argparse.ArgumentParser):
 
 
 def bad_arguments(problem: BadArguments, argv: list[str]) -> int:
-    """Say what's wrong with the command line: in the answer format to a program that runs predict."""
+    """Say what's wrong with the command line: in JSON to a program that runs predict, or that asked for JSON
+    from any command."""
     command = next((word for word in argv if not word.startswith("-")), None)
-    if command == "predict" and not terminal_output():
+    forecasting = command == "predict" and not terminal_output()
+    if forecasting or "--json" in argv:
         message = f"The command line isn't right: {problem.message}."
-        print(json.dumps({"version": 1, "error": {"code": "invalid_request", "message": message}}))
+        answer = {"version": 1, "error": {"code": "invalid_request", "message": message}}
+        print(json.dumps(answer, indent=None if forecasting else 2))
         return 1
     problem.parser.print_usage(sys.stderr)
     print(f"{problem.parser.prog}: error: {problem.message}", file=sys.stderr)
@@ -3352,10 +3362,11 @@ def main(argv: list[str] | None = None) -> int:
     if problem:
         forecasting = args.command == "predict"
         person = forecasting and terminal_output() and bool(args.task or args.prompt)
+        answer = {"version": 1, "error": {"code": "missing_library", "message": problem}}
         if forecasting and not (person and not args.json and not args.distribution):
-            print(json.dumps({"version": 1, "error": {"code": "missing_library", "message": problem}}))
-        elif args.command == "check" and args.json:
-            print(json.dumps({"version": 1, "error": {"code": "missing_library", "message": problem}}, indent=2))
+            print(json.dumps(answer))
+        elif getattr(args, "json", False):  # any command that a program asked for JSON
+            print(json.dumps(answer, indent=2))
         else:
             ui.error(problem)
         return 1

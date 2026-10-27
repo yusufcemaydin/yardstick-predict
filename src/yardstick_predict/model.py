@@ -54,8 +54,11 @@ from pathlib import Path
 
 import numpy as np
 
+from .model_types import without_scikit_learn
+
 try:
-    import xgboost as xgb
+    with without_scikit_learn():
+        import xgboost as xgb
 except Exception as error:  # On a Mac without Homebrew's OpenMP, XGBoost can't load in a running program.
     if "libomp" not in str(error):
         raise

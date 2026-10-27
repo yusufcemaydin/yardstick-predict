@@ -1204,6 +1204,29 @@ def commands(python: str, home: str | None = None) -> tuple[str, str]:
     return f"{run} hook", f"{run} status"
 
 
+WINDOWS_SHELLS_READ = '$`"%!'
+"""What cmd or Git Bash read inside double quotes, as more than text: a variable, a command, the end of the quotes."""
+
+
+def unsafe_path(path: str, windows: bool | None = None) -> str | None:
+    """Why a path can't go into Claude Code's commands, in plain words, or None when it can.
+
+    On Windows, Claude Code runs them in cmd or in Git Bash, and no one way of quoting keeps every character as
+    it is in both. Inside double quotes cmd still reads % and !, and Git Bash reads $ and `. A path with any of
+    those, or with a double quote, could become another command, so it's refused. Elsewhere every path is fine.
+    """
+    if not (os.name == "nt" if windows is None else windows):
+        return None
+    found = [char for char in WINDOWS_SHELLS_READ if char in path]
+    if not found:
+        return None
+    listed = found[0] if len(found) == 1 else ", ".join(found[:-1]) + " and " + found[-1]
+    return (
+        f"The path {path} has {listed} in it. Windows' command shells read that as more than text, so it can't go "
+        "into Claude Code's commands. Install yardstick-predict in a folder without it."
+    )
+
+
 def _quoted(text: str, windows: bool | None = None) -> str:
     """A path as one word for the shell that runs Claude Code's commands.
 

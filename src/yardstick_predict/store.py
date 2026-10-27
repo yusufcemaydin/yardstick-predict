@@ -140,8 +140,18 @@ def settings() -> dict:
 
 def save_setting(name: str, value) -> None:
     """Change one setting, and keep the others. The file is saved in one step."""
-    path = private_home() / "settings.json"
-    files.write_text(path, json.dumps({**settings(), name: value}, indent=2) + "\n")
+    with _settings_lock():
+        path = private_home() / "settings.json"
+        files.write_text(path, json.dumps({**settings(), name: value}, indent=2) + "\n")
+
+
+def _settings_lock():
+    """The lock each change of the settings holds, from reading them to saving them. Two commands changing
+    settings at once, such as one choosing the default while another notes something, then both keep their change.
+    It sits in the locks folder, readable only by you."""
+    root = private_home() / "locks"
+    root.mkdir(exist_ok=True)
+    return locks.held(root / "settings.lock")
 
 
 def default_name() -> str | None:
@@ -161,10 +171,11 @@ def set_default(name: str) -> None:
 
 def forget_setting(name: str) -> None:
     """Take one setting out, and keep the others. The file is saved in one step."""
-    found = settings()
-    if name in found:
-        del found[name]
-        files.write_text(private_home() / "settings.json", json.dumps(found, indent=2) + "\n")
+    with _settings_lock():
+        found = settings()
+        if name in found:
+            del found[name]
+            files.write_text(private_home() / "settings.json", json.dumps(found, indent=2) + "\n")
 
 
 # Deleting a predictor -------------------------------------------------------------------------------------

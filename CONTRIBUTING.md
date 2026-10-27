@@ -115,7 +115,7 @@ These changes get a much closer review, and may be turned down:
 - new dependencies,
 - model files.
 
-A trained model is saved as JSON and as NumPy arrays read without pickle, which hold only numbers. Model files must keep to that. Pull requests that add pickle files will be closed. These usually end in `.pkl`, `.pt` or `.pth`, and they can run code when someone opens them.
+A trained model is saved as JSON and as NumPy arrays read without pickle, which hold only numbers. Model files must keep to that. Pull requests that add pickle files will be closed. These usually end in `.pkl`, `.pt` or `.pth`. They can run code when someone opens them.
 
 Code that's minified, obfuscated or generated without its source will be closed too. Every line has to be readable.
 

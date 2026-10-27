@@ -27,7 +27,8 @@ import importlib
 import importlib.util
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 BUILT_IN_FORMAT = 4
@@ -38,6 +39,23 @@ PREVIOUS_FORMAT = 3
 release did, until a refresh trains it again. A model in an older format has to be trained again first."""
 
 _TYPES: dict[str, tuple[Callable, Callable]] = {}
+
+
+@contextmanager
+def without_scikit_learn() -> Iterator[None]:
+    """While XGBoost loads, scikit-learn looks missing to it. XGBoost loads it only for its scikit-learn style
+    classes, which yardstick never uses, and on a Mac that takes most of a second, on every forecast. There
+    scikit-learn is installed only for its copy of OpenMP. Once XGBoost is loaded, scikit-learn loads as usual.
+    When something loaded it already, nothing changes."""
+    if "sklearn" in sys.modules:
+        yield
+        return
+    sys.modules["sklearn"] = None  # type: ignore[assignment]  # import sklearn fails at once while this holds
+    try:
+        yield
+    finally:
+        if "sklearn" in sys.modules and sys.modules["sklearn"] is None:
+            del sys.modules["sklearn"]
 
 
 class PluginError(ImportError):

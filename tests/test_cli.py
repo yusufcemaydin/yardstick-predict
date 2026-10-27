@@ -142,7 +142,7 @@ def test_a_task_counts_toward_the_free_tokens_only_when_all_its_texts_fit():
 def test_pressing_enter_on_the_free_tokens_question_assumes_no_credits(capsys, ready, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda question="": "")
     assert cli.get_key("voyage-4", can_ask=True) == KEY
-    assert "y   yes, or not sure. Costs then count no free tokens." in capsys.readouterr().out
+    assert "y   yes or not sure. Costs then count no free tokens." in capsys.readouterr().out
     assert embeddings.account(KEY)["free_tokens"] == "unknown"
 
 
@@ -889,6 +889,16 @@ def test_command_line_errors_reach_a_program_as_json(capsys, monkeypatch):
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "invalid_request"
     assert main(["status", "--json", "--predictor", "nope"]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "unknown_predictor"
+    # Any command a program asks for JSON answers in JSON, even when its command line is wrong.
+    for argv in (["create", "--json", "--bogus"], ["refresh", "--json", "--max-cost"], ["default", "--json"]):
+        assert main(argv) == 1, argv
+        error = json.loads(capsys.readouterr().out)["error"]
+        assert error["code"] == "invalid_request" and error["message"].startswith("The command line isn't right")
+    # So does one that needs XGBoost when it can't load.
+    monkeypatch.setattr(cli, "xgboost_problem", lambda argv: "XGBoost couldn't load: a stand-in reason")
+    for argv in (["create", "--json", "--yes"], ["refresh", "--json"], ["check", "--json"]):
+        assert main(argv) == 1, argv
+        assert json.loads(capsys.readouterr().out)["error"]["code"] == "missing_library"
 
 
 def test_an_unexpected_error_is_said_in_a_line_and_its_details_are_kept(capsys, monkeypatch):

@@ -774,3 +774,19 @@ def test_a_load_that_read_the_old_settings_gets_the_old_trees_while_a_save_waits
     assert loaded.meta["generation"] == "old"
     assert loaded.boosters["seconds"].predict(point) == pytest.approx(old.boosters["seconds"].predict(point))
     assert not saving[0].is_alive() and pipeline.load_model(predictor).meta["generation"] == "new"
+
+
+def test_xgboost_loads_without_scikit_learn_which_then_loads_as_usual(monkeypatch):
+    import subprocess
+    import sys
+
+    from yardstick_predict import model_types
+
+    code = "import sys, yardstick_predict.model; print(sys.modules.get('sklearn') is not None)"
+    found = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert found.stdout.strip() == "False"  # on a Mac it would take most of a second
+    monkeypatch.delitem(sys.modules, "sklearn", raising=False)
+    with model_types.without_scikit_learn():
+        with pytest.raises(ImportError):
+            import sklearn  # noqa: F401
+    assert "sklearn" not in sys.modules  # nothing is left in the way of loading it later

@@ -26,7 +26,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -49,7 +49,7 @@ CONTEXT_CHARS = 1_500
 SKILLS_CHARS = 4_000
 LEVELS = {"minimal": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5, "ultra": 5}
 """Effort levels in order. As one scale, a level with few tasks can learn from the levels next to it."""
-TREND_FROM = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
+TREND_FROM = datetime(2020, 1, 1, tzinfo=UTC).timestamp()
 """1 January 2020 at midnight UTC, in seconds since 1970: the day the time feature's trend counts days from.
 
 It must never change after a release. A saved model learned from days counted from this day, and would read

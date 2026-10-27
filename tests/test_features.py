@@ -6,7 +6,7 @@ import os
 import sys
 import textwrap
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from fractions import Fraction
 
 import numpy as np
@@ -170,7 +170,7 @@ def time_zone():
 
 def utc(*when: int) -> float:
     """A moment in UTC, in seconds since 1970."""
-    return datetime(*when, tzinfo=timezone.utc).timestamp()
+    return datetime(*when, tzinfo=UTC).timestamp()
 
 
 def test_the_trend_counts_days_since_2020_the_same_in_every_time_zone(time_zone):

@@ -904,3 +904,17 @@ def test_renaming_a_link_leaves_the_folder_it_leads_to_as_it_was(capsys, tmp_pat
     assert main(["rename", "work", "home"]) == 0
     assert store.predictor_folder("home").is_symlink() and predictor_names() == ["default", "home"]
     assert (default.dir / "predictor.json").read_text() == before  # its name is still default
+
+
+def test_settings_changed_at_the_same_time_all_stay():
+    import threading
+
+    names = [f"note_{number}" for number in range(24)]
+    threads = [threading.Thread(target=store.save_setting, args=(name, True)) for name in names]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert all(store.settings().get(name) is True for name in names)  # no change was lost to another
+    store.forget_setting("note_0")
+    assert "note_0" not in store.settings() and store.settings().get("note_1") is True
