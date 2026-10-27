@@ -811,7 +811,7 @@ def pick_predictor(name: str | None) -> Predictor:
             raise CommandError("unknown_predictor", message)
         return Predictor(name)
     if not names:
-        raise CommandError("no_predictor", "There's no predictor yet. Run yardstick-predict to create one.")
+        raise CommandError("no_predictor", "There's no model yet. Run yardstick-predict to create one.")
     chosen = default_name()
     if chosen is None:
         raise CommandError(
@@ -834,7 +834,7 @@ def cmd_home(args) -> int:
         ui.out(ui.dim("It learns from your own past Claude Code and Codex runs. Nothing leaves your computer except"))
         ui.out(ui.dim("the text you choose to embed, such as your prompts, and that goes only to Voyage."))
         ui.out()
-        ui.out("No predictor yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express")
+        ui.out("No model yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express")
         return 1
     for name in names:
         try:
@@ -1908,7 +1908,7 @@ def request_predictor(chosen: str | None, from_request: bool = False) -> Predict
 
     names = predictor_names()
     if not names:
-        raise RequestError("no_predictor", "There's no predictor yet. Run yardstick-predict to create one.")
+        raise RequestError("no_predictor", "There's no model yet. Run yardstick-predict to create one.")
     if chosen and chosen not in names:
         raise RequestError(
             "unknown_predictor", f"There's no predictor called {chosen!r}. Your predictors: {', '.join(names)}."
@@ -2290,7 +2290,7 @@ def cmd_status(args) -> int:
         print(json.dumps({"version": 1, "predictors": found, "notes": notes}, indent=2))
         return code
     if not found:
-        ui.out("There's no predictor yet. Run yardstick-predict to create one.")
+        ui.out("There's no model yet. Run yardstick-predict to create one.")
         return 0
     from .pipeline import from_previous_version, outdated
 
@@ -2378,7 +2378,7 @@ def cmd_list(args) -> int:
         print(json.dumps({"version": 1, "predictors": found}, indent=2))
         return code
     if not found:
-        ui.out("There's no predictor yet. Run yardstick-predict to create one.")
+        ui.out("There's no model yet. Run yardstick-predict to create one.")
         return 0
     rows = [("", *(ui.dim(words) for words in ("features", "learned from", "trained", "forecasts for")))]
     for entry in found:
@@ -2533,7 +2533,7 @@ def say_default_after(name: str, before: str | None, after: str | None) -> None:
     commands use it without a default."""
     left = predictor_names()
     if not left:
-        ui.note("There's no predictor now. Run yardstick-predict to create one.")
+        ui.note("There's no model now. Run yardstick-predict to create one.")
     elif after is None and before == name:
         ui.note("It was your default predictor, so there's no default now.")
         ui.note("Choose one with: yardstick-predict default NAME")
@@ -2571,7 +2571,7 @@ def cmd_check(args) -> int:
             f"There's no predictor called {args.name!r}. Your predictors: {', '.join(names) or 'none'}.",
         )
     if not names:
-        return stop("no_predictor", "There's no predictor yet. Run yardstick-predict to create one.")
+        return stop("no_predictor", "There's no model yet. Run yardstick-predict to create one.")
     name = args.name or default_name()
     if name is None:
         return stop(
@@ -2777,7 +2777,7 @@ def cmd_features(args) -> int:
         show_uses(entry, {stored.feature.id: stored for stored in found})
     if not predictors:
         ui.out()
-        ui.out("There's no predictor yet. Run yardstick-predict to create one.")
+        ui.out("There's no model yet. Run yardstick-predict to create one.")
     if without:
         ui.out()
         ui.note("Coverage isn't shown: it's counted from what training reads, and training needs XGBoost.")
@@ -3058,7 +3058,7 @@ def cmd_claude_code(args) -> int:
             claude_code.clean(home)  # no settings it knows of use the forecasts the hook kept
         return 0
     if not predictor_names():
-        raise SystemExit("There's no predictor yet. Run yardstick-predict to create one first.")
+        raise SystemExit("There's no model yet. Run yardstick-predict to create one first.")
     hooks = settings.get("hooks", {})
     unreadable = not isinstance(hooks, dict) or any(
         not isinstance(hooks.get(event, []), list) for event in ("UserPromptSubmit", *claude_code.STOPS)
@@ -3165,7 +3165,7 @@ def cmd_default(args) -> int:
                 f"You have no default predictor. Choose one of {', '.join(names)} with: yardstick-predict default NAME"
             )
         else:
-            ui.out("There's no predictor yet. Run yardstick-predict to create one.")
+            ui.out("There's no model yet. Run yardstick-predict to create one.")
         return 0
     if args.name not in names:
         raise SystemExit(f"There's no predictor called {args.name!r}. Your predictors: {', '.join(names) or 'none'}.")

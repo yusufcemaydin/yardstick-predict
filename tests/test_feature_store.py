@@ -878,7 +878,7 @@ def test_the_listing_shows_what_no_predictor_uses_and_what_cant_be_read(capsys, 
 
 def test_the_listing_says_when_theres_nothing_to_list(capsys):
     code, out = listing(capsys)
-    assert code == 0 and "Nothing is stored yet." in out and "There's no predictor yet." in out
+    assert code == 0 and "Nothing is stored yet." in out and "There's no model yet." in out
     assert not feature_store.folder().exists()  # listing made nothing
     code, out = listing(capsys, "--json")
     assert json.loads(out) == {

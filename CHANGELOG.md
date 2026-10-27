@@ -4,6 +4,10 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+### Fixed
+
+- The message for when you have no model calls it a model, as the home screen does. It used to say there was no predictor.
+
 ## [0.5.1] - 2026-10-27
 
 A fix release. The forecast table names each line of a forecast in a column of its own.

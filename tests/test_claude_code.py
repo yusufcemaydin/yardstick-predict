@@ -261,7 +261,8 @@ def test_install_and_remove_in_this_folder(tmp_path, monkeypatch, capsys):
     settings = tmp_path / ".claude" / "settings.local.json"
     settings.parent.mkdir()
     settings.write_text(json.dumps(THEIRS))
-    assert cli.main(["claude-code", "install", "--here", "--yes"]) == 1  # no predictor yet
+    assert cli.main(["claude-code", "install", "--here", "--yes"]) == 1
+    assert "There's no model yet." in capsys.readouterr().err
     Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
     assert cli.main(["claude-code", "install", "--here"]) == 2  # a program must say yes
     assert cli.main(["claude-code", "install", "--here", "--yes"]) == 0

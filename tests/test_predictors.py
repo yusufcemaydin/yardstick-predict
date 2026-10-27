@@ -136,7 +136,7 @@ def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, m
 @pytest.mark.usefixtures("quick")
 def test_list_says_when_theres_nothing_to_list_and_what_needs_training_again(capsys):
     code, out = run(capsys, "list")
-    assert code == 0 and "There's no predictor yet." in out
+    assert code == 0 and "There's no model yet." in out
     assert json.loads(run(capsys, "list", "--json")[1]) == {"version": 1, "predictors": []}
     predictor = quick_predictor()
     predictor.config["model"] = {}  # the built-in model, so its format counts
@@ -358,7 +358,7 @@ def test_deleting_the_default_says_what_commands_use_now(capsys):
     assert "third is your only predictor now, so commands use it when they name none." in out
     assert default_name() == "third"
     code, out = run(capsys, "delete", "third", "--yes")
-    assert "There's no predictor now. Run yardstick-predict to create one." in out and predictor_names() == []
+    assert "There's no model now. Run yardstick-predict to create one." in out and predictor_names() == []
 
 
 def test_a_predictor_being_refreshed_isnt_deleted_and_a_forecast_reading_its_model_finishes_first(capsys):
@@ -620,7 +620,7 @@ def test_the_status_line_says_plainly_when_its_predictor_is_gone(monkeypatch):
     assert forecast("Write the docs") == line
     for name in ("work", "home"):
         assert main(["delete", name, "--yes"]) == 0
-    line = "yardstick · no forecast: There's no predictor yet. Run yardstick-predict to create one."
+    line = "yardstick · no forecast: There's no model yet. Run yardstick-predict to create one."
     assert forecast("Add a test") == line
 
 

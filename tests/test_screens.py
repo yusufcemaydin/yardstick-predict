@@ -196,6 +196,14 @@ def test_a_bare_run_outside_a_terminal_prints_one_line_per_model_as_before(capsy
     assert capsys.readouterr().out == f"main: voyage-4 embeddings, 0 tasks, updated {cli.ago(START)}\n"
 
 
+def test_a_bare_run_outside_a_terminal_with_no_model_says_how_to_make_one(capsys, monkeypatch):
+    monkeypatch.setattr(keys, "reader", lambda: pytest.fail("It showed a menu"))
+    assert main([]) == 1
+    out = flat(capsys.readouterr().out)
+    assert "No model yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express" in out
+    assert "predictor" not in out
+
+
 def trained(name: str, verdicts: dict[str, bool]) -> Predictor:
     """A model with a saved quick model that knows these AI models, each run 40 times at max. True passed the test."""
     predictor = Predictor.create(
