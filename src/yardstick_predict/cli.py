@@ -28,7 +28,6 @@ import math
 import os
 import shutil
 import sys
-import textwrap
 import time
 from pathlib import Path
 
@@ -2062,7 +2061,7 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     names = [who for who in thin if " at " not in who or who.split(" at ")[0] not in thin]
     if names:
         mark = ui.yellow(ui.mark("warn"))
-        for number, part in enumerate(textwrap.wrap(f"Not enough data: {in_words(names)}.", columns() - 6)):
+        for number, part in enumerate(ui.wrapped(f"Not enough data: {in_words(names)}.", 5)):  # names stay whole
             ui.line(f"{mark if number == 0 else ' '} {part}")
         wrapped_note("Those are a rough guide. Plan with a wider margin there.")
     if spread:
@@ -2084,8 +2083,9 @@ def columns() -> int:
 
 
 def wrapped_note(text: str) -> None:
-    """A note broken to fit the terminal, so a long one never runs past its edge."""
-    for part in textwrap.wrap(text, max(columns() - 4, 20)):
+    """A note broken to fit the terminal, so a long one never runs past its edge. It never breaks a name at a hyphen,
+    such as claude-sonnet-4-6, nor inside a command."""
+    for part in ui.wrapped(text, 3):
         ui.note(part)
 
 

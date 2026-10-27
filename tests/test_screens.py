@@ -1385,6 +1385,19 @@ def test_a_version_from_pypi_shows_only_when_it_looks_like_one(monkeypatch):
         assert (version.notice() is not None) == shown, latest
 
 
+def test_notes_never_break_an_ai_models_name_at_a_hyphen(capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "45")
+    names = ["claude-haiku-5-5", "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-4-6", "gpt-6-astra"]
+    cli.wrapped_note(f"Not enough data: {cli.in_words(names)}.")
+    made("main")
+    rough = {"seconds": 60.0, "tokens": 1000, "usd": 0.1, "reason": "not_enough_data"}
+    cli.show_forecasts("x", {"predictor": "main", "forecasts": [{"model": n, **rough} for n in names]}, screen=True)
+    lines = plain(capsys.readouterr().out).split("\n")
+    for name in names:  # once in the note, then in the table and again in the line under it
+        assert sum(name in line for line in lines) >= 3, name
+    assert max(ui.width(line) for line in lines) < 45
+
+
 def test_the_lines_of_cheap_tasks_still_say_something():
     assert [cli.short_money(usd) for usd in (0.0042, 0.0087, 0.0094)] == ["$0.0042", "$0.0087", "$0.0094"]
     assert cli.cost_lines(embeddings_cost(5_000), "voyage-4", 3)[1] == "It costs <$0.01 at Voyage's list price."
