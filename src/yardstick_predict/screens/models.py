@@ -125,7 +125,7 @@ def delete(name: str) -> str | None:
     was_default = default_name() == name
     ui.out()
     ui.line(ui.bold(ui.cut(f"Delete {name}", ui.columns() - 3)))
-    for quiet, text in cli.what_goes(name, contents(name), was_default, called="model"):
+    for quiet, text in cli.what_goes(name, contents(name), was_default):
         indent = len(text) - len(text.lstrip())
         for part in ui.wrapped(text.strip(), 2 + indent):
             ui.line(" " * indent + (ui.dim(part) if quiet else part))

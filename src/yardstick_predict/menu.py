@@ -70,14 +70,12 @@ def ask(
     custom: dict[str, str] | None = None,
     start: Picked | None = None,
     verdicts: dict[str, dict] | None = None,
-    called: str = "predictor",
 ) -> Picked:
     """Show every feature with its options, and let a person turn them on and off until they press Enter.
 
     The features `start` picks start on, with their options. Without it, the default features do, with all their
     options. LLM analysis runs as `start` says, and is asked about only when `start` doesn't say. Next to each
-    feature go the feature check's `verdicts` on it, by default the latest ones remembered. `called` is what the
-    screen calls the predictor: model on the home screen.
+    feature go the feature check's `verdicts` on it, by default the latest ones remembered.
     """
     groups = list(features.MENU)
     verdicts = check.latest() if verdicts is None else verdicts
@@ -92,7 +90,7 @@ def ask(
     for name in custom or {}:
         on[name] = {"on"} if start is not None and name in start.features else set()
     while True:
-        _show(groups, on, custom or {}, verdicts, called)
+        _show(groups, on, custom or {}, verdicts)
         reply = input(ui.prompt("Turn on or off", "[Enter when done]")).strip().lower()
         if not reply:
             break
@@ -116,11 +114,10 @@ def _show(
     on: dict[str, set[str]],
     custom: dict[str, str],
     verdicts: dict[str, dict],
-    called: str = "predictor",
 ) -> None:
     ui.heading("Features")
     _note(
-        f"What the {called} learns from. The first three are always on. For them, each prompt goes to Voyage, "
+        "What the model learns from. The first three are always on. For them, each prompt goes to Voyage, "
         "which works out what it means."
     )
     ui.line()
@@ -210,7 +207,7 @@ def ask_access() -> dict:
         price = f"about ${cost:,.2f} per 1,000 tasks" if cost is not None else ""
         rows.append((ui.accent(str(n)), ui.bold(llm.title(name)), ui.dim(price)))
     ui.table(rows)
-    return {"provider": provider.key, "model": models[_pick("Which model?", len(models)) - 1]}
+    return {"provider": provider.key, "model": models[_pick("Which AI model?", len(models)) - 1]}
 
 
 def _pick(question: str, count: int) -> int:

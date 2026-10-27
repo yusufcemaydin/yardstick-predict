@@ -103,7 +103,7 @@ def act(action: str, names: list[str]) -> None:
     try:
         if action == "add":
             args = cli.make_parser().parse_args(["create"])
-            args.called = "model"  # every screen calls a predictor a model
+            args.screen = True  # so setup ends by pointing to Update, here on the home screen
             cli.cmd_create(args)
         elif not names:
             ui.out()

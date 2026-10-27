@@ -33,7 +33,7 @@ These rules cover everything a person reads: screens, messages, docs, the change
 - On a screen, never say test, tested, passed or failed. Say not enough data. For an AI model never used, say no data.
 - Never offer the default effort level on a screen. No one picks it.
 - A long list numbers its choices on from one page to the next.
-- A screen calls a predictor a model. The models a forecast is about, such as claude-opus-5-5, are AI models.
+- Every screen, message and command's help calls a predictor a model. The models a forecast is about, such as claude-opus-5-5, are AI models. The `--predictor` option, the JSON names and the error codes keep the word predictor, for the programs and scripts that use them.
 
 ## Keep private data out
 

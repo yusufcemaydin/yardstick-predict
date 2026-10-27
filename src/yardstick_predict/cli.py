@@ -46,7 +46,9 @@ from .store import (
     set_default,
 )
 
-SIMPLE_RULE = "The simple rule gives every task on a model the same forecast: the spread of that model's past tasks."
+SIMPLE_RULE = (
+    "The simple rule gives every task on an AI model the same forecast: the spread of that AI model's past tasks."
+)
 REASONS = {
     "unknown_model": "no data",
     "not_enough_data": "not enough data",
@@ -308,19 +310,18 @@ def verify_key(key: str, model: str) -> None:
 # Questions ---------------------------------------------------------------------------------------------
 
 
-def ask_name(existing: list[str], called: str = "predictor") -> str:
-    """A name for a new predictor. The first one is called main unless you pick another name. `called` is what
-    the question calls it: model on the home screen, as every screen calls a predictor."""
+def ask_name(existing: list[str]) -> str:
+    """A name for a new predictor. The first one is called main unless you pick another name."""
     suggestion = "" if existing else "main"
     while True:
-        reply = input(ui.prompt(f"Name this {called}:", f"[{suggestion}]" if suggestion else "")).strip()
+        reply = input(ui.prompt("Name this model:", f"[{suggestion}]" if suggestion else "")).strip()
         name = reply or suggestion
         if not name:
             ui.note("Type a name, such as work.")
         elif name_problem(name):
             ui.note(name_problem(name))
         elif name in existing:
-            ui.note(f"There's already a {called} called {name}. Pick another name.")
+            ui.note(f"There's already a model called {name}. Pick another name.")
         else:
             return name
 
@@ -417,7 +418,7 @@ def choose_features(can_ask: bool, args):
         except ValueError as error:  # it's checked before a record is read
             raise CommandError("invalid_request", f"{error} Nothing was read or spent.") from None
     try:
-        return menu.ask(custom_features(), called=getattr(args, "called", "predictor"))
+        return menu.ask(custom_features())
     except ValueError as error:
         raise CommandError("invalid_request", str(error)) from None
 
@@ -468,7 +469,7 @@ def unknown_features_note(predictor: Predictor) -> None:
 def newer_settings_note(predictor: Predictor) -> None:
     """Say that a newer version saved the predictor's settings, when it did. This version only reads them."""
     if predictor.newer:
-        ui.note("A newer version of yardstick-predict saved this predictor. This version reads what it can of it.")
+        ui.note("A newer version of yardstick-predict saved this model. This version reads what it can of it.")
 
 
 def analysis_lines(asks: int, how: dict, tasks: int | None = None) -> list[str]:
@@ -807,7 +808,7 @@ def pick_predictor(name: str | None) -> Predictor:
     names = predictor_names()
     if name:
         if name not in names:
-            message = f"There's no predictor called {name!r}. Your predictors: {', '.join(names) or 'none'}."
+            message = f"There's no model called {name!r}. Your models: {', '.join(names) or 'none'}."
             raise CommandError("unknown_predictor", message)
         return Predictor(name)
     if not names:
@@ -816,7 +817,7 @@ def pick_predictor(name: str | None) -> Predictor:
     if chosen is None:
         raise CommandError(
             "no_default_predictor",
-            f"You have several predictors and no default: {', '.join(names)}. Name one with --predictor, "
+            f"You have several models and no default: {', '.join(names)}. Name one with --predictor, "
             "or choose a default with: yardstick-predict default NAME",
         )
     return Predictor(chosen)
@@ -852,7 +853,7 @@ def cmd_home(args) -> int:
 
 
 def already_exists(name: str) -> str:
-    return f"A predictor called {name!r} already exists. Refresh it with: yardstick-predict refresh --predictor {name}"
+    return f"A model called {name!r} already exists. Refresh it with: yardstick-predict refresh --predictor {name}"
 
 
 def unknown_embedding(model: str) -> str:
@@ -888,16 +889,15 @@ def _create(args, held, answer: dict) -> int:
     # With --yes or --express it asks nothing, even in a terminal. Every choice takes its default. Nor does a
     # program that asked for JSON.
     can_ask = interactive() and not args.yes and not getattr(args, "json", False)
-    called = getattr(args, "called", "predictor")  # the home screen calls it a model, as every screen does
     given_archives(args.archive)  # a folder named that isn't there is said before anything is asked
     existing = predictor_names()
     if can_ask:
         ui.out()
-        ui.out(ui.bold(f"New {called}"))
-    name = args.name or (ask_name(existing, called) if can_ask else None)
+        ui.out(ui.bold("New model"))
+    name = args.name or (ask_name(existing) if can_ask else None)
     if name is None:  # a program that names none gets main, as a person's first one is called
         if "main" in existing:
-            raise CommandError("invalid_request", "Give the new predictor a name, like: yardstick-predict create work")
+            raise CommandError("invalid_request", "Give the new model a name, like: yardstick-predict create work")
         name = "main"
     problem = name_problem(name)
     if problem:
@@ -906,7 +906,7 @@ def _create(args, held, answer: dict) -> int:
         raise CommandError("predictor_exists", already_exists(name))
     first = not existing
     make_default = first or (
-        can_ask and ui.ask(f"Make it your default {called}? Commands use it when they name none.", False)
+        can_ask and ui.ask("Make it your default model? Commands use it when they name none.", False)
     )
     answer.update(
         predictor=name,
@@ -1031,7 +1031,7 @@ def _create(args, held, answer: dict) -> int:
             for number, option in enumerate(options, start=1)
         ]
         ui.table(rows, align="llrrl")
-        ui.note(f"The {called} keeps this Voyage model for good. To change it later, make a new {called}.")
+        ui.note("The model keeps this Voyage model for good. To change it later, make a new model.")
         while model_name is None:
             reply = input(ui.prompt("Which Voyage model should embed your tasks?", "[1]")).strip() or "1"
             if ui.number_typed(reply) and 1 <= int(reply) <= len(options):
@@ -1100,9 +1100,7 @@ def _create(args, held, answer: dict) -> int:
         )
     else:
         question = (
-            f"Analyze them, embed them and train the {called} now?"
-            if asks
-            else f"Embed them and train the {called} now?"
+            "Analyze them, embed them and train the model now?" if asks else "Embed them and train the model now?"
         )
     if can_ask and not ui.ask(question, True):
         ui.note("Stopped. Nothing was created.")
@@ -1127,7 +1125,7 @@ def _create(args, held, answer: dict) -> int:
     with name_lock(name):
         folder.mkdir(parents=True, exist_ok=True)
         if not held.enter_context(locks.held(folder / "refresh.lock", wait=False)):
-            raise CommandError("busy", f"A predictor called {name!r} is being set up by another command.")
+            raise CommandError("busy", f"A model called {name!r} is being set up by another command.")
         try:
             predictor = Predictor.create(name, archives, embedding, **config)
         except ValueError:
@@ -1152,7 +1150,7 @@ def _create(args, held, answer: dict) -> int:
         if plan.items:
             answer["embedded"] = embed_with_progress(predictor, plan, key)
         if checking:
-            stop = check_and_choose(predictor, key, called)
+            stop = check_and_choose(predictor, key)
             if stop is not None:
                 return stop
     finally:
@@ -1160,7 +1158,7 @@ def _create(args, held, answer: dict) -> int:
             answer["spent"] = round(_limit.spent, 6)
     model = train_and_report(predictor, train)
     default_when_ready(predictor)
-    say_how_to_use(model, name, called=called)
+    say_how_to_use(model, name, screen=getattr(args, "screen", False))
     answer.update(
         done=True, trained=True, learned_from=model.meta.get("tasks"), forecasts_for=served_models(model.meta["report"])
     )
@@ -1256,9 +1254,9 @@ def train_and_report(predictor: Predictor, train):
     return model
 
 
-def say_how_to_use(model, name: str, full: bool = True, called: str = "predictor") -> None:
-    """Which AI models get forecasts, and how to ask for one, with their real names. `called` is model on the home
-    screen, where Update adds new tasks."""
+def say_how_to_use(model, name: str, full: bool = True, screen: bool = False) -> None:
+    """Which AI models get forecasts, and how to ask for one, with their real names. `screen` is for the home screen,
+    where Update adds new tasks."""
     served = served_models(model.meta["report"])
     listed = (served[0] if len(served) == 1 else ", ".join(served[:-1]) + " and " + served[-1]) if served else ""
     if not full:
@@ -1267,7 +1265,7 @@ def say_how_to_use(model, name: str, full: bool = True, called: str = "predictor
         return
     is_default = default_name() == name
     pick = "" if is_default else f" --predictor {name}"
-    again = "choose Update on the home screen" if called == "model" else f"run yardstick-predict refresh{pick}"
+    again = "choose Update on the home screen" if screen else f"run yardstick-predict refresh{pick}"
     ui.heading("Ready")
     if not served:
         ui.line("No AI model has enough data yet. Until one has, forecasts come back empty, with the reason.")
@@ -1277,7 +1275,7 @@ def say_how_to_use(model, name: str, full: bool = True, called: str = "predictor
     ui.line("Before you start a task, ask what it will take:")
     ui.line(ui.accent(f'  yardstick-predict predict{pick} "Add a login page with tests"'))
     if is_default:
-        ui.note(f"It's your default {called}. Commands use it when they name none.")
+        ui.note("It's your default model. Commands use it when they name none.")
     ui.note("Programs send JSON to yardstick-predict predict and read JSON back.")
     ui.note(f"Every week or so, {again} to add new tasks and retrain.")
 
@@ -1387,7 +1385,7 @@ def show_check(result) -> None:
         )
 
 
-def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") -> int | None:
+def check_and_choose(predictor: Predictor, key: str) -> int | None:
     """In setup: run the feature check, then ask once whether to keep the features that helped. No opens the Features
     screen to change them.
 
@@ -1407,11 +1405,11 @@ def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") 
         options = {name: chosen for name, chosen in (config.get("options") or {}).items() if name in helped}
         start = menu.Picked([features.REQUIRED, *helped], options, dict(config.get("llm") or {}))
         ui.line()
-        if keep_what_helped(config["features"], helped, called):
+        if keep_what_helped(config["features"], helped):
             picked = menu.Picked(start.features, start.options, start.llm if "llm" in helped else {})
         else:
             ui.note("Change them below. Press Enter when they're as you want them.")
-            picked = menu.ask(custom_features(), start, called=called)
+            picked = menu.ask(custom_features(), start)
         config.pop("llm", None)
         config.update(picked.config())
         predictor.save_config()
@@ -1424,14 +1422,14 @@ def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") 
         (config.get("options") or {}).pop("llm", None)
         config.pop("llm", None)
         predictor.save_config()
-        ui.note("LLM analysis is left out of this predictor.")
+        ui.note("LLM analysis is left out of this model.")
     plan = plan_embeddings(predictor, key)
     # The descriptions LLM analysis just wrote were in the cost of analyzing the rest. Anything else is new.
     if any(name != "llm" for _, name, _ in plan.items):
         ui.heading("Cost")
         for text in cost_lines(plan.cost, predictor.embedding_model, plan.tasks):
             ui.line(text)
-        if not ui.ask("Embed them and train the predictor now?", True):
+        if not ui.ask("Embed them and train the model now?", True):
             ui.note(
                 "Stopped. Your choice of features is kept. Embed and train later with: "
                 f"yardstick-predict refresh --predictor {predictor.name}"
@@ -1442,7 +1440,7 @@ def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") 
     return None
 
 
-def keep_what_helped(chosen: list[str], helped: list[str], called: str) -> bool:
+def keep_what_helped(chosen: list[str], helped: list[str]) -> bool:
     """After the feature check, in setup: say which of the chosen features stay on and which go off, then ask once
     whether to go on with that. Enter says yes. No opens the Features screen to change them first."""
     from .screens.listing import LEARNS_FROM
@@ -1454,10 +1452,10 @@ def keep_what_helped(chosen: list[str], helped: list[str], called: str) -> bool:
         ui.line("The features that helped an AI model stay on. The rest go off.")
         ui.line(f"On: {in_words(kept)}.")
     else:
-        ui.line(f"None of the features you chose helped an AI model. The {called} learns from the three always on.")
+        ui.line("None of the features you chose helped an AI model. The model learns from the three always on.")
     if dropped:
         ui.line(f"Off: {in_words(dropped)}.")
-    return ui.ask(f"Keep this and go on to make the {called}?", True)
+    return ui.ask("Keep this and go on to make the model?", True)
 
 
 def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
@@ -1530,7 +1528,7 @@ def refresh(args, answer: dict) -> int:
         predictor.close()
         return update.run([predictor.name])
     # A predictor deleted just as this command found it isn't saved again, with none of its tasks.
-    deleted = f"There's no predictor called {predictor.name!r} anymore: it was deleted."
+    deleted = f"There's no model called {predictor.name!r} anymore: it was deleted."
     if gone(predictor):
         raise CommandError("unknown_predictor", deleted)
     from . import feature_store
@@ -1910,15 +1908,13 @@ def request_predictor(chosen: str | None, from_request: bool = False) -> Predict
     if not names:
         raise RequestError("no_predictor", "There's no model yet. Run yardstick-predict to create one.")
     if chosen and chosen not in names:
-        raise RequestError(
-            "unknown_predictor", f"There's no predictor called {chosen!r}. Your predictors: {', '.join(names)}."
-        )
+        raise RequestError("unknown_predictor", f"There's no model called {chosen!r}. Your models: {', '.join(names)}.")
     name = chosen or default_name()
     if name is None:
         where = 'Name one in the request\'s "predictor"' if from_request else "Name one with --predictor"
         raise RequestError(
             "no_default_predictor",
-            f"There are several predictors and none is the default: {', '.join(names)}. {where}, "
+            f"There are several models and none is the default: {', '.join(names)}. {where}, "
             "or choose a default with: yardstick-predict default NAME",
         )
     try:
@@ -1967,7 +1963,7 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
     report = meta.get("report") or {}
     known = served_models(report) or tested_models(report) or list((meta.get("categories") or {}).get("model") or [])
     if not known:
-        raise RequestError("invalid_request", "This predictor knows no AI model yet. Name one with --model.")
+        raise RequestError("invalid_request", "This model knows no AI model yet. Name one with --model.")
     return known
 
 
@@ -2013,8 +2009,7 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
     the first. A forecast with not enough data behind it is marked, and the AI models that have too little are named
     under the table. It fits the terminal at any width.
 
-    `screen` is for the Estimate screen: the task was typed just above, so it isn't said again, and the
-    predictor is called a model there, as every screen calls it.
+    `screen` is for the Estimate screen: the task was typed just above, so it isn't said again.
     """
     from .forecast import quantile
 
@@ -2092,10 +2087,9 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
         wrapped_note("Those are a rough guide. Plan with a wider margin there.")
     if spread:
         wrapped_note(f"{QUARTILES_NOTE} Costs are at API prices.")
-    named = f"model {predictor.name}" if screen else f"predictor {predictor.name}"
     footer = [
         "Learned from your own runs",
-        f"{named}, updated {ago(predictor.config.get('refreshed_at'))}",
+        f"model {predictor.name}, updated {ago(predictor.config.get('refreshed_at'))}",
         *([] if screen else ["add --json for details"]),
     ]
     wrapped_note((f" {ui.mark('dot')} " if ui.styled() else ", ").join(footer))
@@ -2240,7 +2234,7 @@ def cmd_status(args) -> int:
 
     names = predictor_names()
     if args.predictor and args.predictor not in names:
-        message = f"There's no predictor called {args.predictor!r}."
+        message = f"There's no model called {args.predictor!r}."
         if args.json:
             print(json.dumps({"version": 1, "error": {"code": "unknown_predictor", "message": message}}, indent=2))
             return 1
@@ -2296,7 +2290,7 @@ def cmd_status(args) -> int:
 
     for entry in found:
         ui.out()
-        title = [ui.bold(entry["name"])] + ([ui.dim("default predictor")] if entry["default"] else [])
+        title = [ui.bold(entry["name"])] + ([ui.dim("default model")] if entry["default"] else [])
         ui.out(ui.join(title))
         if "error" in entry:
             ui.line(entry["error"])
@@ -2321,12 +2315,12 @@ def cmd_status(args) -> int:
             unknown_features_note(predictor)
         meta = metas.get(entry["name"])
         if meta and outdated(predictor, meta):
-            ui.note("Its model was made by an older version. It gives no forecasts until it's trained again.")
+            ui.note("An older version trained it. It gives no forecasts until it's trained again.")
             ui.note(f"Train it again with: yardstick-predict refresh --predictor {entry['name']}")
         elif meta:
             if from_previous_version(predictor, meta):
                 ui.note(
-                    "Its model was made by the previous version. It still forecasts. Train it again to get this "
+                    "The previous version trained it. It still forecasts. Train it again to get this "
                     f"version's improvements: yardstick-predict refresh --predictor {entry['name']}"
                 )
             try:
@@ -2448,7 +2442,7 @@ def cmd_delete(args) -> int:
     names = predictor_names()
     name = args.name
     if name not in names:
-        message = f"There's no predictor called {name!r}. Your predictors: {', '.join(names) or 'none'}."
+        message = f"There's no model called {name!r}. Your models: {', '.join(names) or 'none'}."
         return answer_error(args, "unknown_predictor", message)
     # A setup or refresh of it would make it again, so it's refused before anything is asked.
     if being_refreshed(name):
@@ -2501,10 +2495,9 @@ def say_what_goes(name: str, found, is_default: bool) -> None:
         (ui.note if quiet else ui.line)(text)
 
 
-def what_goes(name: str, found, is_default: bool, called: str = "predictor") -> list[tuple[bool, str]]:
-    """Exactly what deleting a predictor removes, and what stays, as lines, each with whether it's a quiet note.
-    `called` is what a predictor is called where it's said, such as a model on a screen."""
-    default = [(True, f"It's your default {called}.")] if is_default else []
+def what_goes(name: str, found, is_default: bool) -> list[tuple[bool, str]]:
+    """Exactly what deleting a predictor removes, and what stays, as lines, each with whether it's a quiet note."""
+    default = [(True, "It's your default model.")] if is_default else []
     if found.link_to is not None:
         return [
             (False, f"{name} is a link to {found.link_to}, not a folder of its own."),
@@ -2518,12 +2511,12 @@ def what_goes(name: str, found, is_default: bool, called: str = "predictor") -> 
     if found.prepared:
         goes.append(f"its prepared dataset, what went into its last training ({ui.size(found.prepared)})")
     if found.model:
-        goes.append(f"its trained model ({ui.size(found.model)})")
+        goes.append(f"what it learned ({ui.size(found.model)})")
     return [
         (False, f"This deletes its folder, {found.folder}, and everything in it:"),
         *((False, f"  {part}") for part in goes),
-        (False, f"Your records and the feature store stay, and so do your other {called}s."),
-        (True, f"The embeddings and LLM answers it made stay in the feature store, for any {called} that uses them."),
+        (False, "Your records and the feature store stay, and so do your other models."),
+        (True, "The embeddings and LLM answers it made stay in the feature store, for any model that uses them."),
         *default,
     ]
 
@@ -2535,11 +2528,11 @@ def say_default_after(name: str, before: str | None, after: str | None) -> None:
     if not left:
         ui.note("There's no model now. Run yardstick-predict to create one.")
     elif after is None and before == name:
-        ui.note("It was your default predictor, so there's no default now.")
+        ui.note("It was your default model, so there's no default now.")
         ui.note("Choose one with: yardstick-predict default NAME")
     elif after is not None and after != before:
         if len(left) == 1:
-            ui.note(f"{after} is your only predictor now, so commands use it when they name none.")
+            ui.note(f"{after} is your only model now, so commands use it when they name none.")
         else:
             ui.note(
                 f"Commands now use {after} when they name none. Choose another with: yardstick-predict default NAME"
@@ -2568,7 +2561,7 @@ def cmd_check(args) -> int:
     if args.name and args.name not in names:
         return stop(
             "unknown_predictor",
-            f"There's no predictor called {args.name!r}. Your predictors: {', '.join(names) or 'none'}.",
+            f"There's no model called {args.name!r}. Your models: {', '.join(names) or 'none'}.",
         )
     if not names:
         return stop("no_predictor", "There's no model yet. Run yardstick-predict to create one.")
@@ -2576,7 +2569,7 @@ def cmd_check(args) -> int:
     if name is None:
         return stop(
             "no_default_predictor",
-            f"You have several predictors and no default: {', '.join(names)}. Name one, like: "
+            f"You have several models and no default: {', '.join(names)}. Name one, like: "
             f"yardstick-predict check {names[0]}",
         )
     try:
@@ -2599,12 +2592,12 @@ def cmd_check(args) -> int:
     # No setup or refresh changes the tasks while they're read. The tests then run on what was read, so one can
     # start meanwhile.
     if gone(predictor):
-        return stop("unknown_predictor", f"There's no predictor called {name!r} anymore: it was deleted.")
+        return stop("unknown_predictor", f"There's no model called {name!r} anymore: it was deleted.")
     with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
         if not mine:
             return stop("busy", f"{name} is being set up or refreshed by another command. Try again when it's done.")
         if gone(predictor):
-            return stop("unknown_predictor", f"There's no predictor called {name!r} anymore: it was deleted.")
+            return stop("unknown_predictor", f"There's no model called {name!r} anymore: it was deleted.")
         told = feature_store.tell
         if args.json:
             feature_store.tell = notes.append  # a program reads them in the answer, not before it
@@ -2634,7 +2627,7 @@ def cmd_check(args) -> int:
     say_checked(result)
     show_check(result)
     ui.line()
-    ui.note("This is advice only: nothing changed. To use other features, create a new predictor with them.")
+    ui.note("This is advice only: nothing changed. To use other features, create a new model with them.")
     return 0
 
 
@@ -2726,7 +2719,7 @@ def cmd_features(args) -> int:
 
     names = predictor_names()
     if args.predictor and args.predictor not in names:
-        message = f"There's no predictor called {args.predictor!r}."
+        message = f"There's no model called {args.predictor!r}."
         if args.json:
             print(json.dumps({"version": 1, "error": {"code": "unknown_predictor", "message": message}}, indent=2))
             return 1
@@ -2880,9 +2873,9 @@ def say_what_feature_goes(found, users: list[Predictor], unsure: list[str], rema
     for text in unsure:
         ui.note(text)
     if users:
-        now = "their models forecast as they do" if len(users) > 1 else "its model forecasts as it does"
+        now = "those models forecast as they do" if len(users) > 1 else "that model forecasts as it does"
         ui.note(f"Until then, {now} now: a forecast never reads the feature store.")
-    ui.line("Your records and your predictors stay, and so does the rest of the feature store.")
+    ui.line("Your records and your models stay, and so does the rest of the feature store.")
 
 
 def remake_lines(feature, users: list[Predictor], remade) -> list[str]:
@@ -2891,7 +2884,7 @@ def remake_lines(feature, users: list[Predictor], remade) -> list[str]:
     from . import features, llm
 
     if not users:
-        return ["No predictor uses it, so nothing makes it again."]
+        return ["No model uses it, so nothing makes it again."]
     names = in_words([predictor.name for predictor in users])
     who = f"Used by {names}. " + (
         "The next refresh of each makes it again" if len(users) > 1 else "Its next refresh makes it again"
@@ -2979,7 +2972,7 @@ def show_stored(found: list, used_by: dict[str, list[str]]) -> None:
 
     ui.out(ui.bold("Stored features"))
     ui.line(f"Embeddings and LLM answers are made once and kept in {feature_store.folder()}.")
-    ui.line("Every predictor that uses one shares it. Features that cost nothing are worked out at training.")
+    ui.line("Every model that uses one shares it. Features that cost nothing are worked out at training.")
     if not found:
         ui.out()
         ui.line("Nothing is stored yet.")
@@ -2988,7 +2981,7 @@ def show_stored(found: list, used_by: dict[str, list[str]]) -> None:
     rows = []
     for stored in found:
         users = used_by.get(stored.feature.id)
-        who = f"used by {', '.join(users)}" if users else "used by no predictor"
+        who = f"used by {', '.join(users)}" if users else "used by no model"
         rows.append((stored_title(stored.feature), ui.dim(ui.join([*stored_facts(stored), who]))))
         rows.append((ui.dim(f"  id {stored.feature.id}"),))
     ui.table(rows)
@@ -2999,7 +2992,7 @@ def show_stored(found: list, used_by: dict[str, list[str]]) -> None:
 def show_uses(entry: dict, stored: dict) -> None:
     """One predictor's features, each with its coverage and whether it's stored or worked out at training."""
     ui.out()
-    ui.out(ui.join([ui.bold(entry["name"])] + ([ui.dim("default predictor")] if entry["default"] else [])))
+    ui.out(ui.join([ui.bold(entry["name"])] + ([ui.dim("default model")] if entry["default"] else [])))
     if "error" in entry:
         ui.line(entry["error"])
         return
@@ -3136,7 +3129,7 @@ def cmd_rename(args) -> int:
 
     names = predictor_names()
     if args.old not in names:
-        raise SystemExit(f"There's no predictor called {args.old!r}. Your predictors: {', '.join(names) or 'none'}.")
+        raise SystemExit(f"There's no model called {args.old!r}. Your models: {', '.join(names) or 'none'}.")
     was_default = default_name() == args.old
     try:
         rename_predictor(args.old, args.new)
@@ -3159,18 +3152,16 @@ def cmd_default(args) -> int:
     if not args.name:
         current = default_name()
         if current:
-            ui.out(f"Your default predictor is {ui.bold(current)}. Commands use it when they name none.")
+            ui.out(f"Your default model is {ui.bold(current)}. Commands use it when they name none.")
         elif names:
-            ui.out(
-                f"You have no default predictor. Choose one of {', '.join(names)} with: yardstick-predict default NAME"
-            )
+            ui.out(f"You have no default model. Choose one of {', '.join(names)} with: yardstick-predict default NAME")
         else:
             ui.out("There's no model yet. Run yardstick-predict to create one.")
         return 0
     if args.name not in names:
-        raise SystemExit(f"There's no predictor called {args.name!r}. Your predictors: {', '.join(names) or 'none'}.")
+        raise SystemExit(f"There's no model called {args.name!r}. Your models: {', '.join(names) or 'none'}.")
     set_default(args.name)
-    ui.out(f"{ui.bold(args.name)} is now your default predictor. Commands use it when they name none.")
+    ui.out(f"{ui.bold(args.name)} is now your default model. Commands use it when they name none.")
     return 0
 
 
@@ -3222,8 +3213,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--version", action="version", version=f"yardstick-predict {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND", title="commands")
 
-    create = commands.add_parser("create", help="Create a predictor from your past runs.")
-    create.add_argument("name", nargs="?", help="The predictor's name. In a terminal it asks. Otherwise: main.")
+    create = commands.add_parser("create", help="Create a model from your past runs.")
+    create.add_argument("name", nargs="?", help="The model's name. In a terminal it asks. Otherwise: main.")
     create.add_argument(
         "--archive",
         action="append",
@@ -3286,7 +3277,7 @@ def make_parser() -> argparse.ArgumentParser:
     advanced.add_argument("--half-life", type=float, help="Days until a task counts half. 0 counts every task alike.")
 
     refresh = commands.add_parser("refresh", help="Add new runs, embed them and retrain.")
-    refresh.add_argument("--predictor", help="Which predictor. Default: your default predictor.")
+    refresh.add_argument("--predictor", metavar="NAME", help="Which model. Default: your default model.")
     refresh.add_argument(
         "--yes", action="store_true", help="Go ahead without asking anything, even when it costs money."
     )
@@ -3300,12 +3291,12 @@ def make_parser() -> argparse.ArgumentParser:
     predict = commands.add_parser("predict", help="Forecast a task. Give it in quotes, or send a JSON request.")
     predict.add_argument("task", nargs="?", help="The task's prompt, in quotes.")
     predict.add_argument("--prompt", help="The task's prompt, the same as giving it in quotes.")
-    predict.add_argument("--predictor", help="Which predictor. Default: your default predictor.")
+    predict.add_argument("--predictor", metavar="NAME", help="Which model. Default: your default model.")
     predict.add_argument(
         "--model",
         action="append",
         default=[],
-        help="An AI model to forecast. Repeat for more. Default: every model the predictor forecasts.",
+        help="An AI model to forecast. Repeat for more. Default: every AI model your model forecasts.",
     )
     predict.add_argument("--context", help="The conversation so far, if there is one.")
     predict.add_argument("--effort", help="The thinking level, such as high or max.")
@@ -3323,41 +3314,42 @@ def make_parser() -> argparse.ArgumentParser:
     predict.add_argument("--distribution", action="store_true", help="Also give each forecast's full curve, in JSON.")
     predict.add_argument("--json", action="store_true", help="Print the JSON answer that programs get.")
 
-    status = commands.add_parser("status", help="Show your predictors, their features and how well they forecast.")
-    status.add_argument("--predictor", help="Show only this predictor.")
+    status = commands.add_parser("status", help="Show your models, their features and how well they forecast.")
+    status.add_argument("--predictor", metavar="NAME", help="Show only this model.")
     status.add_argument("--json", action="store_true", help="Print JSON.")
 
-    every = commands.add_parser("list", help="List your predictors, one line each.")
+    every = commands.add_parser("list", help="List your models, one line each.")
     every.add_argument("--json", action="store_true", help="Print JSON.")
 
     delete = commands.add_parser(
-        "delete", help="Delete a predictor: its settings, dataset and model. Your records and the feature store stay."
+        "delete",
+        help="Delete a model: its settings, dataset and what it learned. Your records and the feature store stay.",
     )
-    delete.add_argument("name", help="The predictor to delete.")
+    delete.add_argument("name", help="The model to delete.")
     delete.add_argument("--yes", action="store_true", help="Delete it without asking.")
     delete.add_argument("--json", action="store_true", help="Print JSON. Add --yes too: it never asks.")
 
     check = commands.add_parser(
-        "check", help="Check which of a predictor's features help its forecasts. Advice only: it changes nothing."
+        "check", help="Check which of a model's features help its forecasts. Advice only: it changes nothing."
     )
-    check.add_argument("name", nargs="?", help="The predictor to check. Default: your default predictor.")
+    check.add_argument("name", nargs="?", help="The model to check. Default: your default model.")
     check.add_argument("--json", action="store_true", help="Print JSON.")
     listing = commands.add_parser(
         "features",
-        help="List each predictor's features: what's stored, and how many of its tasks each covers. "
+        help="List each model's features: what's stored, and how many of its tasks each covers. "
         "features delete ID deletes a stored feature.",
     )
     listing.add_argument("action", nargs="?", choices=["delete"], help="delete: delete the stored feature ID.")
     listing.add_argument("id", nargs="?", help="With delete: the stored feature's id, as the listing shows it.")
-    listing.add_argument("--predictor", help="Show only this predictor.")
+    listing.add_argument("--predictor", metavar="NAME", help="Show only this model.")
     listing.add_argument("--yes", action="store_true", help="With delete: delete it without asking.")
     listing.add_argument("--json", action="store_true", help="Print JSON.")
 
-    default = commands.add_parser("default", help="Show or choose the predictor used when a command names none.")
-    default.add_argument("name", nargs="?", help="The predictor to make the default.")
+    default = commands.add_parser("default", help="Show or choose the model used when a command names none.")
+    default.add_argument("name", nargs="?", help="The model to make the default.")
 
-    rename = commands.add_parser("rename", help="Give a predictor another name. The default stays the default.")
-    rename.add_argument("old", help="The predictor's name now.")
+    rename = commands.add_parser("rename", help="Give a model another name. The default stays the default.")
+    rename.add_argument("old", help="The model's name now.")
     rename.add_argument("new", help="Its new name.")
 
     claude = commands.add_parser("claude-code", help="Show forecasts in Claude Code's status line, or stop.")

@@ -656,7 +656,7 @@ def _no_forecast(error: Exception, predictor) -> str:
     and none the default, as after the default one was deleted, it says how to choose one.
     """
     if getattr(error, "code", None) == "no_default_predictor":
-        return "no default predictor. Choose one with: yardstick-predict default NAME"
+        return "no default model. Choose one with: yardstick-predict default NAME"
     folder = getattr(predictor, "dir", None)
     if isinstance(folder, Path) and not (folder / "predictor.json").is_file():
         return f"{predictor.name} was deleted"
@@ -1069,7 +1069,7 @@ def _status_line(session: str, model: str, now: float, effort: str, transcript: 
     pick = _pick(found.get("forecasts"), name, effort)
     expected = _number(pick.get("seconds")) if pick else None
     if expected is None:
-        missing = _dim(f"· no forecast for {(name or 'this model').strip()} yet")
+        missing = _dim(f"· no forecast for {(name or 'this AI model').strip()} yet")
         return f"{label} {_dim('·')} took {took} {missing}" if done is not None else f"{label} {missing}"
     usd = _number(pick.get("usd")) if pick else None
     cost = f" {_dim('·')} ~${usd:.2f}" if usd is not None else ""

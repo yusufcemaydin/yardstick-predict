@@ -679,7 +679,7 @@ def refresh_benchmarks(predictor: Predictor) -> str | None:
         from . import ui
 
         kept = "Keeping the ones saved before." if (predictor.dir / "benchmarks.json").is_file() else ""
-        return f"Couldn't download the model benchmarks ({ui.clean(error)}). {kept}".strip()
+        return f"Couldn't download the AI model benchmarks ({ui.clean(error)}). {kept}".strip()
     from . import files
 
     # Saved in one step, so a forecast reading meanwhile finds the old table or the new one, never half of one.

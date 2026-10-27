@@ -71,7 +71,7 @@ def test_commands_that_dont_train_or_forecast_work_without_xgboost(no_xgboost, c
     assert "Trained on 140 tasks" in out and "10% worse than the simple rule. They may be at most 2% worse." in squashed
     assert cli.main(["status", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["predictors"][0]["report"] == report
-    assert cli.main(["default"]) == 0 and "Your default predictor is default" in capsys.readouterr().out
+    assert cli.main(["default"]) == 0 and "Your default model is default" in capsys.readouterr().out
     monkeypatch.chdir(tmp_path)  # claude-code with --here reads only this folder's settings
     assert cli.main(["claude-code", "remove", "--here"]) == 0
     assert "Nothing to remove" in capsys.readouterr().out

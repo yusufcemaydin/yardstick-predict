@@ -27,8 +27,8 @@ $ yardstick-predict predict "Add a login page with tests"
   The expected line is what to expect on average. A quarter of real results
   come in under the 25% line, half under the median and three quarters under
   the 75% line. Costs are at API prices.
-  Learned from your own runs · predictor main, updated 2 days ago · add --json
-  for details
+  Learned from your own runs · model main, updated 2 days ago · add --json for
+  details
 ```
 
 The numbers above are an example. Yours come from your own history.
@@ -50,7 +50,7 @@ You need [uv](https://docs.astral.sh/uv/), a tool that installs Python programs.
 ## Quick start
 
 1. Get a [Voyage API key](https://dashboard.voyageai.com). Voyage turns each prompt into numbers that capture what it means. Every account gets 200 million free tokens.
-2. Run `yardstick-predict` and choose Add New. It finds your past runs, asks for your key when it has none, shows the cost and trains a predictor: the model that makes your forecasts. A key you paste is kept in your computer's password store. To take every default and agree to the cost in one line instead:
+2. Run `yardstick-predict` and choose Add New. It finds your past runs, asks for your key when it has none, shows the cost and trains a model, which makes your forecasts. A key you paste is kept in your computer's password store. To take every default and agree to the cost in one line instead:
 
    ```bash
    export VOYAGE_API_KEY=your-key
@@ -96,23 +96,23 @@ Each forecast has `seconds`, `tokens` and `usd`. They are averages. Ten tasks' f
 | Command | What it does |
 |---|---|
 | `yardstick-predict` | Opens the home screen: Estimate, Update, Models and Add New. |
-| `yardstick-predict create [NAME]` | Sets up a new predictor. |
+| `yardstick-predict create [NAME]` | Sets up a new model. |
 | `yardstick-predict refresh` | Reads your new runs and trains again. |
 | `yardstick-predict predict "TASK"` | Forecasts a task. |
-| `yardstick-predict status` | Shows how close each predictor came on your newest tasks. |
-| `yardstick-predict list` | Lists your predictors. |
-| `yardstick-predict check [NAME]` | Says which features help a predictor's forecasts. |
-| `yardstick-predict features` | Lists the features each predictor uses and what's stored. |
-| `yardstick-predict default [NAME]` | Shows or sets the predictor commands use when they name none. |
-| `yardstick-predict rename OLD NEW` | Renames a predictor. |
-| `yardstick-predict delete NAME` | Deletes a predictor. Your records stay. |
+| `yardstick-predict status` | Shows how close each model came on your newest tasks. |
+| `yardstick-predict list` | Lists your models. |
+| `yardstick-predict check [NAME]` | Says which features help a model's forecasts. |
+| `yardstick-predict features` | Lists the features each model uses and what's stored. |
+| `yardstick-predict default [NAME]` | Shows or sets the model commands use when they name none. |
+| `yardstick-predict rename OLD NEW` | Renames a model. |
+| `yardstick-predict delete NAME` | Deletes a model. Your records stay. |
 | `yardstick-predict claude-code install` | Shows forecasts in Claude Code's status line. |
 
 Most commands take `--json` for programs. `yardstick-predict COMMAND --help` lists every flag of a command. [The guide](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/guide.md#commands) says more about each one.
 
 ## Learn more
 
-- [The guide](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/guide.md): the home screen, the features a predictor learns from, LLM analysis, costs, settings for experts, plugins, privacy and how to update or remove it.
+- [The guide](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/guide.md): the home screen, the features a model learns from, LLM analysis, costs, settings for experts, plugins, privacy and how to update or remove it.
 - [How it works](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/how-it-works.md): the data, the model and how it tests itself.
 - [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md): every field programs send and get back.
 - [What's next](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/features.md): what's planned.

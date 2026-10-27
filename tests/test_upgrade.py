@@ -157,7 +157,7 @@ def test_status_says_a_model_saved_by_0_3_still_forecasts(saved_by_0_3, capsys):
     assert main(["status"]) == 0
     out = capsys.readouterr().out
     assert (
-        "made by the previous version. It still forecasts." in out
+        "The previous version trained it. It still forecasts." in out
         and "yardstick-predict refresh --predictor" in flat(out)
     )
     assert "Trained on 192 tasks." in out and re.search(r"claude-opus-5-5\s+forecasts on", out)
@@ -199,12 +199,12 @@ def test_settings_a_newer_version_saved_are_read_and_never_saved(saved_by_0_3, a
     same(ask_what_0_3_was_asked(predictor), KEPT["answer"])
     assert main(["status"]) == 0
     out = capsys.readouterr().out
-    assert out.count("A newer version of yardstick-predict saved this predictor.") == 1
+    assert out.count("A newer version of yardstick-predict saved this model.") == 1
     assert out.count("Skipping weather: this version doesn't know it.") == 1
     monkeypatch.setattr(cli, "terminal_output", lambda: True)
     assert main(["predict", "add a search page with tests and docs"]) == 0
     out = capsys.readouterr().out
-    assert "A newer version of yardstick-predict saved this predictor." in out
+    assert "A newer version of yardstick-predict saved this model." in out
     assert "Skipping weather: this version doesn't know it." in out
 
     # A refresh would save it the way this older version does, so it changes nothing.

@@ -588,7 +588,7 @@ def test_the_status_line_takes_the_model_and_effort_as_objects_or_as_text(monkey
         assert cc.status() == 0
         lines.append(plain(capsys.readouterr().out.strip()))
     assert lines[:2] == ["yardstick · 1:12 of ~4 min"] * 2
-    assert lines[2:] == ["yardstick · no forecast for this model yet", "yardstick"]
+    assert lines[2:] == ["yardstick · no forecast for this AI model yet", "yardstick"]
 
 
 @pytest.mark.parametrize(

@@ -124,9 +124,9 @@ def parse(data: object) -> tuple[list[TaskRequest], bool, str | None]:
             raise bad(f'Task {task_id!r} needs a "prompt" with some text in it, not only spaces.')
         models = task.get("models")
         if not isinstance(models, list) or not models or not all(isinstance(m, str) and m for m in models):
-            raise bad(f'Task {task_id!r} needs "models": a list of model names.')
+            raise bad(f'Task {task_id!r} needs "models": a list of AI model names.')
         if len(models) > MAX_MODELS:
-            raise bad(f"Task {task_id!r} lists more than {MAX_MODELS} models.")
+            raise bad(f"Task {task_id!r} lists more than {MAX_MODELS} AI models.")
         for name in ("context", "effort", "agent", "origin", "project", "session"):
             if task.get(name) is not None and not isinstance(task.get(name), str):
                 raise bad(f'In task {task_id!r}, "{name}" must be a string.')
@@ -165,7 +165,7 @@ def parse(data: object) -> tuple[list[TaskRequest], bool, str | None]:
         raise bad('"distribution" must be true or false.')
     predictor = data.get("predictor")
     if predictor is not None and (not isinstance(predictor, str) or not predictor):
-        raise bad('"predictor" must be the name of a predictor.')
+        raise bad('"predictor" must be the name of a model.')
     return found, distribution, predictor
 
 
@@ -246,7 +246,7 @@ def _embed(predictor: Predictor, items: list[tuple[int, str, str]]) -> dict[str,
         if not key:
             raise RequestError(
                 "no_embedding_key",
-                "This predictor uses Voyage embeddings. Set VOYAGE_API_KEY or run yardstick-predict to save a key.",
+                "This model uses Voyage embeddings. Set VOYAGE_API_KEY or run yardstick-predict to save a key.",
             )
         try:
             for positions, batch in embeddings.embed(missing, model, key, patience=embeddings.QUICK):
@@ -288,20 +288,20 @@ def load(predictor: Predictor):
 
 def not_trained(name: str) -> str:
     """What to say about a predictor that has no model yet, as when its setup didn't finish."""
-    return f"Predictor {name!r} has no model yet. Train it with: yardstick-predict refresh --predictor {name}"
+    return f"Model {name!r} isn't trained yet. Train it with: yardstick-predict refresh --predictor {name}"
 
 
 def damaged(predictor: Predictor) -> str:
     """What to say about a model with a file missing or that can't be read."""
     return (
-        f"Predictor {predictor.name!r} has a damaged model: a file of it is missing or can't be read. Train it "
+        f"Model {predictor.name!r} is damaged: a file from its training is missing or can't be read. Train it "
         f"again with: yardstick-predict refresh --predictor {predictor.name}"
     )
 
 
 def deleted(predictor: Predictor) -> RequestError:
     """The error for a predictor that was deleted after the request found it, as while it was being forecast."""
-    return RequestError("unknown_predictor", f"Predictor {predictor.name!r} was deleted.")
+    return RequestError("unknown_predictor", f"Model {predictor.name!r} was deleted.")
 
 
 RATES = ("input", "output", "cache_write_5m", "cache_write_1h", "cache_read")

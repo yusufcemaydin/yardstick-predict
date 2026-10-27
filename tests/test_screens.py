@@ -910,7 +910,7 @@ def test_the_forecast_table_shows_the_25_median_and_75_lines_and_warns_on_rough_
     cli.show_forecasts("Create a fun game", result)  # the predict command says the task, and names the predictor
     out = plain(capsys.readouterr().out)
     squashed = " ".join(out.split())
-    assert "Create a fun game" in out and "predictor main, updated" in out and "add --json for details" in squashed
+    assert "Create a fun game" in out and "model main, updated" in out and "add --json for details" in squashed
 
 
 def test_a_table_where_each_forecast_has_one_line_names_no_lines(capsys):
@@ -1050,7 +1050,7 @@ def test_the_rename_command_does_the_same_for_scripts(capsys):
     assert main(["rename", "missing", "x"]) == 1
     made("other")
     assert main(["rename", "home", "other"]) == 1
-    assert "There's already a predictor called other." in capsys.readouterr().err
+    assert "There's already a model called other." in capsys.readouterr().err
 
 
 def test_a_model_being_updated_isnt_renamed(capsys):
@@ -1261,11 +1261,28 @@ def test_add_new_on_the_home_screen_calls_it_a_model(capsys, monkeypatch):
     ]
 
 
+def test_add_new_tells_setup_it_runs_on_the_home_screen(monkeypatch):
+    told = []
+    monkeypatch.setattr(cli, "cmd_create", lambda args: told.append(args.screen))
+    home.act("add", [])
+    assert told == [True]
+
+
+def test_setup_ends_by_saying_how_to_add_new_tasks_where_it_ran(capsys):
+    model = QuickModel(quick_meta({"claude-opus-5-5": 40}))
+    cli.say_how_to_use(model, "main")
+    said = "Every week or so, run yardstick-predict refresh --predictor main to add new tasks and retrain."
+    assert said in flat(capsys.readouterr().out)
+    cli.say_how_to_use(model, "main", screen=True)
+    said = "Every week or so, choose Update on the home screen to add new tasks and retrain."
+    assert said in flat(capsys.readouterr().out)
+
+
 def test_setup_suggests_main_for_the_first_model(monkeypatch):
     asked = typing(monkeypatch, "")
-    assert cli.ask_name([]) == "main" and asked == ["Name this predictor: [main]"]
+    assert cli.ask_name([]) == "main" and asked == ["Name this model: [main]"]
     asked = typing(monkeypatch, "", "work")  # a later one gets no name it could clash with
-    assert cli.ask_name(["main"]) == "work" and asked == ["Name this predictor:", "Name this predictor:"]
+    assert cli.ask_name(["main"]) == "work" and asked == ["Name this model:", "Name this model:"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="a pseudo terminal is for macOS and Linux")
@@ -1418,11 +1435,11 @@ def test_a_version_from_pypi_shows_only_when_it_looks_like_one(monkeypatch):
 def test_after_the_check_one_question_keeps_what_helped(capsys, monkeypatch, width):
     monkeypatch.setenv("COLUMNS", str(width))
     asked = typing(monkeypatch, "", "n")  # Enter keeps it, then no
-    assert cli.keep_what_helped(["prompt", "conversation", "context", "llm"], ["context", "llm"], "model")
+    assert cli.keep_what_helped(["prompt", "conversation", "context", "llm"], ["context", "llm"])
     out = capsys.readouterr().out
     said = "The features that helped an AI model stay on. The rest go off. On: context and LLM analysis."
     assert f"{said} Off: conversation." in " ".join(out.split()) and widest(out) < width
-    assert not cli.keep_what_helped(["prompt", "conversation"], [], "model")
+    assert not cli.keep_what_helped(["prompt", "conversation"], [])
     out = capsys.readouterr().out
     said = "None of the features you chose helped an AI model. The model learns from the three always on."
     assert f"{said} Off: conversation." in " ".join(out.split()) and widest(out) < width

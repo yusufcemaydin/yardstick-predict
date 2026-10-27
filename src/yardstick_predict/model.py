@@ -1234,7 +1234,7 @@ def load(folder: Path):
     saved = meta.get("format")
     if isinstance(saved, int) and saved > FORMAT:
         raise NewerFormat(
-            "This predictor's model was saved by a newer version of yardstick-predict. "
+            "This model was trained by a newer version of yardstick-predict. "
             "Upgrade with: uv tool upgrade yardstick-predict"
         )
     if isinstance(saved, int) and saved == PREVIOUS_FORMAT:
@@ -1243,7 +1243,7 @@ def load(folder: Path):
         return model_0_3.load(folder, meta)
     if not isinstance(saved, int) or saved < FORMAT:
         raise OutdatedModel(
-            "This predictor's model was trained by an older version of yardstick-predict. "
+            "This model was trained by an older version of yardstick-predict. "
             "Train it again with: yardstick-predict refresh"
         )
     if (folder / WITHOUT_LLM).is_dir():

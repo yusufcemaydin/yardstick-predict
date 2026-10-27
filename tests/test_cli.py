@@ -49,6 +49,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     assert "180 tasks" in out
     assert re.search(r"claude-opus-5-5\s+forecasts on", out)
     assert "Forecasts are on for claude-opus-5-5" in out and 'yardstick-predict predict "Add a login page' in out
+    assert "Every week or so, run yardstick-predict refresh to add new tasks and retrain." in flat(out)
     assert default_name() == "main"  # the first predictor is the default
     predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "conversation", "context"]
@@ -79,7 +80,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     # the cache of vectors kept it, so this one sends it no more.
     texts = [text for body in ready.requests for text in body["input"]]
     assert texts.count("fix the api") == 1 and len(ready.requests) == sent
-    assert "predictor main, updated just now" in out and "{" not in out
+    assert "model main, updated just now" in out and "{" not in out
     monkeypatch.setattr(cli, "terminal_output", lambda: False)
 
     code, out = run(capsys, "status", "--json")
@@ -324,8 +325,8 @@ def test_commands_use_the_default_predictor_you_choose(capsys):
     assert default_name() == "work" and cli.pick_predictor(None).name == "work"
     assert cli.pick_predictor("default").name == "default"  # a name always wins
     main(["default"])
-    assert "Your default predictor is work" in capsys.readouterr().out
-    assert main(["default", "nope"]) == 1 and "no predictor called 'nope'" in capsys.readouterr().err
+    assert "Your default model is work" in capsys.readouterr().out
+    assert main(["default", "nope"]) == 1 and "no model called 'nope'" in capsys.readouterr().err
 
     for name in ("home", "lab"):
         Predictor.create(name, [], {"model": "voyage-4", "dimensions": 256})
@@ -870,7 +871,7 @@ def test_a_damaged_model_says_so_and_a_refresh_trains_it_again(capsys, monkeypat
         monkeypatch=monkeypatch,
     )
     error = json.loads(out)["error"]
-    assert code == 1 and error["code"] == "not_trained" and "has a damaged model" in error["message"]
+    assert code == 1 and error["code"] == "not_trained" and "is damaged: a file from its training" in error["message"]
     code, out = run(capsys, "refresh", "--yes", "--json")
     answer = json.loads(out)
     assert code == 0 and answer["trained"] and answer["retrain_reason"] == "damaged" and answer["new_tasks"] == 0
@@ -882,6 +883,30 @@ class Terminal(io.StringIO):
 
     def isatty(self) -> bool:
         return True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "",
+        "create",
+        "refresh",
+        "predict",
+        "status",
+        "list",
+        "delete",
+        "check",
+        "features",
+        "default",
+        "rename",
+        "claude-code",
+    ],
+)
+def test_the_help_of_every_command_calls_a_predictor_a_model(capsys, command):
+    with pytest.raises(SystemExit):
+        main([*command.split(), "--help"])
+    # Only the option keeps the word, for the scripts that use it.
+    assert "predictor" not in capsys.readouterr().out.replace("--predictor", "").lower()
 
 
 # What a program sees ---------------------------------------------------------------------------------------

@@ -855,10 +855,8 @@ def test_the_listing_shows_what_no_predictor_uses_and_what_cant_be_read(capsys, 
     capsys.readouterr()
     code, out = listing(capsys)
     assert code == 1  # a predictor it shows can't be used
-    assert (
-        "LLM answers by Codex's own model, through your ChatGPT subscription" in out and "used by no predictor" in out
-    )
-    assert "Predictor 'broken' can't be used" in out
+    assert "LLM answers by Codex's own model, through your ChatGPT subscription" in out and "used by no model" in out
+    assert "Model 'broken' can't be used" in out
     assert "weather" in out and "this version doesn't know it" in out
     assert "was broken, so it was rebuilt from the files" in out
     code, out = listing(capsys, "--json", "--predictor", "main")

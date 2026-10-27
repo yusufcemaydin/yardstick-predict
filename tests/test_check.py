@@ -479,7 +479,7 @@ def test_setup_offers_the_check_and_trains_with_what_the_person_keeps(capsys, mo
     helped = [name for name in saved if any(found["verdict"] == "helped" for found in saved[name].values())]
     said = "The features that helped an AI model stay on." if helped else "None of the features you chose helped"
     assert said in squashed
-    assert sum("Keep this and go on to make the predictor?" in question for question in asked) == 1
+    assert sum("Keep this and go on to make the model?" in question for question in asked) == 1
     assert sum("Turn on or off" in question for question in asked) == 1
     assert Predictor("main").config["features"] == ["prompt", *helped]
     assert {entry["predictor"] for by_model in saved.values() for entry in by_model.values()} == {"main"}
@@ -517,7 +517,7 @@ def test_llm_analysis_is_left_out_when_the_person_wont_have_it_read_the_rest(cap
     person(monkeypatch, Turn_on_or_off=["9", "", ""], How_should_it_be_paid_for="4", Analyze_them_now="n")
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
-    assert read == [54] and "LLM analysis is left out of this predictor." in out
+    assert read == [54] and "LLM analysis is left out of this model." in out
     predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt"] and "llm" not in predictor.config
     assert "llm" not in (predictor.config.get("options") or {}) and "Trained on" in out
@@ -552,11 +552,11 @@ def test_a_feature_turned_on_after_the_check_shows_its_cost_first(capsys, monkey
     asked = person(monkeypatch, Turn_on_or_off=["5", "", "5", ""], Keep_this_and_go_on="n", Embed_them_and_train="n")
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
-    said = "None of the features you chose helped an AI model. The predictor learns from the three always on."
+    said = "None of the features you chose helped an AI model. The model learns from the three always on."
     assert said in " ".join(out.split())
     assert "Off: conversation." in out and "Change them below. Press Enter when they're as you want them." in out
     # Embedding the context is priced and asked first. Here the answer is no.
-    assert sum("Embed them and train the predictor now?" in question for question in asked) == 1
+    assert sum("Embed them and train the model now?" in question for question in asked) == 1
     # Once for the check, and once for the context of the tasks that have one.
     assert re.findall(r"Embedding ([\d,]+) tasks with voyage-4 uses", out) == ["180", "144"]
     assert "Stopped. Your choice of features is kept." in out and "refresh --predictor main" in out

@@ -283,9 +283,9 @@ def rename_predictor(old: str, new: str) -> None:
     first, second = sorted([old, new])
     with name_lock(first), name_lock(second):
         if not (source / "predictor.json").is_file():
-            raise ValueError(f"There's no predictor called {old!r}.")
+            raise ValueError(f"There's no model called {old!r}.")
         if target.exists() or is_link(target):
-            raise ValueError(f"There's already a predictor called {new}. Pick another name.")
+            raise ValueError(f"There's already a model called {new}. Pick another name.")
         was_default = default_name() == old
         link = is_link(source)
         try:
@@ -408,13 +408,13 @@ def _read_config(name: str, path: Path) -> dict:
             return _current(config)
         if isinstance(config, dict) and _newer(config):
             raise BrokenPredictor(
-                f"Predictor {name!r} was saved by a newer version of yardstick-predict, and this version can't "
+                f"Model {name!r} was saved by a newer version of yardstick-predict, and this version can't "
                 "read its settings. Upgrade with: uv tool upgrade yardstick-predict"
             )
         why = "are empty or broken"
     raise BrokenPredictor(
-        f"Predictor {name!r} can't be used: its settings in {path} {why}. Fix that file, "
-        f"or delete the predictor with yardstick-predict delete {name} and create it again."
+        f"Model {name!r} can't be used: its settings in {path} {why}. Fix that file, "
+        f"or delete the model with yardstick-predict delete {name} and create it again."
     )
 
 
@@ -464,7 +464,7 @@ class Predictor:
         private_home()
         folder = predictor_folder(name)
         if (folder / "predictor.json").exists():
-            raise ValueError(f"A predictor called {name!r} already exists.")
+            raise ValueError(f"A model called {name!r} already exists.")
         folder.mkdir(parents=True, exist_ok=True)
         from . import feature_store
 

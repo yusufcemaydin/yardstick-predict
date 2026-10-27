@@ -96,13 +96,13 @@ def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, m
     assert re.search(r"main \(default\) +Context, Time +40 tasks +just now +claude-opus-5-5$", lines["main"])
     assert re.search(r"work +only the ones always on +- +not yet +none yet$", lines["work"])
     assert "can't be used, see below" in lines["broken"]
-    assert "Predictor 'broken' can't be used" in out and "yardstick-predict delete broken" in out
+    assert "Model 'broken' can't be used" in out and "yardstick-predict delete broken" in out
 
     # Where the table won't fit, each predictor gets a few lines of its own.
     for width in (80, 45):
         monkeypatch.setenv("COLUMNS", str(width))
         code, out = run(capsys, "list")
-        shown = out[: out.index("Predictor 'broken'")].splitlines()
+        shown = out[: out.index("Model 'broken'")].splitlines()
         assert max(len(line) for line in shown) < width and "learned from" not in shown[0]
         assert "  main (default)" in shown and "  work" in shown and "  broken" in shown
         assert "Context, Time, learned from 40 tasks, trained just now" in flat(out)
@@ -305,8 +305,8 @@ def test_deleting_a_predictor_asks_first_and_changes_nothing_else(capsys, monkey
         "its settings",
         "its dataset of 40 tasks, with their prompts (",
         "its prepared dataset, what went into its last training (",
-        "its trained model (",
-        "Your records and the feature store stay, and so do your other predictors.",
+        "what it learned (",
+        "Your records and the feature store stay, and so do your other models.",
     ):
         assert part in out, part
     assert "Nothing was deleted." in out and everything(home, records) == before
@@ -343,7 +343,7 @@ def test_a_program_deletes_a_predictor_with_yes_and_reads_json(capsys):
     code, out = run(capsys, "delete", "work", "--json")
     assert code == 1 and json.loads(out)["error"]["code"] == "unknown_predictor"
     assert main(["delete", "nobody", "--yes"]) == 1
-    assert "There's no predictor called 'nobody'. Your predictors: default, home." in capsys.readouterr().err
+    assert "There's no model called 'nobody'. Your models: default, home." in capsys.readouterr().err
 
 
 def test_deleting_the_default_says_what_commands_use_now(capsys):
@@ -351,11 +351,11 @@ def test_deleting_the_default_says_what_commands_use_now(capsys):
         Predictor.create(name, [], EMBEDDING)
     store.set_default("second")
     code, out = run(capsys, "delete", "second", "--yes")
-    assert code == 0 and "It's your default predictor." in out
-    assert "It was your default predictor, so there's no default now." in out
+    assert code == 0 and "It's your default model." in out
+    assert "It was your default model, so there's no default now." in out
     assert "Choose one with: yardstick-predict default NAME" in out and default_name() is None
     code, out = run(capsys, "delete", "first", "--yes")
-    assert "third is your only predictor now, so commands use it when they name none." in out
+    assert "third is your only model now, so commands use it when they name none." in out
     assert default_name() == "third"
     code, out = run(capsys, "delete", "third", "--yes")
     assert "There's no model now. Run yardstick-predict to create one." in out and predictor_names() == []
@@ -564,7 +564,7 @@ def test_a_broken_predictor_can_be_deleted(capsys):
     predictor.close()
     (predictor.dir / "predictor.json").write_text("")  # an older version stopped halfway through saving it
     assert main(["status"]) == 1
-    assert "or delete the predictor with yardstick-predict delete default" in flat(capsys.readouterr().out)
+    assert "or delete the model with yardstick-predict delete default" in flat(capsys.readouterr().out)
     code, out = run(capsys, "delete", "default", "--yes")
     assert code == 0 and "Deleted default." in out and not predictor.dir.exists()
 
@@ -609,14 +609,14 @@ def test_the_status_line_says_plainly_when_its_predictor_is_gone(monkeypatch):
     monkeypatch.setattr(forecasting, "load", deleted_while_read)
     assert forecast("Add a login page") == "yardstick · no forecast: default was deleted"
     monkeypatch.setattr(forecasting, "load", real)
-    # The one left is used without a default. It has no model yet.
+    # The one left is used without a default. It isn't trained yet.
     line = (
-        "yardstick · no forecast: Predictor 'work' has no model yet. Train it with: yardstick-predict refresh "
+        "yardstick · no forecast: Model 'work' isn't trained yet. Train it with: yardstick-predict refresh "
         "--predictor work"
     )
     assert forecast("Fix the parser") == line
     Predictor.create("home", [], EMBEDDING)
-    line = "yardstick · no forecast: no default predictor. Choose one with: yardstick-predict default NAME"
+    line = "yardstick · no forecast: no default model. Choose one with: yardstick-predict default NAME"
     assert forecast("Write the docs") == line
     for name in ("work", "home"):
         assert main(["delete", name, "--yes"]) == 0
@@ -643,8 +643,8 @@ def test_deleting_a_stored_feature_says_who_uses_it_and_what_making_it_again_cos
     assert "Delete a stored feature" in out and "context embeddings by voyage-4, 256 numbers" in out
     assert f"Used by default and work. The next refresh of each makes it again, for {with_context} tasks." in out
     assert re.search(r"The cache of vectors holds all \d+ of their texts, so it costs nothing\.", out)
-    assert "Until then, their models forecast as they do now: a forecast never reads the feature store." in out
-    assert "Your records and your predictors stay, and so does the rest of the feature store." in out
+    assert "Until then, those models forecast as they do now: a forecast never reads the feature store." in out
+    assert "Your records and your models stay, and so does the rest of the feature store." in out
     assert "Nothing was deleted." in out and everything(home, records) == before
 
     # Without the cache, the texts would go to Voyage again, and it says what that costs.
@@ -851,7 +851,7 @@ def test_a_stored_feature_no_predictor_uses_goes_without_any_cost(capsys, monkey
     code, out = run(capsys, "features")
     assert f"id {answers.id}" in out and "Delete one with: yardstick-predict features delete ID" in out
     code, out = run(capsys, "features", "delete", answers.id, "--yes")
-    assert code == 0 and "No predictor uses it, so nothing makes it again." in out
+    assert code == 0 and "No model uses it, so nothing makes it again." in out
     assert answers.id not in feature_store.index()
 
 

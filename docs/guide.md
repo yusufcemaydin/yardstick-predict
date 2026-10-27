@@ -2,7 +2,7 @@
 
 This guide covers what the [README](../README.md) leaves out. [How it works](how-it-works.md) explains the model behind it.
 
-A predictor is what yardstick-predict trains from your runs. The home screen calls it a model. The models a forecast is about, such as claude-opus-5-5, are AI models.
+A predictor is what yardstick-predict trains from your runs. Its screens, messages and help call it a model. The `--predictor` option and the JSON keep the word predictor. The models a forecast is about, such as claude-opus-5-5, are AI models.
 
 ## The home screen
 
