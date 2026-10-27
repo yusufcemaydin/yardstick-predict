@@ -606,7 +606,7 @@ def test_the_update_summary_fits_with_a_long_name_and_folder(capsys, monkeypatch
     out = capsys.readouterr().out
     assert widest(out) < 60
     assert re.search(r"\n  [^\n]*" + LONG_NAME + r"\n    Embed \d texts with Voyage", plain(out))  # its own line
-    assert re.search(r"…[^\n]*/to/wrap", plain(out))  # the folder is cut short at its start
+    assert re.search(r"…[^\n]*[/\\]to[/\\]wrap", plain(out))  # the folder is cut short at its start, on Windows too
 
 
 def test_the_forecast_table_cuts_a_long_ai_model_name_to_fit(capsys, monkeypatch):
