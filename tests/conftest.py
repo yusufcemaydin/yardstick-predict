@@ -27,6 +27,10 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
     monkeypatch.setenv("YARDSTICK_NO_UPDATE_CHECK", "1")  # the home screen never asks PyPI in a test
     monkeypatch.delenv("YARDSTICK_NUMBERED_MENUS", raising=False)
+    # A terminal of 80 columns, styled only where a test asks for it, whatever the computer running the tests has.
+    monkeypatch.setenv("COLUMNS", "80")
+    for name in ("NO_COLOR", "FORCE_COLOR"):
+        monkeypatch.delenv(name, raising=False)
     from yardstick_predict import embeddings, ui
 
     ui.numbered.cache_clear()  # each test asks for numbered menus, or not, for itself
@@ -38,6 +42,12 @@ def home(tmp_path, monkeypatch):
     _features.skill_descriptions.cache_clear()  # each test may have other skills
     yield folder
     _features.skill_descriptions.cache_clear()
+
+
+@pytest.fixture
+def wide(monkeypatch):
+    """A terminal wide enough for the paths of a test's own folders, which are far longer than a person's."""
+    monkeypatch.setenv("COLUMNS", "400")
 
 
 def fake_vector(text: str) -> list[float]:

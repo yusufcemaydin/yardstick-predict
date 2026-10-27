@@ -9,7 +9,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from builders import history
+from builders import flat, history
 from conftest import KEY
 from test_cli import fake_analysis, quick_train
 from test_model import ONE_WINDOW, kinds, rows_for, synthetic, task
@@ -465,7 +465,7 @@ def test_setup_offers_the_check_and_trains_with_what_the_person_keeps(capsys, mo
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
     assert sum(QUESTION in question for question in asked) == 1
-    assert "Some features carry no signal for your kind of work, and with few tasks a feature can't show" in out
+    assert "Some features carry no signal for your kind of work, and with few tasks a feature can't show" in flat(out)
     # The question to go ahead says the check comes next, and the estimate counts it.
     assert any("Embed them, then check the features?" in question for question in asked)
     assert "feature check" in out
@@ -490,7 +490,7 @@ def test_llm_analysis_reads_a_sample_for_the_check_and_the_rest_once_it_helps(ca
     out = ANSI.sub("", capsys.readouterr().out)
     # Before the check, LLM analysis reads only the newest 30% of the 180 tasks, with its cost shown first.
     assert read == [54, 126]
-    assert "LLM analysis: 54 tasks with Codex's own model through your chatgpt subscription" in out
+    assert "LLM analysis: 54 tasks with Codex's own model through your chatgpt subscription" in flat(out)
     assert "For the check, it reads only your newest tasks." in out
     # The features that helped start on, the one that didn't starts off.
     after = out[out.index("The features that helped are on below.") :]
@@ -498,8 +498,8 @@ def test_llm_analysis_reads_a_sample_for_the_check_and_the_rest_once_it_helps(ca
     assert re.search(r" 9  LLM analysis +on", after)
     assert "Last check: helped claude-opus-5-5 and claude-sonnet-5-5." in after
     # Then the rest, with what it costs, once the person agrees.
-    assert "For the check, LLM analysis read only a sample of your tasks. To read the rest:" in after
-    assert "LLM analysis: 126 tasks with Codex's own model" in after
+    assert "For the check, LLM analysis read only a sample of your tasks. To read the rest:" in flat(after)
+    assert "LLM analysis: 126 tasks with Codex's own model" in flat(after)
     assert sum("Analyze them now?" in question for question in asked) == 1
     predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "context", "llm"]
@@ -538,7 +538,7 @@ def test_when_the_check_cant_test_any_ai_model_the_features_stay_as_chosen(capsy
     # Two answers on the first Features screen, and no second screen: there's nothing to suggest.
     assert sum("Turn on or off" in question for question in asked) == 2 and "The features that helped" not in out
     # LLM analysis read a sample for the check. It still offers to read the rest, with its cost.
-    assert read == [54, 126] and "To read the rest:" in out
+    assert read == [54, 126] and "To read the rest:" in flat(out)
     assert Predictor("main").config["features"] == ["prompt", "conversation", "context", "llm"]
 
 

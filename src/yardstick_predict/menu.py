@@ -116,6 +116,9 @@ def _show(
     entries += [(name, says, False, name, ()) for name, says in custom.items()]
     title_width = max(len(title) for title, *_ in entries) + 3
     option_width = max((len(o.says) for *_, options in entries for o in options), default=0) + 3
+    # Each option says on or off at the end of its line, lined up with the others. Where the terminal is too
+    # narrow for that, it says so first, and its words wrap after it.
+    lined_up = 2 + 9 + option_width + 3 <= ui.columns() - 1
 
     def state(is_on: bool) -> str:
         return ui.green("on") if is_on else ui.dim("off")
@@ -127,7 +130,13 @@ def _show(
             for part in ui.wrapped(text, 6) if text else []:  # broken to fit the terminal
                 ui.line(f"    {ui.dim(part)}")
         for letter, option in zip("abcdefgh", () if always else options):
-            ui.line(f"      {ui.accent(letter)}  {option.says.ljust(option_width)}{state(option.key in on[key])}")
+            is_on = option.key in on[key]
+            if lined_up:
+                ui.line(f"      {ui.accent(letter)}  {option.says.ljust(option_width)}{state(is_on)}")
+                continue
+            for row, part in enumerate(ui.wrapped(option.says, 16)):
+                first = f"      {ui.accent(letter)}  {state(is_on)}{' ' * (5 - len('on' if is_on else 'off'))}"
+                ui.line((first if row == 0 else " " * 14) + part)
     ui.line()
     _note("Type a number to turn a feature on or off, or a number and a letter for one option, like 9 or 6b.")
 

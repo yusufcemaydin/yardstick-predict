@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def flat(text: str) -> str:
+    """Output as a person reads it: the lines a long one was broken into, to fit the terminal, joined again."""
+    return " ".join(text.split())
+
+
 def iso(moment: float) -> str:
     return datetime.fromtimestamp(moment, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 

@@ -192,3 +192,43 @@ def test_a_terminal_without_fancy_characters_gets_plain_ones(terminal, monkeypat
     shown.flush()
     text = re.sub(r"\033\[[0-9;]*[mK]", "", shown.buffer.getvalue().decode("ascii"))
     assert "30 / 1,000 texts - about 8 min left" in text and "one - two" in text
+
+
+@pytest.mark.parametrize("width", [45, 80])
+def test_a_bar_and_a_working_line_fit_the_terminal_and_keep_what_matters(capsys, terminal, monkeypatch, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    ui.working("Comparing forecasts with every feature, then without each one")
+    shown = drawn(capsys)
+    assert ui.width(shown) <= width - 3 and shown.startswith("… Comparing forecasts")
+    assert shown.endswith("without each one" if width == 80 else "…")  # cut short only where it wouldn't fit
+    ui.progress(0, 1000, "tasks")
+    terminal.now += 15
+    ui.progress(30, 1000, "tasks")  # once the time left shows
+    shown = drawn(capsys)
+    assert ui.width(shown) <= width - 3 and shown.startswith("Comparing") and "30 / 1,000 tasks" in shown
+    # At 80 columns there's room for the time left too. At 45, it makes way for the step's words.
+    assert ("about 8 min left" in shown) == (width == 80)
+    ui.out("done")
+    ui.progress(2_000_000, 6_200_000_000, "bytes")  # a bar with nothing in front grows to its full length
+    assert ui.width(drawn(capsys)) <= width - 3
+
+
+def test_a_bar_in_a_very_narrow_terminal_keeps_the_counts(capsys, terminal, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "20")
+    ui.working("Reading your records")
+    capsys.readouterr()
+    ui.progress(5, 1000, "tasks")
+    assert drawn(capsys) == "5 / 1,000 tasks"
+
+
+def test_wide_characters_count_twice_and_are_cut_by_columns():
+    assert ui.width("修复登录页面") == 12 and ui.width("café") == 4 and ui.width("café") == 4
+    assert ui.cut("修复登录页面的错误", 9) == "修复登录…" and ui.width(ui.cut("修复登录页面的错误", 9)) == 9
+    assert ui.cut("a long task", 6) == "a lon…" and ui.cut("fits", 4) == "fits"
+
+
+def test_a_cut_fits_where_the_mark_is_three_dots(monkeypatch):
+    import io
+
+    monkeypatch.setattr("sys.stdout", io.TextIOWrapper(io.BytesIO(), encoding="ascii"))
+    assert ui.cut("abcdefghij", 6) == "abc..." and ui.cut("abcdefghij", 2) == "ab"

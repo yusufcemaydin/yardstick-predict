@@ -15,6 +15,7 @@ import shutil
 import sys
 import textwrap
 import time
+import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -48,6 +49,12 @@ SMOOTHING_SECONDS = 60.0
 """How fast a bar moves counts its last minute or so the most, and older work less and less. So one slow or
 quick batch doesn't make the time left jump, and a step that slows down, such as one waiting on a limit, still
 shows it."""
+MOST_BAR = 28
+"""How many columns a progress bar takes where the terminal has room..."""
+LEAST_BAR = 10
+"""...and how few it keeps in a narrow one, where the time left and the step's words make way first."""
+LEAST_LABEL = 8
+"""A step's words in front of its bar are left out, rather than cut shorter than this."""
 
 
 def styled() -> bool:
@@ -152,8 +159,16 @@ def number_typed(text: str) -> bool:
 
 
 def width(text: str) -> int:
-    """How many columns a text takes on screen, leaving out color codes."""
-    return len(_ANSI.sub("", text))
+    """How many columns a text takes on screen, leaving out color codes. A wide character, as Chinese and Japanese
+    use, takes two. A mark that sits on the character before it takes none."""
+    shown = _ANSI.sub("", text)
+    return len(shown) if shown.isascii() else sum(_columns_of(char) for char in shown)
+
+
+def _columns_of(char: str) -> int:
+    if unicodedata.combining(char) or char in "​‌‍️":
+        return 0
+    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
 
 
 def columns() -> int:
@@ -190,12 +205,75 @@ def cut(text: str, room: int) -> str:
     if width(text) <= room:
         return text
     plain = _ANSI.sub("", text)
-    return plain[: max(room - 1, 0)].rstrip() + mark("wait") if room > 1 else plain[:room]
+    end = mark("wait")
+    if room <= width(end):
+        return _start(plain, room)
+    return _start(plain, room - width(end)).rstrip() + end
+
+
+def _start(text: str, room: int) -> str:
+    """As much of the start of a text as fits `room` columns."""
+    used = 0
+    for place, char in enumerate(text):
+        used += _columns_of(char)
+        if used > room:
+            return text[:place]
+    return text
 
 
 def wrapped(text: str, lead: int = 2) -> list[str]:
-    """Plain text broken into lines that fit the terminal after `lead` columns, so none of them wraps on its own."""
-    return textwrap.wrap(text, max(columns() - lead - 1, 20)) or [""]
+    """Plain text broken into lines that fit the terminal after `lead` columns, so none of them wraps on its own.
+
+    It breaks between words, never at a hyphen inside one, and never inside a command, so a command can be copied
+    whole. A word too long for a line, such as a long path, is broken where the line ends. A command too long for
+    one keeps a line of its own, and the terminal wraps it."""
+    return _words(text, max(columns() - lead - 1, 20))
+
+
+def _words(text: str, room: int) -> list[str]:
+    glued = _COMMAND.sub(lambda found: found.group().replace(" ", _GLUE), text)
+    parts = []
+    for part in textwrap.wrap(glued, room, break_long_words=False, break_on_hyphens=False) or [""]:
+        if _GLUE in part or len(part) <= room:
+            parts.append(part.replace(_GLUE, " "))
+        else:  # a word too long for a line, such as a path, is broken where the line ends
+            parts += [part[at : at + room] for at in range(0, len(part), room)]
+    return parts
+
+
+_COMMAND = re.compile(
+    r"\b(?:uv tool upgrade yardstick-predict|yardstick-predict)"
+    r"(?: (?:(?:create|delete|check|default|rename|--predictor)(?: (?!--)[^\s\"]+)?"
+    r"|refresh|predict|status|list|features|claude-code|install|remove|--[a-z-]+|[A-Z]{2,}\b|\"[^\"]*\"))*"
+)
+"""A command in a message, with its subcommands, flags, names and quoted text. A line never breaks inside one, so
+it can be copied whole: a command broken over two lines would run as two."""
+_GLUE = "\ue000"
+
+
+_ONE_STYLE = re.compile(r"(\033\[[0-9;]*m)([^\033]*)(\033\[[0-9;]*m)")
+
+
+def _broken(text: str, room: int) -> list[str]:
+    """Text broken into lines of `room` columns, 20 at least. Text in one style keeps it on every line. Text in
+    more loses them, so no color code is broken in two."""
+    if width(text) <= room:
+        return [text]
+    whole = _ONE_STYLE.fullmatch(text)
+    if whole is None:
+        return _words(plain(text), max(room, 20))
+    start, words, end = whole.groups()
+    return [f"{start}{part}{end}" for part in _words(words, max(room, 20))]
+
+
+def fit(text: str, lead: int = 2) -> list[str]:
+    """A line as it fits the terminal after `lead` columns: as it is when it fits, else broken into lines that start
+    as far in as it does."""
+    if width(text) <= columns() - lead - 1:
+        return [text]
+    body = text.lstrip(" ")
+    indent = len(text) - len(body)
+    return [" " * indent + part for part in _broken(body, columns() - lead - indent - 1)]
 
 
 def join(parts: list[str]) -> str:
@@ -211,10 +289,13 @@ def _clear() -> None:
 
 
 def out(text: str = "") -> None:
+    """A line, or a few, as they are. One too wide for the terminal is broken to fit, so none wraps on its own."""
     global _label
     _clear()
     _label = None  # a step that printed a line of its own is done
-    print(text, flush=True)
+    for given in text.split("\n"):
+        for part in fit(given, 0):
+            print(part, flush=True)
 
 
 def heading(title: str) -> None:
@@ -223,7 +304,7 @@ def heading(title: str) -> None:
 
 
 def line(text: str = "") -> None:
-    """A line under a heading."""
+    """A line under a heading. One too wide for the terminal is broken to fit."""
     out(f"  {text}" if text else "")
 
 
@@ -232,16 +313,19 @@ def note(text: str) -> None:
 
 
 def ok(text: str) -> None:
-    line(f"{green(mark('ok'))} {text}" if styled() else text)
+    _marked(green(mark("ok")), text)
 
 
 def fail(text: str) -> None:
     """What didn't work, with its mark. It's cleaned first, as it may hold another service's words."""
-    for number, part in enumerate(clean(text).splitlines()):
-        if number == 0:
-            line(f"{red(mark('fail'))} {part}" if styled() else part)
-        else:
-            line(f"  {part}" if styled() else part)
+    _marked(red(mark("fail")), clean(text))
+
+
+def _marked(sign: str, text: str) -> None:
+    """Lines with a mark in front, in a styled terminal, broken to fit. The lines after the first line up after it."""
+    lead = width(sign) + 1 if styled() else 0
+    for number, part in enumerate(row for given in text.splitlines() for row in fit(given, 2 + lead)):
+        line(f"{sign if number == 0 else ' ' * (lead - 1)} {part}" if lead else part)
 
 
 def working(text: str) -> None:
@@ -249,7 +333,9 @@ def working(text: str) -> None:
     global _transient, _label
     if redraws():
         _clear()
-        print(f"  {dim(mark('wait') + ' ' + text)}", end="", flush=True)
+        # Cut short to fit, as a line that wraps can't be drawn over: only its last row would go.
+        shown = cut(text, max(columns() - 4 - width(mark("wait")), 1))
+        print(f"  {dim(mark('wait') + ' ' + shown)}", end="", flush=True)
         _transient = True
         _label = text
     else:
@@ -337,27 +423,45 @@ def progress(done: int, total: int, unit: str) -> None:
         bar = _bar = _Bar(total, unit, started=now, first=done, done=done, at=now)
     else:
         bar.move(done, now)
-    length = 28
-    filled = min(round(length * done / total), length) if total else length
-    track = accent(mark("bar") * filled) + dim(mark("rest") * (length - filled))
     counts = f"{size(done)} / {size(total)}" if unit == "bytes" else f"{done:,} / {total:,} {unit}"
     left = bar.left(now)
-    tail = dim(f" {mark('dot')} {time_left(left)}") if left is not None else ""
-    shown = f"{track}  {counts}{tail}"
-    if _label:
-        # The step's own words stay in front of its bar, cut short so the line never wraps.
-        room = shutil.get_terminal_size((80, 24)).columns - 1 - 2 - width(shown) - 2
-        label = _label if len(_label) <= room else _label[: max(room - 1, 0)].rstrip() + mark("wait")
-        shown = f"{dim(label)}  {shown}" if room >= 8 else shown
+    tail = f" {mark('dot')} {time_left(left)}" if left is not None else ""
+    # The whole line fits the terminal, as a line that wraps can't be drawn over. The counts always show. Then a
+    # bar of at least LEAST_BAR, the time left, and the step's own words in front, cut short when they must be.
+    # The bar grows into what's left, up to MOST_BAR.
+    room = columns() - 3
+    if LEAST_BAR + 2 + width(counts) + width(tail) > room:
+        tail = ""
+    after = width(counts) + width(tail)
+    label = ""
+    if _label and room - after - LEAST_BAR - 4 >= LEAST_LABEL:
+        label = cut(_label, room - after - LEAST_BAR - 4)
+    length = min(MOST_BAR, room - after - 2 - (width(label) + 2 if label else 0))
+    if length < 1:
+        shown = cut(counts, max(room, 1))
+    else:
+        filled = min(round(length * done / total), length) if total else length
+        track = accent(mark("bar") * filled) + dim(mark("rest") * (length - filled))
+        shown = f"{dim(label)}  " if label else ""
+        shown += f"{track}  {counts}{dim(tail)}"
     print(f"\r\033[2K  {shown}", end="", flush=True)
     _transient = True
 
 
 def prompt(question: str, hint: str = "") -> str:
-    """The text in front of an answer: a question and, dimmed, the answer you get by pressing Enter."""
+    """The text in front of an answer: a question and, dimmed, the answer you get by pressing Enter. A question too
+    wide for the terminal is broken into lines, with the answer typed after the last."""
     _clear()
-    tail = f" {dim(hint)}" if hint else ""
-    return f"  {accent('?')} {question}{tail} " if styled() else f"  {question}{tail} "
+    lead = 4 if styled() else 2
+    parts = [question]
+    if lead + width(question) + width(hint) + 2 > columns() - 1:
+        parts = wrapped(plain(question), lead)
+        if hint and lead + width(parts[-1]) + width(hint) + 2 > columns() - 1:
+            parts.append("")  # the hint goes on a line of its own
+    if hint:
+        parts[-1] = f"{parts[-1]} {dim(hint)}".lstrip(" ")
+    first = f"  {accent('?')} " if styled() else "  "
+    return first + f"\n{' ' * lead}".join(parts) + " "
 
 
 def ask(question: str, default: bool) -> bool:
@@ -374,18 +478,34 @@ def ask(question: str, default: bool) -> bool:
 
 
 def table(rows: list[tuple[str, ...]], indent: int = 2, align: str = "", gap: int = 3) -> None:
-    """Rows in lined-up columns, `gap` spaces apart. align has an l or r for each column; the default is l."""
+    """Rows in lined-up columns, `gap` spaces apart. align has an l or r for each column; the default is l.
+
+    A row too wide for the terminal breaks its last cell: the words go on under it, or, with under 20 columns left
+    there, on lines of their own under the row."""
     if not rows:
         return
-    columns = max(len(row) for row in rows)
-    widths = [max((width(row[i]) for row in rows if i < len(row)), default=0) for i in range(columns)]
+    count = max(len(row) for row in rows)
+    widths = [max((width(row[i]) for row in rows if i < len(row)), default=0) for i in range(count)]
+    start = indent + sum(widths[:-1]) + gap * (count - 1)
     for row in rows:
         cells = []
         for i, cell in enumerate(row):
             pad = " " * (widths[i] - width(cell))
             right = i < len(align) and align[i] == "r"
             cells.append(pad + cell if right else (cell + pad if i < len(row) - 1 else cell))
-        out(" " * indent + (" " * gap).join(cells).rstrip())
+        shown = " " * indent + (" " * gap).join(cells).rstrip()
+        if width(shown) <= columns() - 1 or len(row) < count or count == 1:
+            out(shown)
+            continue
+        head = " " * indent + (" " * gap).join(cells[:-1])
+        if columns() - 1 - start >= 20:
+            first, *rest = _broken(row[-1], columns() - 1 - start)
+            out(f"{head}{' ' * gap}{first}")
+        else:
+            out(head.rstrip())
+            rest = _broken(row[-1], columns() - 1 - indent - 4)
+        for part in rest:
+            out(" " * (start if columns() - 1 - start >= 20 else indent + 4) + part)
 
 
 def error(text: str) -> None:
@@ -393,8 +513,12 @@ def error(text: str) -> None:
     words."""
     _clear()
     loud = styled() and sys.stderr.isatty()
-    first, *rest = clean(text).splitlines() or [""]
-    print(f"{_style('31', '39', mark('fail')) if loud else 'Error:'} {first}", file=sys.stderr)
+    sign = _style("31", "39", mark("fail")) if loud else "Error:"
+    parts = clean(text).splitlines() or [""]
+    if sys.stderr.isatty():  # broken to fit the terminal it's shown in
+        parts = [part for given in parts for part in fit(given, width(sign) + 1)]
+    first, *rest = parts
+    print(f"{sign} {first}", file=sys.stderr)
     for part in rest:
         print(f"  {part}", file=sys.stderr)
 

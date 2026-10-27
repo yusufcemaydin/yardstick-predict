@@ -7,7 +7,7 @@ import os
 import re
 
 import pytest
-from builders import ClaudeSession, history
+from builders import ClaudeSession, flat, history
 from conftest import KEY
 from test_cli import QuickModel, fake_analysis, quick_train
 from test_model import synthetic
@@ -138,7 +138,7 @@ def ready(voyage, monkeypatch):
 
 
 def said(capsys) -> str:
-    return capsys.readouterr().out
+    return flat(capsys.readouterr().out)
 
 
 def test_setup_and_refresh_say_once_how_long_they_take_before_going_ahead(capsys, monkeypatch, records, ready):

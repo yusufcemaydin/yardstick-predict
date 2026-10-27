@@ -648,9 +648,11 @@ def print_report(meta: dict) -> None:
             mark = " " * ui.width(mark)
 
     def why(text: str) -> None:
-        """A reason under an AI model's line, broken to fit the terminal."""
-        for part in ui.wrapped(text, 2 + lead):
-            ui.line(" " * lead + ui.dim(part))
+        """A reason under an AI model's line, broken to fit the terminal. It lines up under the AI model's words
+        where there's room for that, else it starts closer to the edge."""
+        indent = lead if 2 + lead + 20 < ui.columns() else 4
+        for part in ui.wrapped(text, 2 + indent):
+            ui.line(" " * indent + ui.dim(part))
 
     for name, result in results:
         tested = result["tasks_tested"]
@@ -1907,6 +1909,22 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
     return known
 
 
+def show_title(task: str, after: str = "") -> None:
+    """A task as a title, in bold, broken to fit the terminal on 3 lines at most. A longer one is cut short on the
+    third. `after` follows it, dimmed, on its last line, or on a line of its own where there's no room."""
+    parts = ui.wrapped(ui.clean(task))
+    if len(parts) > 3:
+        parts = [*parts[:2], ui.cut(" ".join(parts[2:]), ui.columns() - 3)]
+    for part in parts[:-1]:
+        ui.line(ui.bold(part))
+    if after and ui.width(parts[-1]) + 2 + ui.width(after) <= ui.columns() - 3:
+        ui.line(f"{ui.bold(parts[-1])}  {ui.dim(after)}")
+        return
+    ui.line(ui.bold(parts[-1]))
+    if after:
+        ui.line(ui.dim(after))
+
+
 FORECAST_COLUMNS = ("", "effort", "time", "tokens", "cost")
 """The forecast table's columns after the AI model's name. The first holds the warning mark, when there is one."""
 RANGES = (("1 in 2", 0.5), ("9 in 10", 0.9))
@@ -1972,14 +1990,14 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
                 words.append(tuple(span_words(span, show) for span, show in zip(found, shows)))
                 rows.append(("", "", ui.dim(label), *(ui.dim(word) for word in words[-1])))
         blocks.append((model, mark, effort, values, words))
-    # A table needs room for every column. A terminal too narrow for it gets each forecast as a block of its own.
-    others = sum(max((ui.width(r[i]) for r in rows), default=0) + 2 for i in range(1, 6))
+    # A table needs room for every column, its titles too. A terminal too narrow for it gets each forecast as a
+    # block of its own.
+    others = sum(max([len(FORECAST_COLUMNS[i - 1]), *(ui.width(r[i]) for r in rows)]) + 2 for i in range(1, 6))
     stacked = 2 + pad + others >= ui.columns()
     rows = [(ui.bold(r[0].ljust(pad)) if r[0] else " " * pad, *r[1:]) for r in rows]
     if not screen:
-        shown = prompt if len(prompt) <= 72 else prompt[:71].rstrip() + ui.mark("wait")
         ui.out()
-        ui.line(ui.bold(shown))
+        show_title(prompt)
     ui.out()
     if rows and not stacked:
         header = tuple(ui.dim(title) for title in ("AI model".ljust(pad), *FORECAST_COLUMNS))
@@ -2324,7 +2342,20 @@ def cmd_list(args) -> int:
                 forecasts,
             )
         )
-    ui.table(rows)
+    wide = 2 + sum(max(ui.width(row[i]) for row in rows if i < len(row)) + 3 for i in range(5)) - 3
+    if wide < ui.columns():
+        ui.table(rows)
+    else:
+        # A line for each would run past the terminal's edge, so each gets a few lines of its own.
+        for row, entry in zip(rows[1:], found):
+            ui.line(row[0])
+            if "error" in entry:
+                ui.line(f"  {row[1]}")
+                continue
+            trained = f"trained {ui.plain(row[3])}" if entry["trained_at"] else "not trained yet"
+            learned = [f"learned from {row[2]}"] if entry["learned_from"] is not None else []
+            ui.line(f"  {ui.join([row[1], *learned, trained])}")
+            ui.line(f"  {ui.dim('forecasts for')} {row[4]}")
     for entry in found:
         if "error" in entry:
             ui.out()
@@ -3119,7 +3150,7 @@ def make_parser() -> argparse.ArgumentParser:
         description="Forecast how long a coding-agent task will take and what it will cost, before it runs.",
     )
     parser.add_argument("-v", "--version", action="version", version=f"yardstick-predict {__version__}")
-    commands = parser.add_subparsers(dest="command")
+    commands = parser.add_subparsers(dest="command", metavar="COMMAND", title="commands")
 
     create = commands.add_parser("create", help="Create a predictor from your past runs.")
     create.add_argument("name", nargs="?", help="The predictor's name. In a terminal it asks. Otherwise: default.")

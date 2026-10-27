@@ -111,7 +111,12 @@ def ready(name: str) -> Ready | None:
 def describe() -> str:
     """Ask what the task is. An empty answer goes back home."""
     ui.out()
-    ui.line(f"{ui.bold('Estimate')}  {ui.dim('Forecast a task before you run it')}")
+    title, says = "Estimate", "Forecast a task before you run it"
+    if len(title) + 2 + len(says) <= ui.columns() - 3:
+        ui.line(f"{ui.bold(title)}  {ui.dim(says)}")
+    else:  # what it does goes under its name
+        ui.line(ui.bold(title))
+        ui.note(says)
     ui.out()
     ui.line("Describe the task, as you'd ask a coding agent.")
     ui.note("For example: add a dark mode toggle to the settings page")
@@ -188,7 +193,7 @@ def show(task: str, result: dict | None, predictor, several: bool = False) -> st
     while True:
         if forecasts:
             ui.out()
-            ui.line(f"{ui.bold(task)}" + (f"  {ui.dim(f'page {page + 1} of {count}')}" if count > 1 else ""))
+            cli.show_title(task, f"page {page + 1} of {count}" if count > 1 else "")
             shown = {**result, "forecasts": forecasts[page * PAGE : (page + 1) * PAGE], "too_few": []}
             cli.show_forecasts(task, shown, predictor, screen=True)
         ui.out()

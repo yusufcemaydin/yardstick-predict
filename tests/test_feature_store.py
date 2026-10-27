@@ -193,7 +193,7 @@ def test_a_feature_whose_folder_is_gone_has_no_rows_until_the_next_save():
     assert not feature_store.stored()[0].missing
 
 
-def test_an_unreadable_file_is_skipped_with_a_note_and_the_listing_names_it(capsys):
+def test_an_unreadable_file_is_skipped_with_a_note_and_the_listing_names_it(capsys, wide):
     feature_store.save_vectors(PROMPTS, [("t1", "h", vector(1, 2, 3, 4))])
     feature_store.save_vectors(PROMPTS, [("t2", "h", vector(1, 2, 3, 4))])
     broken = feature_store.folder() / PROMPTS.id / "part-2.parquet"
@@ -221,7 +221,7 @@ def damage_the_vectors(path: Path) -> None:
     path.write_bytes(bytes(raw))
 
 
-def test_a_vector_that_cant_be_read_doesnt_count_as_stored(capsys):
+def test_a_vector_that_cant_be_read_doesnt_count_as_stored(capsys, wide):
     feature_store.save_vectors(PROMPTS, [("t1", "h1", vector(1, 2, 3, 4))])
     feature_store.save_vectors(PROMPTS, [("t2", "h2", vector(5, 6, 7, 8))])
     # A part saved as before files had checksums, damaged where its vectors can't be read at all.
@@ -259,7 +259,7 @@ def test_a_task_whose_vector_cant_be_read_is_embedded_again_from_the_cache(voyag
     assert len(voyage.requests) == sent and sorted(predictor.get_embeddings("prompt")) == ["t0", "t1", "t2"]
 
 
-def test_a_file_of_another_feature_or_shape_is_skipped(capsys):
+def test_a_file_of_another_feature_or_shape_is_skipped(capsys, wide):
     feature_store.save_vectors(PROMPTS, [("t1", "h", vector(1, 2, 3, 4))])
     other = feature_store.embedding("context", "voyage-4", 4)
     feature_store.save_vectors(other, [("t9", "h", vector(1, 2, 3, 4))])
@@ -788,7 +788,7 @@ def listing(capsys, *flags: str) -> tuple[int, str]:
     return code, capsys.readouterr().out
 
 
-def test_the_listing_shows_each_feature_with_its_coverage(capsys, quickly):
+def test_the_listing_shows_each_feature_with_its_coverage(capsys, quickly, wide):
     assert main(["create", "--yes", *quickly, "--features", "conversation,context,time"]) == 0
     capsys.readouterr()
     code, out = listing(capsys)

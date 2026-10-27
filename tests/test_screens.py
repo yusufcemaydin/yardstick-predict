@@ -386,6 +386,54 @@ def widest(out: str) -> int:
     return max(ui.width(line) for line in plain(out).replace("\r", "\n").split("\n"))
 
 
+@pytest.mark.parametrize("width", [80, 45])
+def test_long_lines_and_questions_break_to_fit_and_a_command_stays_whole(capsys, monkeypatch, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    command = "yardstick-predict refresh --predictor main"
+    ui.note(f"This model was made by the previous version, and it still forecasts. Train it again with: {command}")
+    ui.ok("Forecasts are on for claude-opus-5-5, claude-sonnet-5-5, gpt-6-astra and gpt-6-luna at every level.")
+    ui.table([("1", "Claude subscription", ui.dim("through Claude Code. It counts toward your plan's usage limits."))])
+    asked = ui.prompt("Use your claude-code records in their default location (~/.claude/projects)?", "[Y/n]")
+    out = plain(capsys.readouterr().out)
+    assert widest(out) < width and widest(asked) < width
+    assert any(line.strip() == command or line.endswith(f" {command}") for line in out.splitlines())  # whole
+    done = out.splitlines()[out.splitlines().index(next(line for line in out.splitlines() if "✓" in line)) + 1]
+    assert done.startswith("    ") and not done.startswith("     ")  # lined up after the mark
+    assert plain(asked).endswith("[Y/n] ") and "\n    " in asked  # the answer goes after the last line
+    assert ui.prompt("Short?", "[Y/n]") == f"  {ui.accent('?')} Short? {ui.dim('[Y/n]')} "
+
+
+@pytest.mark.parametrize("width", [80, 45])
+def test_the_features_menu_and_the_ways_to_pay_fit_the_terminal(capsys, monkeypatch, width):
+    from yardstick_predict import features, menu
+
+    monkeypatch.setenv("COLUMNS", str(width))
+    groups = list(features.MENU)
+    menu._show(groups, {g.key: {o.key for o in g.options} for g in groups if not g.always}, {}, {})
+    menu.ui.table(
+        [(str(n), way.title, way.says) for n, way in enumerate(llm.PROVIDERS.values(), start=1)]
+    )  # as the question on how to pay shows them
+    out = capsys.readouterr().out
+    assert widest(out) < width
+    # Each option says on or off at the end of its line, lined up. Where there's no room for that, it says so first.
+    lined_up = re.search(r"^ {8}a  what its earlier tasks took and how big it is +on$", out, re.M)
+    first = re.search(r"^ {8}a  on   what its earlier tasks took", out, re.M)
+    assert (lined_up, first) != (None, None) and (lined_up is not None) == (width == 80)
+
+
+def test_a_task_as_a_title_takes_three_lines_at_most(capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "45")
+    cli.show_title("add a dark mode toggle to the settings page", "page 1 of 2")
+    assert plain(capsys.readouterr().out).splitlines() == [
+        "  add a dark mode toggle to the settings",
+        "  page  page 1 of 2",
+    ]
+    cli.show_title("fix the parser " * 30)
+    shown = plain(capsys.readouterr().out).splitlines()
+    assert len(shown) == 3 and shown[-1].endswith("…") and widest("\n".join(shown)) < 45
+
+
 def test_a_long_menu_shows_6_at_a_time_and_turns_the_page(capsys, monkeypatch):
     rows = [keys.Choice(f"model {number}", "updated 1 hour ago") for number in range(12)] + [keys.Choice("Back")]
     pressing(monkeypatch, keys.RIGHT, "7")

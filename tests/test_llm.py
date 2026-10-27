@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
+from builders import flat
 
 from yardstick_predict import llm
 
@@ -360,7 +361,7 @@ def test_setup_says_once_that_claude_code_isnt_signed_in_and_trains_without_it(c
     cli.analyze_with_progress(predictor, [llm.Ask(f"t{i}", "x") for i in range(60)])
     out = capsys.readouterr().out
     assert out.count("Claude Code isn't signed in here.") == 1
-    assert "Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again." in out
+    assert "Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again." in flat(out)
     assert predictor.llm_labels() == {}  # nothing noted, so the next refresh asks about every task
 
 

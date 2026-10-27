@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import jsonschema
 import pytest
-from builders import ClaudeSession, CodexSession, history
+from builders import ClaudeSession, CodexSession, flat, history
 from conftest import KEY
 
 from yardstick_predict import benchmarks, cli, embeddings, forecast, llm, model_types, pipeline
@@ -676,7 +676,7 @@ def test_llm_analysis_reads_each_task_once_and_its_descriptions_are_embedded(cap
     assert code == 0, out
     predictor = Predictor("default")
     assert predictor.config["llm"] == {"provider": "codex", "model": llm.DEFAULT_CODEX}
-    assert "LLM analysis: 180 tasks with Codex's own model through your chatgpt subscription" in out
+    assert "LLM analysis: 180 tasks with Codex's own model through your chatgpt subscription" in flat(out)
     assert "Analyzed 180 tasks." in out
     assert len(predictor.llm_labels()) == 180 and len(predictor.embedded("llm")) == 180
 
@@ -708,7 +708,7 @@ def test_a_model_made_by_a_version_before_the_previous_release_is_trained_again_
     path.write_text(json.dumps({**json.loads(path.read_text()), "format": model_types.PREVIOUS_FORMAT - 1}))
     assert pipeline.outdated(predictor) and not pipeline.from_previous_version(predictor)
     code, out = run(capsys, "status")
-    assert code == 0 and "gives no forecasts until it's trained again" in out
+    assert code == 0 and "gives no forecasts until it's trained again" in flat(out)
     # Its settings are from before the conversation was a feature to choose, when every predictor read it.
     predictor.config["format"] = 1
     predictor.save_config()
