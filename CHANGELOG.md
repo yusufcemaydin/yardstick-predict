@@ -38,12 +38,13 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - On a Mac, a forecast and the status line start faster. XGBoost loads without scikit-learn, which yardstick never uses. scikit-learn stays installed there for its copy of OpenMP.
 - Costs under a cent show their first digits, such as $0.0021, instead of $0.00.
 - Every progress bar keeps its step's label. Reading your records used to show a bar like `0 KB / 6.2 GB` with no word of what it was.
+- The README is a third as long. It says what yardstick-predict does, how to install it and how to start, with a short table of commands. Everything else moved to [the guide](docs/guide.md): the home screen, the features, LLM analysis, costs, settings for experts, plugins, privacy and how to update or remove it.
 - After the feature check, setup says which features stay on and which go off, then asks once whether to go on and make the predictor. It used to open the Features screen again, which looked like starting over. Saying no still opens it, to change them first.
 
 ### Fixed
 
 - What other services say is cleaned before it's shown. An error from Voyage, Anthropic, OpenAI, Claude Code, Codex, OpenRouter or PyPI used to be printed as it came, hidden codes included. Such codes could make a terminal show something else, change its title or write over a line. The words stay. The codes go.
-- The README's steps for removing everything start by taking the forecasts out of Claude Code. Without that, Claude Code kept running a program that was gone.
+- The guide's steps for removing everything start by taking the forecasts out of Claude Code. Without that, Claude Code kept running a program that was gone.
 - The cost shown before an update now counts embedding the descriptions LLM analysis writes. A refresh used to embed them without having priced them.
 - A model with a file missing or damaged no longer breaks every forecast with a request for a bug report. Forecasts say the model is damaged and needs training. The next refresh trains it again, where it used to say the model was up to date.
 - One field of an unexpected type in a Codex record no longer stops the whole import. That field is skipped.
@@ -55,7 +56,7 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - A refresh asks for a Voyage key only when texts go to Voyage. It warns about a damaged record of Voyage usage before the question, not after.
 - A task whose prompt changed is analyzed again by LLM analysis, which kept what it said of the old prompt. Answers from before this version aren't read again. So the upgrade costs nothing.
 - A mistyped feature or option with `--features` is refused before any record is read. So are LLM flags without the `llm` feature.
-- Setup and the README said the three features always on send nothing anywhere. For them, each prompt goes to Voyage. They say so now.
+- Setup and the docs said the three features always on send nothing anywhere. For them, each prompt goes to Voyage. They say so now.
 - Messages that said to run yardstick-predict to train again now name `yardstick-predict refresh`. A bare `yardstick-predict` opens the home screen now, where Update does it.
 - `predict "TASK"` in a terminal says when there's not enough data for any AI model yet, instead of an error meant for programs. An empty task is asked to have some text.
 - The first download of Voyage's tokenizer no longer draws its own progress bar over the screen.
