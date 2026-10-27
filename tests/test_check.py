@@ -490,7 +490,7 @@ def test_llm_analysis_reads_a_sample_for_the_check_and_the_rest_once_it_helps(ca
     out = ANSI.sub("", capsys.readouterr().out)
     # Before the check, LLM analysis reads only the newest 30% of the 180 tasks, with its cost shown first.
     assert read == [54, 126]
-    assert "LLM analysis: 54 tasks with Codex's own model through your chatgpt subscription" in flat(out)
+    assert "LLM analysis: 54 tasks with Codex's own model through your ChatGPT subscription" in flat(out)
     assert "For the check, it reads only your newest tasks." in out
     # The features that helped start on, the one that didn't starts off.
     after = out[out.index("The features that helped are on below.") :]

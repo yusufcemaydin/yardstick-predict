@@ -714,7 +714,7 @@ def test_llm_analysis_reads_each_task_once_and_its_descriptions_are_embedded(cap
     assert code == 0, out
     predictor = Predictor("main")
     assert predictor.config["llm"] == {"provider": "codex", "model": llm.DEFAULT_CODEX}
-    assert "LLM analysis: 180 tasks with Codex's own model through your chatgpt subscription" in flat(out)
+    assert "LLM analysis: 180 tasks with Codex's own model through your ChatGPT subscription" in flat(out)
     assert "Analyzed 180 tasks." in out
     assert len(predictor.llm_labels()) == 180 and len(predictor.embedded("llm")) == 180
 

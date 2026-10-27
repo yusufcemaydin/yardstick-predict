@@ -674,7 +674,7 @@ def test_a_program_deletes_a_stored_feature_with_yes_and_reads_json(capsys, monk
     code, out = run(capsys, "features", "delete", answers)
     assert "LLM answers by Codex's own model, through your ChatGPT subscription" in out
     assert "Used by main. Its next refresh makes it again, for 40 tasks." in out
-    assert "LLM analysis: 40 tasks with Codex's own model through your chatgpt subscription" in flat(out)
+    assert "LLM analysis: 40 tasks with Codex's own model through your ChatGPT subscription" in flat(out)
     monkeypatch.setattr(command, "interactive", lambda: False)
 
     code, out = run(capsys, "features", "delete", answers)

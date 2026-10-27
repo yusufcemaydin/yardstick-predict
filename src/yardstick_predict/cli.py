@@ -486,7 +486,7 @@ def analysis_lines(asks: int, how: dict, tasks: int | None = None) -> list[str]:
     if not provider.billed:
         requests = -(-asks // provider.batch)
         return [
-            f"LLM analysis: {read} with {model} through your {provider.title.lower()}, "
+            f"LLM analysis: {read} with {model} through your {provider.title}, "
             f"in about {requests:,} requests. It counts toward your plan's usage limits."
         ]
     usd = llm.cost(asks, how["model"])
