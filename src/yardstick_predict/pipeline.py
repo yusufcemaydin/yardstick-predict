@@ -541,6 +541,9 @@ class Refresh:
     """Why the model is trained again even with nothing new: unfinished when training didn't finish last time,
     outdated when a version before the previous release made it, previous when the previous release did, damaged
     when a file of it is missing or can't be read."""
+    stored: float = 0.0
+    """About how many bytes the feature store holds for its tasks already: their vectors and LLM answers. Its data
+    counts them, as they're its data too, outside its dataset."""
 
     @property
     def up_to_date(self) -> bool:
@@ -577,7 +580,11 @@ def plan_refresh(predictor: Predictor, found: Scan, key: str | None) -> Refresh:
     pending = embedding_items(everything, chosen, have, limit, predictor.config, labels)
     asks = analysis_plan(everything, predictor.config, labels or {}, limit)
     described = len(asks) if asks and "description" in features.options(predictor.config, "llm") else 0
-    return Refresh(found, everything, price(pending, predictor.embedding_model, key), asks, described, meta, behind)
+    from .estimate import DISK_PER_ANSWER, DISK_PER_VECTOR
+
+    stored = DISK_PER_VECTOR * sum(len(vectors) for vectors in have.values()) + DISK_PER_ANSWER * len(labels or {})
+    embed = price(pending, predictor.embedding_model, key)
+    return Refresh(found, everything, embed, asks, described, meta, behind, stored)
 
 
 def newest_that_fit(plan: EmbedPlan, tokens: int, more_per_task: int = 0) -> int:

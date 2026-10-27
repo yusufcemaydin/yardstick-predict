@@ -387,9 +387,12 @@ def choose_features(can_ask: bool, args):
     """The features a person picks on the Features screen, or a program names with flags."""
     from . import menu
 
-    try:
-        if args.features is not None or not can_ask:
+    if args.features is not None or not can_ask:
+        try:
             return menu.from_flags(args.features, args.llm_provider, args.llm_model)
+        except ValueError as error:  # it's checked before a record is read
+            raise CommandError("invalid_request", f"{error} Nothing was read or spent.") from None
+    try:
         return menu.ask(custom_features())
     except ValueError as error:
         raise CommandError("invalid_request", str(error)) from None
@@ -467,14 +470,14 @@ def analysis_lines(asks: int, how: dict, tasks: int | None = None) -> list[str]:
 
 
 def say_estimate(
-    tasks: list, config: dict, plan, asks: list, new_tasks: list | None = None, dataset: int = 0, checked: int = 0
+    tasks: list, config: dict, plan, asks: list, new_tasks: list | None = None, dataset: float = 0, checked: int = 0
 ) -> None:
     """One line on how long the rest takes, what it's made of and the room the dataset takes, before the
     question to go ahead. Then a note on memory, only when training may use a lot of this computer's.
 
     `tasks` are all the predictor's tasks once the new ones are in, `config` its settings, `plan` what goes to
     Voyage and `asks` the tasks LLM analysis reads. `new_tasks` are the ones the dataset doesn't have yet, all of
-    `tasks` by default, and `dataset` is how many bytes it takes now. `checked` is how many features the feature
+    `tasks` by default, and `dataset` is how many bytes its data takes now. `checked` is how many features the feature
     check tests the model without, when it runs.
     """
     from . import estimate
@@ -913,6 +916,8 @@ def _create(args, held, answer: dict) -> int:
         raise CommandError(
             "invalid_request", f"Use --max-tasks {least} or more. Training needs at least {least} tasks."
         )
+    # Features named with flags are checked before a record is read, so a mistyped one is said at once.
+    picked = choose_features(can_ask, args) if args.features is not None or not can_ask else None
 
     ui.heading("Your past runs")
     archives = unique_names(choose_archives(can_ask, args.archive))
@@ -952,7 +957,7 @@ def _create(args, held, answer: dict) -> int:
             f"Only {ready} of those tasks can be learned from. Training needs at least {least}. "
             "Nothing was spent. Add more records, or try again after more runs.",
         )
-    picked = choose_features(can_ask, args)
+    picked = picked or choose_features(can_ask, args)
     chosen, settings = picked.features, picked.config()
     # From here, setup reads the feature store to plan what to make, and then saves to it. It holds the lock of the
     # store's users until it's done, so no features delete takes away what it planned with or saved.
@@ -1613,7 +1618,7 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
         tokens = planned.described * DESCRIPTION_TOKENS
         ui.note(f"Its descriptions are embedded too: about {tokens:,} more tokens, priced as above.")
     dataset = predictor.dir / "dataset.sqlite"
-    size = dataset.stat().st_size if dataset.is_file() else 0
+    size = (dataset.stat().st_size if dataset.is_file() else 0) + planned.stored
     say_estimate(everything, predictor.config, plan, asks, found.new_tasks, size)
     keep_to_limit(cost, "refresh")
     if can_ask:

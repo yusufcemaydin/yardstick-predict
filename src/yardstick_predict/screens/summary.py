@@ -110,7 +110,7 @@ def block(job, key: str | None) -> tuple[list[str], float, estimate.Estimate | N
         lines.append(f"Embed {texts:,} text{'' if texts == 1 else 's'} with Voyage")
         lines.append(ui.join([cli.money(paid), f"{'' if exact else 'about '}{tokens:,} tokens"]))
     dataset = predictor.dir / "dataset.sqlite"
-    size = dataset.stat().st_size if dataset.is_file() else 0
+    size = (dataset.stat().st_size if dataset.is_file() else 0) + planned.stored  # its vectors and answers too
     found = estimate.of(
         planned.tasks,
         config,

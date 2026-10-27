@@ -4,7 +4,7 @@ Enter picks the line you're on. To pick several, tick them with space first: Ent
 The choices are numbered on from one page to the next. A choice's number picks it at once, as in every menu,
 or ticks it once some are ticked. Two digits typed quickly make a number above 9. The up and down arrows move,
 on to the next page at the end of one. The left and right arrows turn the page. Esc goes back. A terminal that
-can't pass single key presses gets a page at a time, and the numbers typed in.
+can't pass single key presses gets a page at a time, and the numbers typed in. Enter on its own goes back there.
 """
 
 from __future__ import annotations
@@ -106,10 +106,10 @@ def _draw(choices, ticked: set[int], at: int, notes: list[str], drawn: int) -> i
     return keys.redraw(lines, drawn)
 
 
-def _typed(choices: list[keys.Choice], notes: list[str]) -> list[int]:
+def _typed(choices: list[keys.Choice], notes: list[str]) -> list[int] | None:
     """The list for a terminal that can't pass single key presses: a page at a time, the numbers to pick typed in,
     such as 2, or 1 3 for two. The numbers go on from page to page, so any choice can be typed on any page. n and p
-    turn the page."""
+    turn the page. Enter on its own, or b, goes back: None."""
     first = 0
     while True:
         for text in _page(choices, set(), first, None):
@@ -120,7 +120,10 @@ def _typed(choices: list[keys.Choice], notes: list[str]) -> list[int]:
         for note in notes:
             ui.note(note)
         more = " n or p turns the page." if pages(choices) > 1 else ""
-        reply = input(ui.prompt(f"Type the numbers to forecast, such as 2 or 1 3.{more}")).strip().lower()
+        question = f"Type the numbers to forecast, such as 2 or 1 3.{more} Enter on its own goes back."
+        reply = input(ui.prompt(question)).strip().lower()
+        if reply in ("", "b"):
+            return None
         picked: set[int] = set()
         for word in reply.replace(",", " ").split():
             if word == "n" and first + PAGE < len(choices):
@@ -131,5 +134,3 @@ def _typed(choices: list[keys.Choice], notes: list[str]) -> list[int]:
                 picked.add(int(word) - 1)
         if picked:
             return sorted(picked)
-        if not reply:
-            ui.note("Type at least one number.")

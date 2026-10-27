@@ -166,6 +166,28 @@ def test_setup_and_refresh_say_once_how_long_they_take_before_going_ahead(capsys
     assert out.count("Training may use up to about") == 1 and "more than a quarter of this computer's" in out
 
 
+def test_the_room_the_data_takes_never_goes_down_from_one_refresh_to_the_next(capsys, records, ready):
+    from yardstick_predict.store import Predictor
+
+    assert main(["create", "--yes", "--features", "", "--archive", f"claude-code={records}"]) == 0
+    predictor = Predictor("default")
+    predictor.config["features"] = ["prompt", "context"]  # the next refresh embeds every task's context
+    predictor.save_config()
+    sizes = []
+    for n in range(2):
+        session = ClaudeSession(records, f"more-{n}", START + (90 + n) * 86400)
+        session.prompt(f"one more task {n}")
+        session.reply(5)
+        session.save(mtime=START)
+        capsys.readouterr()
+        assert main(["refresh"]) == 2  # a program sees the cost first, then must agree
+        found = re.search(r"The dataset takes about (\d+) KB on disk", said(capsys))
+        sizes.append(int(found.group(1)))
+        assert main(["refresh", "--yes"]) == 0
+    # The vectors the first one made are in the feature store, and they still count.
+    assert sizes[1] >= sizes[0]
+
+
 def test_the_line_names_llm_analysis_by_the_way_its_paid(capsys, monkeypatch, records, ready):
     monkeypatch.setattr(llm, "analyze", fake_analysis([]))
     flags = ["--features", "llm", "--llm-provider", "claude", "--archive", f"claude-code={records}"]

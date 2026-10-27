@@ -295,9 +295,16 @@ def test_a_forecast_waits_for_a_model_being_swapped_in():
     assert model_ready(predictor) and time.time() - started >= 0.15
 
 
-def test_bad_choices_get_a_plain_reason(capsys, records, ready):
-    assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "horoscope"]) == 1
-    assert "Unknown feature" in capsys.readouterr().err
+def test_bad_choices_get_a_plain_reason(capsys, monkeypatch, records, ready):
+    from yardstick_predict import pipeline
+
+    real_read = pipeline.read_all
+    monkeypatch.setattr(pipeline, "read_all", lambda *args, **kwargs: pytest.fail("It read the records first"))
+    for flags in (["--features", "horoscope"], ["--features", "skills:bogus"], ["--llm-provider", "claude"]):
+        assert main(["create", "--yes", "--archive", f"claude-code={records}", *flags]) == 1
+        said = capsys.readouterr().err
+        assert "Nothing was read or spent." in said and ("Unknown feature" in said or "skills" in said or "llm" in said)
+    monkeypatch.setattr(pipeline, "read_all", real_read)
     assert main(["create", "--yes", "--archive", f"claude-code={records}", "--shape", "weibull", "--loss", "crps"]) == 1
     assert "crps" in capsys.readouterr().err
 

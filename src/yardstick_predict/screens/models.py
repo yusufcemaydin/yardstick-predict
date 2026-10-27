@@ -148,7 +148,7 @@ def delete(name: str) -> str | None:
     done(f"Deleted {name}.")
     left, now = predictor_names(), default_name()
     if was_default and now is not None:
-        note(f"{now} is your only model now. It's the default.")
+        note(f"{now} is your only model now. It's the default." if len(left) == 1 else f"{now} is the default now.")
     elif was_default and left:
         note(
             "It was your default. There's no default now. Until you choose one, Claude Code's status line shows no "

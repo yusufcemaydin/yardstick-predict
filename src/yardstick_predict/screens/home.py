@@ -10,12 +10,14 @@ import shutil
 import textwrap
 
 from .. import __version__, cli, ui
-from ..store import BrokenPredictor, predictor_names
+from ..store import BrokenPredictor, default_name, predictor_names
 from . import keys, listing, version
 
 DESCRIPTION = "Forecasts a coding-agent task's time and cost before it runs"
 NO_BOX_UNDER = 50
 """The box is left out in a terminal narrower than this many columns."""
+BOX_MODELS = 5
+"""How many models the box names, the default first. Models lists them all."""
 
 
 def run() -> int:
@@ -52,7 +54,9 @@ def greet(names: list[str]) -> None:
     lines = [f"{ui.accent(ui.mark('logo'))} {ui.bold('yardstick-predict')} {ui.dim(__version__)}"]
     lines += [f"  {part}" for part in textwrap.wrap(DESCRIPTION, 42)]
     lines.append("")
-    found = listing.models()
+    default = default_name()
+    first = sorted(names, key=lambda name: name != default)[:BOX_MODELS]  # sorted keeps the rest in name order
+    found = [(listing.label(name, default), listing.updated(name)) for name in first]
     if found:
         widest = max(ui.width(when) for _, when in found)
         pad = min(max(ui.width(name) for name, _ in found), max(room - 2 - 2 - widest, 8))
@@ -60,6 +64,8 @@ def greet(names: list[str]) -> None:
         for name, when in found:
             name = ui.cut(name, pad)  # a name too long for the terminal is cut short
             lines.append(ui.cut(f"  {name}{' ' * (pad - ui.width(name))}  {ui.dim(when)}", room))
+        if len(names) > len(found):
+            lines.append(f"  {ui.dim(f'and {len(names) - len(found)} more in Models')}")
     else:
         lines.append("  No models yet")
     ui.out()

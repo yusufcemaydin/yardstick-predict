@@ -8,7 +8,7 @@ import re
 import time
 
 import pytest
-from builders import ClaudeSession, history
+from builders import ClaudeSession, flat, history
 from conftest import KEY
 from test_cli import QuickModel, fake_analysis, quick_meta, quick_train
 
@@ -140,6 +140,17 @@ def test_a_terminal_that_cant_pass_single_keys_gets_a_number_typed_in(capsys, mo
 # The home screen ----------------------------------------------------------------------------------------------
 
 
+def test_the_home_screen_names_five_models_at_most_the_default_first(capsys, monkeypatch):
+    for name in ("alpha", "beta", "gamma", "delta", "epsilon", "zeta", "omega"):
+        made(name)
+    set_default("omega")
+    pressing(monkeypatch, keys.ESC)
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    shown = re.findall(r"│\s+(\w+)(?: \(default\))?\s+updated", out)
+    assert shown == ["omega", "alpha", "beta", "delta", "epsilon"] and "and 2 more in Models" in out
+
+
 def test_the_home_screen_greets_lists_the_models_and_reads_nothing_heavy(capsys, monkeypatch):
     made("main")
     made("llm")
@@ -151,9 +162,9 @@ def test_the_home_screen_greets_lists_the_models_and_reads_nothing_heavy(capsys,
     out = plain(capsys.readouterr().out)
     assert f"yardstick-predict {__version__}" in out
     assert "Forecasts a coding-agent task's time and" in out
-    assert re.search(r"│\s+Your models\s+│\n│\s+llm\s+updated", out)  # the list says what it is
-    assert re.search(r"main \(default\)\s+updated \d+ days ago", out)
-    assert re.search(r"\n│\s+llm\s+updated", out)
+    # The list says what it is, with the default first.
+    assert re.search(r"│\s+Your models\s+│\n│\s+main \(default\)\s+updated \d+ days ago", out)
+    assert re.search(r"\n│\s+llm\s+updated", out) and "more in Models" not in out
     assert "What would you like to do?" in out
     for line in ("1. Estimate", "2. Update", "3. Models", "4. Add New", "5. Quit"):
         assert line in out, line
@@ -244,9 +255,12 @@ def test_a_list_without_single_keys_takes_typed_numbers(capsys, monkeypatch):
 
     monkeypatch.setattr(keys, "reader", lambda: None)
     rows = [keys.Choice(f"model {number}") for number in range(8)]
-    typing(monkeypatch, "", "2 7")  # the numbers go on from page to page
+    asked = typing(monkeypatch, "x", "2 7")  # the numbers go on from page to page
     assert checklist.tick(rows) == [1, 6]
-    assert "Type at least one number." in plain(capsys.readouterr().out)
+    assert flat(asked[0]).endswith("n or p turns the page. Enter on its own goes back.")
+    for back in ("", "b"):  # Enter on its own goes back, as Esc does where single keys pass
+        typing(monkeypatch, back)
+        assert checklist.tick(rows) is None
 
 
 def test_menus_and_the_forecast_table_fit_an_80_column_terminal(capsys, monkeypatch):
@@ -860,6 +874,13 @@ def test_deleting_the_default_model_says_which_is_the_default_now(capsys, monkey
     assert main([]) == 0
     assert "c is your only model now. It's the default." in plain(capsys.readouterr().out)
     assert predictor_names() == ["c"] and default_name() == "c"
+    made("default")
+    made("x")
+    set_default("c")  # of three, so the one called default becomes the default once c goes
+    pressing(monkeypatch, "3", "1", "3", keys.DOWN, keys.ENTER, keys.ESC, keys.ESC)  # c, the default
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    assert "Deleted c." in out and "default is the default now." in out and "only model" not in out
 
 
 def test_a_model_being_updated_isnt_deleted_from_its_screen(capsys, monkeypatch):
@@ -1055,6 +1076,25 @@ def test_setup_suggests_main_for_the_first_model(monkeypatch):
     assert cli.ask_name([]) == "main" and asked == ["Name this predictor: [main]"]
     asked = typing(monkeypatch, "", "work")  # a later one gets no name it could clash with
     assert cli.ask_name(["main"]) == "work" and asked == ["Name this predictor:", "Name this predictor:"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a pseudo terminal is for macOS and Linux")
+def test_keys_pressed_quickly_each_count(monkeypatch):
+    import pty
+    import tty
+
+    sent, received = pty.openpty()
+    tty.setcbreak(received)  # nothing typed is shown back, as no one reads what the terminal shows
+    monkeypatch.setattr("sys.stdin", os.fdopen(received, "r"))
+    monkeypatch.setattr(keys, "_ahead", bytearray())
+    # An arrow and Enter at once, two arrows at once, an arrow of the other mode, j, a key that types ², Esc and k
+    # at once, then Esc on its own.
+    os.write(sent, b"\x1b[B\r\x1b[A\x1b[A\x1bOCj\xc2\xb2\x1bk\x1b")
+    try:
+        got = [keys._posix_key(timeout=1) for _ in range(10)]
+    finally:
+        os.close(sent)
+    assert got == [keys.DOWN, keys.ENTER, keys.UP, keys.UP, keys.RIGHT, keys.DOWN, "²", keys.ESC, keys.UP, keys.ESC]
 
 
 # Windows ---------------------------------------------------------------------------------------------------------

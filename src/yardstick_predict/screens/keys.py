@@ -61,8 +61,14 @@ def _terminal() -> str | None:
     return "posix"
 
 
+_ahead = bytearray()
+"""A key read with the one before it, as when Esc and another key come at once. It's the next key."""
+
+
 def _posix_key(timeout: float | None = None) -> str:
-    """The next key pressed, with the terminal set to pass each one at once and show none of them."""
+    """The next key pressed, with the terminal set to pass each one at once and show none of them.
+
+    It reads only the bytes of that key, so keys pressed quickly, such as an arrow and then Enter, each count."""
     import select
     import termios
     import tty
@@ -71,18 +77,40 @@ def _posix_key(timeout: float | None = None) -> str:
     saved = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd, termios.TCSANOW)  # Ctrl+C still stops it, and keys pressed ahead aren't thrown away
-        if timeout is not None and not select.select([fd], [], [], timeout)[0]:
+        if _ahead:
+            first = bytes([_ahead.pop(0)])
+        elif timeout is not None and not select.select([fd], [], [], timeout)[0]:
             return ""
-        first = os.read(fd, 1)
+        else:
+            first = os.read(fd, 1)
         if first != b"\x1b":
-            return _named(first.decode(errors="replace"))
+            return _named(_character(fd, first))
         # An arrow key sends more bytes at once. Esc on its own sends none.
         if not select.select([fd], [], [], 0.05)[0]:
             return ESC
-        rest = os.read(fd, 8).decode(errors="replace")
-        return _ARROWS.get(rest[:2], "")
+        kind = os.read(fd, 1)
+        if kind == b"O":  # an arrow in the terminal's other mode: one byte more
+            return _ARROWS.get("O" + os.read(fd, 1).decode(errors="replace"), "")
+        if kind != b"[":
+            _ahead.extend(kind)  # Esc, then another key straight after it
+            return ESC
+        sequence = b""
+        while len(sequence) < 16:  # up to the byte that ends the sequence
+            sequence += os.read(fd, 1)
+            if 0x40 <= sequence[-1] <= 0x7E:
+                break
+        return _ARROWS.get("[" + sequence.decode(errors="replace"), "")
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def _character(fd: int, first: bytes) -> str:
+    """The whole character a key typed, which in UTF-8 can take up to 4 bytes, the first of them read already."""
+    count = 4 if first[0] >= 0xF0 else 3 if first[0] >= 0xE0 else 2 if first[0] >= 0xC0 else 1
+    found = first
+    while len(found) < count:
+        found += bytes([_ahead.pop(0)]) if _ahead else os.read(fd, 1)
+    return found.decode(errors="replace")
 
 
 def _windows_key(timeout: float | None = None) -> str:
