@@ -457,7 +457,7 @@ def analysis_plan(tasks: list[Task], config: dict, labels: dict, limit: int | No
     return [
         llm.Ask(task.id, task.prompt, task.context, task.session)
         for task in learnable(tasks, limit)
-        if llm.needs(labels.get(task.id), how, fields)
+        if llm.needs(labels.get(task.id), how, fields, llm.read_of(task.prompt, task.context))
     ]
 
 
@@ -564,9 +564,11 @@ def plan_refresh(predictor: Predictor, found: Scan, key: str | None) -> Refresh:
     elif meta is not None and not loads(predictor):
         behind = "damaged"
     chosen = chosen_features(predictor)
-    # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished.
+    # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished. One its
+    # records no longer hold is taken out as the scan is saved, so nothing is planned, priced or analyzed for it.
     updated = {task.id: task for task in found.updated_tasks}
-    everything = [updated.get(task.id, task) for task in predictor.tasks()] + found.new_tasks
+    gone = set(found.removed)
+    everything = [updated.get(task.id, task) for task in predictor.tasks() if task.id not in gone] + found.new_tasks
     # The new tasks count too: the feature store may have their vectors already, from another predictor.
     ids = {task.id for task in everything}
     have = {name: predictor.embedded(name, ids) for name in chosen if features.is_text(name)}

@@ -139,18 +139,38 @@ def update(work: list[Work]) -> int:
         ui.out()
         ui.line(f"Nothing new {since}.")
         return 0
+    # A key is needed only for the texts that go to Voyage: LLM analysis needs none of it. It's asked for before the
+    # summary, so the summary counts its free tokens, and nothing is asked after the yes.
+    voyage = [job for job in todo if job.planned.embed.texts or job.planned.described]
+    if voyage and not key:
+        key = cli.get_key(voyage[0].predictor.embedding_model, True)
+        if not key:
+            return 1
+    if key:
+        cli.damaged_usage_note(key)
+    from .. import spending
+
+    costs = {
+        id(job): spending.cost_of(
+            job.predictor.config,
+            job.predictor.embedding_model,
+            job.planned.embed,
+            job.planned.asks,
+            job.planned.described,
+        )
+        for job in todo
+    }
+    cli.keep_to_limit(list(costs.values()), "update")  # with --max-cost, before anything is asked or spent
     if not summary.ask(work, key):
         ui.out()
         ui.note("Nothing was spent or saved.")
         return 0
-    if any(job.planned.embed.items or job.planned.asks for job in todo):
-        key = key or cli.get_key(todo[0].predictor.embedding_model, True)
-        if not key:
-            return 1
     ui.out()
     code = 0
-    for job in work:
-        code = max(code, apply(job, key))
+    for number, job in enumerate(work):
+        # What the models after this one may cost is kept out of what this one may spend, under a limit.
+        later = sum(costs[id(other)].most_usd or 0.0 for other in work[number + 1 :] if id(other) in costs)
+        code = max(code, apply(job, key, later))
     return code
 
 
@@ -254,9 +274,11 @@ def settle(job: Work) -> None:
         job.predictor.save_config()
 
 
-def apply(job: Work, key: str | None) -> int:
+def apply(job: Work, key: str | None, later: float = 0.0) -> int:
     """Save what was found, analyze, embed and train, each step with a labelled bar. Then one line on how it
-    went. Returns 1 when a step failed, else 0."""
+    went. Returns 1 when a step failed, else 0. Under a --max-cost limit, `later` is the most the models updated
+    after this one may cost, kept out of what this one may spend."""
+    from .. import llm, spending
     from ..model import NotEnoughData
     from ..pipeline import plan_embeddings, refresh_benchmarks, run_analysis, save_scan, train
 
@@ -271,8 +293,18 @@ def apply(job: Work, key: str | None) -> int:
     if warning:
         ui.note(warning)
     if planned.asks:
+        budget = None
+        if cli._limit is not None and llm.PROVIDERS[predictor.config["llm"]["provider"]].billed:
+            reserve = spending.embedding_most_usd(planned.embed, predictor.embedding_model, planned.described)
+            budget = llm.Budget(cli._limit.left() - reserve - later)
         ui.working(f"{name}  Analyzing with {summary.analyst(predictor.config['llm'])}")
-        _, problem = run_analysis(predictor, planned.asks, lambda done, total: ui.progress(done, total, "tasks"))
+        try:
+            _, problem = run_analysis(
+                predictor, planned.asks, lambda done, total: ui.progress(done, total, "tasks"), budget
+            )
+        finally:
+            if budget is not None:
+                cli._limit.spent += budget.spent
         if problem:
             ui.note(f"{name}: {problem} It trains without LLM analysis for now. The next update tries again.")
     if not embed(predictor, planned.embed, key):
@@ -302,10 +334,16 @@ def apply(job: Work, key: str | None) -> int:
 
 def embed(predictor: Predictor, plan, key: str | None) -> bool:
     """Embed what the plan holds with a labelled bar. False when Voyage stopped it."""
+    from .. import spending
     from ..pipeline import run_embeddings
 
     if not plan.items:
         return True
+    most = spending.embedding_most_usd(plan, predictor.embedding_model)
+    if cli._limit is not None and not cli._limit.fits(most):
+        ui.fail(f"{predictor.name} stopped at your spending limit: embedding may cost up to {spending.dollars(most)}.")
+        ui.note("What was done so far is saved. With a higher --max-cost, the next update goes on from there.")
+        return False
     ui.working(f"{predictor.name}  Embedding with Voyage")
     try:
         run_embeddings(predictor, plan, key, lambda done, total: ui.progress(done, total, "texts"), ui.note)
@@ -313,4 +351,6 @@ def embed(predictor: Predictor, plan, key: str | None) -> bool:
         ui.fail(f"{predictor.name} stopped: {cli.explain(error)}")
         ui.note("What was embedded so far is saved. Update again to finish.")
         return False
+    if cli._limit is not None:
+        cli._limit.spent += most
     return True

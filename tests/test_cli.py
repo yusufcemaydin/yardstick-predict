@@ -142,7 +142,7 @@ def test_a_task_counts_toward_the_free_tokens_only_when_all_its_texts_fit():
 def test_pressing_enter_on_the_free_tokens_question_assumes_no_credits(capsys, ready, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda question="": "")
     assert cli.get_key("voyage-4", can_ask=True) == KEY
-    assert "y   yes, or I'm not sure - report costs assuming no credits" in capsys.readouterr().out
+    assert "y   yes, or not sure. Costs then count no free tokens." in capsys.readouterr().out
     assert embeddings.account(KEY)["free_tokens"] == "unknown"
 
 
@@ -151,7 +151,7 @@ def test_a_program_must_agree_to_the_cost(capsys, records, ready):
     assert code == 2
     assert "list price" in out and "--yes" in out
     assert predictor_names() == []  # nothing is created before the yes
-    assert len(ready.requests) == 1  # only the tiny key check was sent
+    assert not ready.requests  # nothing at all went to Voyage, not even a check of the key
 
     code, out = run(capsys, "create", "--archive", f"claude-code={records}", "--yes", *ONE_WINDOW)
     assert code == 0, out
@@ -422,13 +422,63 @@ def test_setup_and_refresh_answer_a_program_in_json(capsys, few, ready, quick):
     assert code == 1 and json.loads(out)["error"]["code"] == "invalid_request"  # a second one needs a name
 
 
+def test_a_second_predictor_pays_for_no_vector_the_feature_store_has(capsys, few, ready, quick):
+    import shutil
+
+    from yardstick_predict import store
+
+    assert main(["create", "first", "--express", "--archive", f"claude-code={few}", *quick]) == 0
+    shutil.rmtree(store.home() / "cache")  # the cache of vectors is gone: only the feature store has them
+    capsys.readouterr()
+    sent = len(ready.requests)
+    code, out = run(capsys, "create", "second", "--yes", "--json", "--archive", f"claude-code={few}", *quick)
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and answer["cost"]["embedding"]["texts"] == 0 and answer["embedded"] == 0
+    assert len(ready.requests) == sent  # nothing went to Voyage, not even a check of the key
+    assert len(Predictor("second").embedded("prompt")) == 40
+
+
+def test_a_refresh_with_nothing_for_voyage_needs_no_key(capsys, monkeypatch, few, ready, quick):
+    assert main(["create", "--express", "--archive", f"claude-code={few}", *quick]) == 0
+    feature = "embedding.prompt.voyage-4.256"
+    assert main(["features", "delete", feature, "--yes"]) == 0  # the cache of vectors still holds every text
+    capsys.readouterr()
+    monkeypatch.delenv("VOYAGE_API_KEY")
+    sent = len(ready.requests)
+    code, out = run(capsys, "refresh", "--yes", "--json")
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and answer["cost"]["embedding"]["texts"] == 0
+    assert len(ready.requests) == sent and len(Predictor("default").embedded("prompt")) == 40  # all from the cache
+
+
+def test_a_task_whose_text_changed_is_read_again_and_others_are_not(capsys, monkeypatch, few, ready, quick):
+    import dataclasses
+
+    from test_llm import answer_for, ids_in
+
+    from yardstick_predict.pipeline import analysis_plan
+
+    monkeypatch.setattr(llm, "_anthropic", lambda model, system, text, shape, **limits: answer_for(ids_in(text)))
+    flags = ["--features", "llm:kind", "--llm-provider", "anthropic", "--archive", f"claude-code={few}", *quick]
+    assert main(["create", "--yes", *flags]) == 0
+    predictor = Predictor("default")
+    labels = predictor.llm_labels()
+    tasks = predictor.tasks()
+    assert all(labels[task.id].get("read") for task in tasks)  # each answer says what it read, through the store
+    assert analysis_plan(tasks, predictor.config, labels) == []
+    changed = [dataclasses.replace(tasks[0], prompt="Fix the security bug in the login form"), *tasks[1:]]
+    assert [ask.id for ask in analysis_plan(changed, predictor.config, labels)] == [tasks[0].id]
+    old = {task_id: {k: v for k, v in found.items() if k != "read"} for task_id, found in labels.items()}
+    assert analysis_plan(changed, predictor.config, old) == []  # an answer that doesn't say what it read stays
+
+
 def test_a_spending_limit_stops_before_anything_is_spent(capsys, few, ready, quick):
     setup = ["create", "--yes", "--json", "--archive", f"claude-code={few}", *quick]
     code, out = run(capsys, *setup, "--max-cost", "0")
     error = json.loads(out)["error"]
     assert code == 1 and error["code"] == "over_max_cost"
     assert "more than your limit of $0. Nothing was spent or saved. Raise --max-cost" in error["message"]
-    assert predictor_names() == [] and len(ready.requests) == 1  # only the tiny key check was sent
+    assert predictor_names() == [] and not ready.requests  # nothing went to Voyage
     for bad in ("-1", "nan"):
         code, out = run(capsys, *setup, "--max-cost", bad)
         assert code == 1 and json.loads(out)["error"]["code"] == "invalid_request"
@@ -1359,6 +1409,27 @@ def test_a_refresh_takes_out_tasks_their_records_no_longer_hold(capsys, tmp_path
     out = capsys.readouterr().out
     assert "Nothing new" not in out and "taken out" in out
     assert Predictor("default").count_tasks() == 2
+
+
+def test_a_refresh_plans_nothing_for_tasks_it_takes_out(capsys, tmp_path, ready, quick):
+    from yardstick_predict.pipeline import plan_refresh, scan
+
+    root = tmp_path / "records"
+    session = ClaudeSession(root, "s1", START)
+    for n in range(3):
+        session.prompt(f"task {n}")
+        session.reply(5)
+        session.clock += 60
+    session.save(mtime=START)
+    assert main(["create", "--yes", *quick, "--features", "", "--archive", f"claude-code={root}"]) == 0
+    predictor = Predictor("default")
+    gone = [task.id for task in predictor.tasks() if task.prompt == "task 2"]
+    session.lines = session.lines[:-2]  # the last task is gone from the record
+    session.save(mtime=START + 60)
+    found = scan(predictor)
+    assert found.removed == gone
+    planned = plan_refresh(predictor, found, KEY)
+    assert gone[0] not in {task.id for task in planned.tasks}  # neither priced nor analyzed
 
 
 def test_a_predictor_read_by_an_older_reader_reads_its_records_again_once(capsys, tmp_path, ready, quick):

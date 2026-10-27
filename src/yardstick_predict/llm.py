@@ -12,6 +12,7 @@ they never show up in the records the predictor learns from.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import math
@@ -402,7 +403,9 @@ def analyze(
     done = 0
 
     def run(batch: list[Ask]) -> tuple[dict[str, dict], str | None, float | None]:
-        unanswered = {"by": by, "fields": fields, "failed": True}
+        def unanswered(ask: Ask) -> dict:
+            return {"by": by, "fields": fields, "failed": True, "read": read_of(ask.prompt, ask.context)}
+
         # Under a budget, an answer can't run longer than was set aside, and no other AI model is asked instead.
         limits = {"most_tokens": answer_tokens(len(batch)), "fallback": False} if budget is not None else {}
         try:
@@ -410,16 +413,17 @@ def analyze(
         except LLMError as error:
             if not error.lasting:
                 raise
-            return {ask.id: dict(unanswered) for ask in batch}, str(error), None
+            return {ask.id: unanswered(ask) for ask in batch}, str(error), None
         usd = spent(answer, how["model"])
-        wanted, found = {ask.id for ask in batch}, {}
+        wanted, found = {ask.id: ask for ask in batch}, {}
         for entry in answer.get("tasks") or [] if isinstance(answer, dict) else []:
             if isinstance(entry, dict) and entry.get("id") in wanted and entry["id"] not in found:
                 clean = _clean(entry, fields)
                 if clean is not None:
-                    found[entry["id"]] = {**clean, "by": by, "fields": fields}
+                    ask = wanted[entry["id"]]
+                    found[entry["id"]] = {**clean, "by": by, "fields": fields, "read": read_of(ask.prompt, ask.context)}
         for ask in batch:
-            found.setdefault(ask.id, dict(unanswered))  # skipped, or answered with something that makes no sense
+            found.setdefault(ask.id, unanswered(ask))  # skipped, or answered with something that makes no sense
         return found, None, usd
 
     def most(batch: list[Ask]) -> float | None:
@@ -507,13 +511,24 @@ def analyze(
     return Analysis(answers, (stopped or problems or [None])[0])
 
 
-def needs(labels: dict | None, how: dict, fields: list[str]) -> bool:
-    """Whether a task needs analyzing: no answer yet, one from another model or without every field, or a
-    refusal of these fields that hasn't been tried MAX_TRIES times. A refusal of other fields doesn't count."""
+def read_of(prompt: str, context: str) -> str:
+    """A short fingerprint of the text the AI model reads of a task, as it's sent: the start of its prompt and the
+    end of the conversation before it. An answer made from another text is read again."""
+    sent = f"{prompt[:PROMPT_CHARS]}\x00{context[-CONTEXT_CHARS:] if context.strip() else ''}"
+    return hashlib.sha256(sent.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def needs(labels: dict | None, how: dict, fields: list[str], read: str | None = None) -> bool:
+    """Whether a task needs analyzing: no answer yet, one from another model or without every field, one made from
+    another text than `read` says the task has now, or a refusal of these fields that hasn't been tried MAX_TRIES
+    times. A refusal of other fields doesn't count. An answer saved before answers said what they read is taken as
+    made from the text the task has, so nothing is read again, and paid for again, on an upgrade."""
     if not labels:
         return True
     if labels.get("by") != f"{how['provider']}:{how['model']}" or not set(fields) <= set(labels.get("fields") or []):
         return True
+    if read is not None and labels.get("read") not in (None, read):
+        return True  # the task's text changed since it was read
     if all(name in labels for name in fields):
         return False  # every field asked for is answered, as when it refused only another predictor's
     return bool(labels.get("failed")) and unanswered(labels).get(_parts(fields), 0) < MAX_TRIES
@@ -568,6 +583,8 @@ def merge(before: dict | None, labels: dict) -> dict:
     before = before or {}
     if before.get("by") != labels.get("by"):
         before = {}  # another AI model's answer is replaced whole
+    elif before.get("read") and labels.get("read") and before["read"] != labels["read"]:
+        before = {}  # so is an answer about another text the task had
     kept = {name: value for name, value in before.items() if name in FIELDS}
     asked = labels.get("fields") or []
     fields = list(dict.fromkeys([*(before.get("fields") or []), *asked]))

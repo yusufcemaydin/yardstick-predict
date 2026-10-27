@@ -106,6 +106,11 @@ def embedding_most_usd(plan, model: str, described: int = 0) -> float:
     return (tokens + described * llm.DESCRIPTION_TOKENS) / 1e6 * _price(model)
 
 
+def voyage_usd(tokens: int, model: str) -> float:
+    """What these tokens cost at Voyage's list price for the model."""
+    return tokens / 1e6 * _price(model)
+
+
 class Limit:
     """A limit on what one setup or refresh spends, in US dollars at list price, with what it has spent so far."""
 

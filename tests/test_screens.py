@@ -962,6 +962,19 @@ def test_the_summary_prices_the_descriptions_llm_analysis_writes(capsys, monkeyp
     assert len(seen) == analyzed  # nothing was analyzed before the question
 
 
+def test_refresh_with_a_spending_limit_keeps_to_it_on_the_update_screen(capsys, monkeypatch, quick, ready, records):
+    assert main(["create", "--express", *quick]) == 0
+    new_work(records)
+    capsys.readouterr()
+    pressing(monkeypatch)  # no key is pressed: it stops before the question
+    assert main(["refresh", "--max-cost", "0"]) == 1
+    assert "more than your limit of $0. Nothing was spent or saved." in " ".join(capsys.readouterr().err.split())
+    assert Predictor("default").count_tasks() == 40
+    pressing(monkeypatch, keys.ENTER)  # Update default
+    assert main(["refresh", "--max-cost", "1"]) == 0
+    assert "Found 3 new tasks" in plain(capsys.readouterr().out) and Predictor("default").count_tasks() == 43
+
+
 def test_refresh_in_a_terminal_uses_the_summary_and_yes_asks_nothing(capsys, monkeypatch, quick, ready, records):
     assert main(["create", "--express", *quick]) == 0
     new_work(records)
@@ -1121,3 +1134,16 @@ def test_a_version_from_pypi_shows_only_when_it_looks_like_one(monkeypatch):
         store.private_home()
         (store.home() / "update-check.json").write_text(json.dumps({"at": time.time(), "latest": latest}))
         assert (version.notice() is not None) == shown, latest
+
+
+def test_ranges_of_cheap_tasks_still_say_something():
+    assert cli.span_words((0.0042, 0.0087), cli.short_money) == "$0.0042 to $0.0087"
+    assert cli.span_words((0.0061, 0.0094), cli.short_money) == "$0.0061 to $0.0094"
+    assert cli.span_words((3.2, 3.4), cli.duration) == "3 s"  # both ends read the same: one is enough
+    assert cli.cost_lines(embeddings_cost(5_000), "voyage-4", 3)[1] == "It costs <$0.01 at Voyage's list price."
+
+
+def embeddings_cost(tokens: int):
+    from yardstick_predict import embeddings
+
+    return embeddings.Cost(tokens, True, 0.06, None)

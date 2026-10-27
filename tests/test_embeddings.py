@@ -632,3 +632,18 @@ def test_vectors_saved_before_hashes_were_kept_are_trusted_for_the_prompt_and_co
 def test_voyages_own_words_are_kept_but_never_a_code_a_terminal_acts_on():
     error = embeddings.VoyageError(400, "Bad \x1b]0;a title\x07request\x1b[2J")
     assert error.detail == "Bad request" and str(error) == "Voyage said 400: Bad request"
+
+
+def test_a_damaged_vector_in_the_cache_counts_as_missing_and_a_good_one_replaces_it(voyage):
+    db = embeddings._open_cache()
+    damaged = ("voyage-4", embeddings.DIMENSIONS, embeddings.text_hash("fix the parser"), b"too short")
+    db.execute("INSERT INTO vectors VALUES (?, ?, ?, ?)", damaged)
+    db.commit()
+    db.close()
+    # Priced as missing, as it's read as missing: so what it costs is never left out.
+    assert embeddings.in_cache("voyage-4", ["fix the parser"]) == set()
+    assert embeddings.cached("voyage-4", ["fix the parser"]) == {}
+    list(embeddings.embed(["fix the parser"], "voyage-4", KEY, counts=[4]))
+    # The vector Voyage sent took the damaged one's place.
+    assert len(embeddings.cached("voyage-4", ["fix the parser"])["fix the parser"]) == embeddings.DIMENSIONS
+    assert embeddings.in_cache("voyage-4", ["fix the parser"]) == {"fix the parser"}

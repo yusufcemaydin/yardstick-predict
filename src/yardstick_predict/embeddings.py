@@ -529,14 +529,21 @@ def _send(body: dict, tokens: float, key: str, room: _Room, on_wait: Callable[[s
         return reply
 
 
-def check_key(key: str, model: str) -> None:
-    """Make one tiny request to confirm the key works. Raises VoyageError when it doesn't."""
+KEY_CHECK_TOKENS = 8
+"""The most tokens the key check sends."""
+
+
+def check_key(key: str, model: str) -> int:
+    """Make one tiny request to confirm the key works, and return the tokens it used. Raises VoyageError when the
+    key doesn't work."""
     body = {"input": ["yardstick-predict key check"], "model": model, "output_dimension": DIMENSIONS}
     try:
-        reply = _send(body, 8, key, _Room(cap=math.inf, patience=PATIENT), None)
+        reply = _send(body, KEY_CHECK_TOKENS, key, _Room(cap=math.inf, patience=PATIENT), None)
     except _TooBig as refused:
         raise refused.error from None
-    record_usage(key, model, _tokens_used(reply))
+    used = _tokens_used(reply)
+    record_usage(key, model, used)
+    return used
 
 
 def _tokens_used(reply: dict) -> int:
@@ -690,9 +697,11 @@ def _lookup(model: str, texts: list[str], with_vectors: bool) -> dict[str, list[
         column = "vector" if with_vectors else "NULL"
         for chunk in _chunks(list(hashes)):
             marks = ", ".join("?" for _ in chunk)
+            # A vector of the wrong size, as a damaged cache may hold, counts as missing, as when it's read.
             rows = db.execute(
-                f"SELECT hash, {column} FROM vectors WHERE model = ? AND dimensions = ? AND hash IN ({marks})",
-                (model, DIMENSIONS, *chunk),
+                f"SELECT hash, {column} FROM vectors WHERE model = ? AND dimensions = ? AND length(vector) = ? "
+                f"AND hash IN ({marks})",
+                (model, DIMENSIONS, 4 * DIMENSIONS, *chunk),
             )
             for digest, blob in rows:
                 if not with_vectors:
@@ -725,7 +734,7 @@ def remember(model: str, vectors: dict[str, list[float]]) -> None:
         return
     try:
         rows = [(model, DIMENSIONS, text_hash(text), array("f", vector).tobytes()) for text, vector in vectors.items()]
-        db.executemany("INSERT OR IGNORE INTO vectors VALUES (?, ?, ?, ?)", rows)
+        db.executemany("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?)", rows)  # a damaged one gives way
         db.commit()
     except (sqlite3.Error, OverflowError, TypeError):
         pass

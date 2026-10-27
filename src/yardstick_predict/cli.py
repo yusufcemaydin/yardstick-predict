@@ -109,23 +109,27 @@ def limited(args):
         _limit = None
 
 
-def keep_to_limit(cost, what: str) -> None:
-    """Stop before anything is spent when what's planned may cost more than the --max-cost limit allows. `what` is
-    the command, such as refresh."""
+def keep_to_limit(cost, what: str, more_usd: float = 0.0) -> None:
+    """Stop before anything is spent when what's planned may cost more than the --max-cost limit allows. `cost` is a
+    spending.Cost, or a list of them for an update of several models. `what` is the command, such as refresh.
+    `more_usd` is what else it spends, such as the key check."""
     from .spending import dollars
 
     if _limit is None:
         return
-    if cost.most_usd is None:
+    costs = cost if isinstance(cost, list) else [cost]
+    unknown = next((found for found in costs if found.most_usd is None), None)
+    if unknown is not None:
         raise CommandError(
             "cost_unknown",
-            f"The price of {cost.analysis_model} isn't in yardstick's list. A spending limit can't be kept without "
+            f"The price of {unknown.analysis_model} isn't in yardstick's list. A spending limit can't be kept without "
             "it. Nothing was spent or saved. To go ahead, leave out --max-cost.",
         )
-    if not _limit.fits(cost.most_usd):
+    most = sum(found.most_usd for found in costs) + more_usd
+    if not _limit.fits(most):
         raise CommandError(
             "over_max_cost",
-            f"This {what} would cost up to {dollars(cost.most_usd)} at list price, more than your limit of "
+            f"This {what} would cost up to {dollars(most)} at list price, more than your limit of "
             f"{dollars(_limit.usd)}. Nothing was spent or saved. Raise --max-cost to go ahead.",
         )
 
@@ -182,7 +186,7 @@ def cost_lines(cost: embeddings.Cost, model: str, tasks: int) -> list[str]:
     about = "" if cost.exact else "about "
     lines = [f"Embedding {tasks:,} tasks with {model} uses {about}{cost.tokens:,} tokens."]
     if not cost.free_left:
-        lines.append(f"It costs {ui.bold(f'${cost.list_usd:.2f}')} at Voyage's list price.")
+        lines.append(f"It costs {ui.bold(money(cost.list_usd))} at Voyage's list price.")
     elif cost.free_left >= cost.tokens:
         lines.append(
             f"Your free tokens cover it, so it costs {ui.bold('nothing')}. "
@@ -191,7 +195,7 @@ def cost_lines(cost: embeddings.Cost, model: str, tasks: int) -> list[str]:
     else:
         lines.append(
             f"Your free tokens cover {millions(cost.free_left)} of them. "
-            f"The rest costs {ui.bold(f'${cost.your_usd:.2f}')}."
+            f"The rest costs {ui.bold(money(cost.your_usd))}."
         )
     if not cost.exact:
         lines.append("The token count is an estimate, because Voyage's tokenizer didn't download.")
@@ -243,9 +247,10 @@ def damaged_usage_note(key: str | None) -> None:
 # The Voyage key ----------------------------------------------------------------------------------------
 
 
-def get_key(model: str, can_ask: bool) -> str | None:
+def get_key(model: str, can_ask: bool, check: bool = True) -> str | None:
     """Find a working key. A person can paste one, and it is saved in the computer's password store. None when a
-    person pastes none. It stops the command when there's no key and none can be asked for, or when the key fails."""
+    person pastes none. It stops the command when there's no key and none can be asked for, or when the key fails.
+    Without `check`, the key isn't tried yet, so nothing goes to Voyage: verify_key tries it once it's needed."""
     key, source = embeddings.find_key()
     pasted = False
     ui.heading("Voyage key")
@@ -264,12 +269,8 @@ def get_key(model: str, can_ask: bool) -> str | None:
             "No Voyage key found. Set VOYAGE_API_KEY, or run yardstick-predict in a terminal, without --yes or "
             "--express, to paste one.",
         )
-    ui.working("Checking the key")
-    try:
-        embeddings.check_key(key, model)
-    except embeddings.VoyageError as error:
-        raise CommandError("embedding_failed", f"The key didn't work.\n{explain(error)}") from None
-    ui.ok("The key works.")
+    if check:
+        verify_key(key, model)
     if pasted:
         if embeddings.save_key(key):
             ui.ok("Saved in your computer's password store, so you won't need to paste it again.")
@@ -281,11 +282,26 @@ def get_key(model: str, can_ask: bool) -> str | None:
         ui.note("its own count.")
         ui.out(ui.prompt("Has this account used any of its free tokens before?").rstrip())
         ui.line(f"    {ui.accent('n')}   no, it's a new account")
-        ui.line(f"    {ui.accent('y')}   yes, or I'm not sure - report costs assuming no credits")
-        # Pressing Enter assumes no credits, so a cost is never shown lower than it may be.
+        ui.line(f"    {ui.accent('y')}   yes, or not sure. Costs then count no free tokens.")
+        # Pressing Enter counts no free tokens, so a cost is never shown lower than it may be.
         reply = input(f"    {ui.dim('[n/Y]')} ").strip().lower()
         embeddings.set_free_tokens(key, "new" if reply in ("n", "no") else "unknown")
     return key
+
+
+def verify_key(key: str, model: str) -> None:
+    """Try the key with one tiny request, and stop the command when it doesn't work. Under a spending limit, the
+    tokens it sends count toward it."""
+    ui.working("Checking the key")
+    try:
+        used = embeddings.check_key(key, model)
+    except embeddings.VoyageError as error:
+        raise CommandError("embedding_failed", f"The key didn't work.\n{explain(error)}") from None
+    if _limit is not None:
+        from . import spending
+
+        _limit.spent += spending.voyage_usd(used, model)
+    ui.ok("The key works.")
 
 
 # Questions ---------------------------------------------------------------------------------------------
@@ -913,6 +929,7 @@ def _create(args, held, answer: dict) -> int:
         save_scan,
         train,
     )
+    from .store import Embedded
 
     found = read_all(archives, on_progress=lambda done, total: ui.progress(done, total, "bytes"))
     counts = [(archive["name"], found.per_archive.get(archive["name"], 0)) for archive in archives]
@@ -946,14 +963,26 @@ def _create(args, held, answer: dict) -> int:
     # The check is advice for a person setting up step by step. A program, or a person who named the features
     # with flags, gets the features they named.
     checking = can_ask and args.features is None and built_in and offer_check(chosen, found.new_tasks, args.max_tasks)
-    items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks, config=settings, labels=answers)
+    ids = {task.id for task in found.new_tasks}
+
+    def items(model: str) -> list:
+        """The texts to embed with this Voyage model. None the feature store holds a vector of, made from the same
+        text for another predictor, as a refresh counts them. So a second predictor pays for nothing it has."""
+        stored = {
+            name: Embedded(
+                feature_store.vector_hashes(feature_store.embedding(name, model, embeddings.DIMENSIONS), ids)
+            )
+            for name in chosen
+            if features.is_text(name)
+        }
+        return embedding_items(found.new_tasks, chosen, stored, args.max_tasks, settings, answers)
 
     model_name = args.embedding or (None if can_ask else "voyage-4")
     plans: dict = {}
     if model_name is None:
         ui.heading("Embedding model")
         ui.working("Working out what each Voyage model would cost")
-        plans = {m: price(items, m, None) for m in embeddings.MODELS}
+        plans = {m: price(items(m), m, None) for m in embeddings.MODELS}
         options = list(embeddings.MODELS)
         rows = [
             (
@@ -976,11 +1005,17 @@ def _create(args, held, answer: dict) -> int:
     if model_name not in embeddings.MODELS:
         raise CommandError("invalid_request", unknown_embedding(model_name))
 
-    key = get_key(model_name, can_ask)
+    # A person's key is tried at once, so a pasted one is saved only when it works. A program's is tried once it goes
+    # ahead, so its preview sends nothing.
+    key = get_key(model_name, can_ask, check=can_ask)
     if not key:
         return 1
     # Each Voyage model's tokens are counted once. The key only changes how many of them are free.
-    plan = with_key(plans[model_name], model_name, key) if model_name in plans else price(items, model_name, key)
+    plan = (
+        with_key(plans[model_name], model_name, key)
+        if model_name in plans
+        else price(items(model_name), model_name, key)
+    )
     ui.heading("Cost")
     damaged_usage_note(key)
     for text in cost_lines(plan.cost, model_name, plan.tasks):
@@ -1015,7 +1050,8 @@ def _create(args, held, answer: dict) -> int:
     described = len(asks) if asks and "description" in features.options(settings, "llm") else 0
     cost = spending.cost_of(settings, model_name, plan, asks, described)
     answer["cost"] = cost.as_json()
-    keep_to_limit(cost, "setup")
+    check_later = not can_ask and bool(plan.texts or described)  # the key is tried before anything goes to Voyage
+    keep_to_limit(cost, "setup", spending.voyage_usd(embeddings.KEY_CHECK_TOKENS, model_name) if check_later else 0.0)
     if _limit is not None:
         answer["spent"] = 0.0
     checked = len(chosen) - 1 if checking else 0  # every feature but the prompt
@@ -1038,6 +1074,8 @@ def _create(args, held, answer: dict) -> int:
     if not can_ask and not args.yes:
         ui.line("Add --yes to go ahead.")
         return 2
+    if check_later:
+        verify_key(key, model_name)  # before LLM analysis, which would be paid for in vain with a key that fails
 
     config: dict = {**settings, "model": model_settings, "plugins": plugins}
     if limit:
@@ -1428,8 +1466,8 @@ def refresh(args, answer: dict) -> int:
             f"{predictor.name} was saved by a newer version of yardstick-predict, so this version leaves it as it "
             "is. Upgrade with: uv tool upgrade yardstick-predict",
         )
-    # The Update screen asks once, with every cost. With --max-cost, the command keeps to the limit instead.
-    if interactive() and not args.yes and not args.json and _limit is None:
+    # The Update screen asks once, with every cost. It keeps to a --max-cost limit too.
+    if interactive() and not args.yes and not args.json:
         from .screens import update
 
         predictor.close()
@@ -1583,7 +1621,7 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
     elif not args.yes:
         ui.line("Add --yes to go ahead.")
         return 2
-    if plan.items or asks:
+    if plan.texts or planned.described:  # a key only for what goes to Voyage: LLM analysis needs none of it
         key = key or get_key(model_name, can_ask)
         if not key:
             return 1
@@ -1606,9 +1644,10 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
         # analysis just wrote.
         rest = plan_embeddings(predictor, key)
         if rest.items:
-            key = key or get_key(model_name, can_ask)
-            if not key:
-                return 1
+            if rest.texts:
+                key = key or get_key(model_name, can_ask)
+                if not key:
+                    return 1
             answer["embedded"] += embed_with_progress(predictor, rest, key)
     finally:
         if _limit is not None:
@@ -2020,12 +2059,15 @@ def shown_effort(effort: str | None) -> str:
 
 
 def short_money(usd: float) -> str:
-    """Dollars at a glance, such as a range's ends: $0.12, $29.17, $424, $59.0k."""
+    """Dollars at a glance, such as a range's ends: $0.0042, $0.12, $29.17, $424, $59.0k. Under a cent, the two
+    digits that matter show, so a range of cheap tasks still says something."""
+    from .spending import dollars
+
     if usd >= 999.5:
         return f"${usd / 1000:.1f}k"
     if usd >= 99.5:
         return f"${usd:.0f}"
-    return money(usd)
+    return dollars(usd) if 0 < usd < 0.01 else money(usd)
 
 
 def whole_tokens(value: float) -> str:
@@ -2038,6 +2080,8 @@ def span_words(span: tuple[float, float] | None, show) -> str:
     if span is None:
         return ""
     low, high = show(span[0]), show(span[1])
+    if low == high:  # both ends read the same: one is enough
+        return low
     for unit in (" min", " s", " h", "M", "k"):
         if low.endswith(unit) and high.endswith(unit):
             return f"{low.removesuffix(unit)} to {high}"
