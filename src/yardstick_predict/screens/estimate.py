@@ -1,10 +1,10 @@
 """Estimate: forecast a task before you run it, one step at a time.
 
-Describe the task. With more than one model, choose which of your models forecasts it. Then pick the AI
-models: the ones with enough data behind them, or any you've used, from a list. Either way a list shows them 6
-at a time. The forecasts show 6 at a time too, each with the ranges the real result lands in half the time and
-9 times out of 10. After them you choose what's next: another page, another task, other AI models for the same
-task, another of your models for it or home.
+Describe the task. With more than one model, choose which of your models forecasts it. Each one says how
+accurate it is next to the default. Then pick the AI models: the ones with enough data behind them, or any
+you've used, from a list. Either way a list shows them 6 at a time. The forecasts show 6 at a time too, each with
+the ranges the real result lands in half the time and 9 times out of 10. After them you choose what's next:
+another page, another task, other AI models for the same task, another of your models for it or home.
 """
 
 from __future__ import annotations
@@ -77,16 +77,26 @@ def run() -> None:
             loaded = None
 
 
+ACCURACY = "Accuracy is how close a model's forecasts came on your newest tasks, as if they hadn't happened yet."
+"""What the accuracy each model has next to the default means, under the list of your models."""
+
+
 def which(last: str | None) -> str | None:
-    """Ask which of your models forecasts the task. It starts on the one used last, else on the default. None goes
-    back to the task."""
-    names = predictor_names()
+    """Ask which of your models forecasts the task. Each one says how accurate it is next to the default, and when it
+    was last updated. It starts on the one used last, else on the default. None goes back to the task."""
+    names, default = predictor_names(), default_name()
+    said, compared = listing.accuracy(names, default)
     ui.out()
     ui.line("Which of your models should forecast it?")
     ui.out()
-    choices = [keys.Choice(label, when) for label, when in listing.models()] + [keys.Choice("Back")]
-    first = last if last in names else default_name()
-    picked = keys.choose(choices, start=names.index(first) if first in names else 0)
+    between = f" {ui.mark('dot')} " if ui.styled() else ", "
+    choices = [
+        keys.Choice(label, between.join([*([said[name]] if name in said else []), when]))
+        for name, (label, when) in zip(names, listing.models())
+    ]
+    first = last if last in names else default
+    start = names.index(first) if first in names else 0
+    picked = keys.choose([*choices, keys.Choice("Back")], start=start, about=[ACCURACY] if compared else None)
     return None if picked is None or picked == len(names) else names[picked]
 
 

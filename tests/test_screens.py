@@ -209,6 +209,18 @@ def trained(name: str, verdicts: dict[str, bool]) -> Predictor:
     return predictor
 
 
+def scored(name: str, scores: dict[str, float]) -> Predictor:
+    """A model that forecasts these AI models, each scored at this share of the simple rule's score on the same 40
+    tasks, for time, tokens and cost alike. Under 1 came closer than the simple rule."""
+    predictor = made(name, served=tuple(scores))
+    meta = json.loads((predictor.model_dir / "model.json").read_text())
+    for model, share in scores.items():
+        for target in TARGETS:
+            meta["report"]["models"][model][target] = {"score": share, "simple_rule_score": 1.0, "tasks_tested": 40}
+    QuickModel(meta).save(predictor.model_dir)
+    return predictor
+
+
 def test_estimate_asks_which_ai_models_then_what_next(capsys, monkeypatch, quick, ready):
     trained("main", {"claude-opus-5-5": True, "gpt-6.1-sol": False})
     asked = typing(monkeypatch, "add a dark mode toggle to the settings page")
@@ -324,6 +336,88 @@ def test_with_several_models_estimate_asks_which_and_another_can_forecast_the_sa
     assert re.search(r"gpt-6\.1-sol\s+max\s+60 s", first) and "model work, updated" in first
     assert re.search(r"claude-opus-5-5\s+max\s+60 s", second) and "model main, updated" in second
     assert "4. Back to home" in out
+
+
+@pytest.mark.parametrize("width", [80, 45])
+def test_each_model_says_how_accurate_it_is_next_to_the_default(capsys, monkeypatch, quick, ready, width):
+    from yardstick_predict.screens import estimate
+
+    monkeypatch.setenv("COLUMNS", str(width))
+    scored("main", {"claude-opus-5-5": 0.5})
+    scored("llm", {"claude-opus-5-5": 0.44, "gpt-6.1-sol": 0.3})  # 12% closer on the AI model both forecast
+    scored("old", {"claude-opus-5-5": 0.575})  # 15% further off
+    made("thin", served=())
+    set_default("main")
+    typing(monkeypatch, "fix the parser", "")
+    # Estimate, then back from the list of your models to the task, then home and quit.
+    pressing(monkeypatch, "1", keys.ESC, keys.ESC)
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert widest(out) < width
+    menu = plain(out).split("Which of your models should forecast it?")[1]
+    assert re.search(r"1\. llm\s+12% more accurate", menu)  # cut short in a narrow terminal, as menu hints are
+    assert re.search(r"2\. main \(default\)\s+updated", menu)  # the one the others are compared with
+    assert re.search(r"3\. old\s+15% less accurate", menu) and re.search(r"4\. thin\s+not enough data yet", menu)
+    assert estimate.ACCURACY in " ".join(menu.split())
+    if width == 80:
+        assert re.search(r"1\. llm\s+12% more accurate than main, updated", menu)
+
+
+def test_numbered_menus_say_what_accuracy_means_too(capsys, monkeypatch, quick, ready):
+    from yardstick_predict.screens import estimate
+
+    scored("main", {"claude-opus-5-5": 0.5})
+    scored("llm", {"claude-opus-5-5": 0.44})
+    set_default("main")
+    monkeypatch.setattr(keys, "reader", lambda: None)  # a terminal that can't pass single key presses
+    typing(monkeypatch, "3")  # Back
+    assert estimate.which(None) is None
+    text = " ".join(plain(capsys.readouterr().out).split())
+    assert "1. llm 12% more accurate than main, updated" in text and estimate.ACCURACY in text
+
+
+def test_a_model_is_compared_with_the_default_only_on_the_ai_models_both_forecast(quick):
+    from yardstick_predict.screens import listing
+
+    scored("main", {"claude-opus-5-5": 0.5})
+    scored("work", {"gpt-6.1-sol": 0.3})
+    made("thin", served=())
+    said, compared = listing.accuracy(["main", "thin", "work"], "main")
+    assert said == {"thin": "not enough data yet", "work": "no AI model in common with main"} and not compared
+    # A default that forecasts nothing leaves every model uncompared.
+    made("empty", served=())
+    assert listing.accuracy(["empty", "work"], "empty") == ({"empty": "not enough data yet"}, False)
+
+
+def test_accuracy_next_to_the_default_counts_each_model_against_its_own_simple_rule():
+    from yardstick_predict.screens import listing
+
+    def report(**scores):
+        """For each AI model: its score, the simple rule's and on how many tasks, the same for every target."""
+        return {
+            "models": {
+                model: {target: {"score": a, "simple_rule_score": b, "tasks_tested": n} for target in TARGETS}
+                for model, (a, b, n) in scores.items()
+            }
+        }
+
+    base = report(a=(1.0, 2.0, 300), b=(3.0, 4.0, 100))
+    # On the same tasks, it's the ratio of the scores. Each AI model counts as much as the tasks it was scored on.
+    closer = report(a=(0.8, 2.0, 300), b=(3.0, 4.0, 100))
+    assert listing.error_ratio(closer, base, ["a", "b"]) == pytest.approx(0.8**0.75)
+    # Scored on harder tasks, where the simple rule came further off too, the same skill is the same accuracy.
+    assert listing.error_ratio(report(a=(2.0, 4.0, 50)), base, ["a"]) == pytest.approx(1.0)
+    # An AI model only one of them scored, or a score that makes no sense, counts for nothing.
+    assert listing.error_ratio(closer, base, ["c"]) is None
+    assert listing.error_ratio(report(a=(0.0, 2.0, 300)), base, ["a"]) is None
+    said = [listing.compared(ratio, "main") for ratio in (0.88, 0.99, 1.019, 1.15, 2.5)]
+    assert said == [
+        "12% more accurate than main",
+        "about as accurate as main",
+        "about as accurate as main",
+        "15% less accurate than main",
+        "far less accurate than main",
+    ]
 
 
 def test_estimate_says_when_a_model_cant_forecast_and_another_can_be_chosen(capsys, monkeypatch, quick, ready):

@@ -162,17 +162,20 @@ def number(first: str, read: Callable[..., str], most: int) -> tuple[int, str]:
     return int(typed), ""
 
 
-def choose(choices: list[Choice], footer: list[str] | None = None, start: int = 0) -> int | None:
+def choose(
+    choices: list[Choice], footer: list[str] | None = None, start: int = 0, about: list[str] | None = None
+) -> int | None:
     """Show a menu and return the number of the choice made, from 0. None when Esc goes back.
 
-    `footer` lines go under the choices, such as which keys do what. A menu of more than 9 choices shows 6 at a
-    time, numbered on from one page to the next. The left and right arrows turn its page. A choice's number picks
-    it, on any page, and two digits typed quickly make a number above 9.
+    `about` lines go under the choices to say what they mean, in a menu of numbers to type in too. `footer` lines
+    go under those, such as which keys do what. A menu of more than 9 choices shows 6 at a time, numbered on from
+    one page to the next. The left and right arrows turn its page. A choice's number picks it, on any page, and two
+    digits typed quickly make a number above 9.
     """
     keys = reader()
     if keys is None:
-        return _typed(choices)
-    footer = footer if footer is not None else [hint("esc go back")]
+        return _typed(choices, about or [])
+    footer = [*(about or []), *(footer if footer is not None else [hint("esc go back")])]
     paged = len(choices) > LONG
     at, drawn = start, 0
     while True:
@@ -276,10 +279,15 @@ def _lines(
     return found
 
 
-def _typed(choices: list[Choice]) -> int:
-    """The menu for a terminal that can't pass single key presses: every choice numbered, and a number typed in."""
+def _typed(choices: list[Choice], about: list[str] | None = None) -> int:
+    """The menu for a terminal that can't pass single key presses: every choice numbered, what they mean under them
+    and a number typed in."""
     for text in _lines(choices, None):
         ui.out(text)
+    if about:
+        ui.out()
+        for text in notes(about):
+            ui.out(text)
     ui.out()
     while True:
         reply = input(ui.prompt("Type a number:", "[1]")).strip() or "1"

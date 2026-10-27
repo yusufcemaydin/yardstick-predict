@@ -74,7 +74,7 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
   › _
 ```
 
-It uses plain `input()`. Enter on its own goes back home. With more than one model, it asks next which of your models should forecast it. The list starts on the one used last, else on the default. With one model it asks nothing. A model that can't forecast yet says it needs training. Then the list comes back. Then, step by step:
+It uses plain `input()`. Enter on its own goes back home. With more than one model, it asks next which of your models should forecast it. Each one says how accurate it is next to the default, such as 12% more accurate than main. Accuracy is how close its forecasts came on your newest tasks, as if they hadn't happened yet, on the AI models both forecast. Each model is first measured against the simple rule on its own tasks. So two models that learned from different tasks still compare fairly. A note under the list says what accuracy means. The list starts on the one used last, else on the default. With one model it asks nothing. A model that can't forecast yet says it needs training. Then the list comes back. Then, step by step:
 
 ```
   Which AI models should it forecast?
