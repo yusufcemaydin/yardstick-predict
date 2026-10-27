@@ -1987,13 +1987,14 @@ def show_title(task: str, after: str = "") -> None:
         ui.line(ui.dim(after))
 
 
-FORECAST_COLUMNS = ("", "effort", "time", "tokens", "cost")
-"""The forecast table's columns after the AI model's name. The first holds the warning mark, when there is one."""
+FORECAST_COLUMNS = ("", "effort", "", "time", "tokens", "cost")
+"""The forecast table's columns after the AI model's name. The first holds the warning mark, when there is one. The
+third names each line of a forecast: expected, then 25%, median and 75%."""
 QUARTILES = (("25%", 0.25), ("median", 0.5), ("75%", 0.75))
 """The lines under each forecast in a person's table, each with the share of real results that come in under it."""
 QUARTILES_NOTE = (
-    "Each forecast's first line is what to expect on average. A quarter of real results come in under its 25% "
-    "line, half under its median and three quarters under its 75% line."
+    "The expected line is what to expect on average. A quarter of real results come in under the 25% line, half "
+    "under the median and three quarters under the 75% line."
 )
 """What the lines of each forecast mean, in the note under the table."""
 WARNINGS = {
@@ -2008,8 +2009,9 @@ whose forecasts were often wrong on your past tasks, and one with too few of the
 def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None, screen: bool = False) -> None:
     """The forecasts as a small table, for a person in a terminal. Each forecast's first line is what to expect on
     average. Under it, in grey, are the values a quarter, half and three quarters of real results come in under,
-    when the forecast has a curve. A forecast with not enough data behind it is marked, and the AI models that have
-    too little are named under the table. It fits the terminal at any width.
+    when the forecast has a curve. A column of its own names each line, after the effort level, which shows only on
+    the first. A forecast with not enough data behind it is marked, and the AI models that have too little are named
+    under the table. It fits the terminal at any width.
 
     `screen` is for the Estimate screen: the task was typed just above, so it isn't said again, and the
     predictor is called a model there, as every screen calls it.
@@ -2041,8 +2043,9 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
             short_tokens(tokens) if tokens is not None else ui.dim("-"),
             money(usd) if usd is not None else ui.dim("-"),
         )
-        rows.append((name, mark, effort, *values))
-        # The 25%, median and 75% values each go on a row of their own, named in the effort column, empty there.
+        rows.append((name, mark, effort, ui.dim("expected"), *values))
+        # The 25%, median and 75% values each go on a row of their own, named in the column after the effort level.
+        # The effort column stays empty there. A line's name never looks like an effort level.
         curve = forecast.get("distribution")
         found = [[quantile(curve, target, share) for target in ("seconds", "tokens", "usd")] for _, share in QUARTILES]
         words = []
@@ -2051,11 +2054,15 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
             shows = (duration, whole_tokens, short_money)
             for (label, _), line in zip(QUARTILES, found):
                 words.append(tuple("" if value is None else show(value) for value, show in zip(line, shows)))
-                rows.append(("", "", ui.dim(label), *(ui.dim(word) for word in words[-1])))
+                rows.append(("", "", "", ui.dim(label), *(ui.dim(word) for word in words[-1])))
         blocks.append((model, mark, effort, values, words))
+    titles = FORECAST_COLUMNS
+    if not spread:  # with one line to each forecast, there's no line to name
+        titles = (*titles[:2], *titles[3:])
+        rows = [(*r[:3], *r[4:]) for r in rows]
     # A table needs room for every column, its titles too. A terminal too narrow for it gets each forecast as a
     # block of its own.
-    others = sum(max([len(FORECAST_COLUMNS[i - 1]), *(ui.width(r[i]) for r in rows)]) + 2 for i in range(1, 6))
+    others = sum(max([len(titles[i - 1]), *(ui.width(r[i]) for r in rows)]) + 2 for i in range(1, len(titles) + 1))
     stacked = 2 + pad + others >= ui.columns()
     rows = [(ui.bold(r[0].ljust(pad)) if r[0] else " " * pad, *r[1:]) for r in rows]
     if not screen:
@@ -2063,8 +2070,8 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
         show_title(prompt)
     ui.out()
     if rows and not stacked:
-        header = tuple(ui.dim(title) for title in ("AI model".ljust(pad), *FORECAST_COLUMNS))
-        ui.table([header, *rows], align="lllrrr", gap=2)
+        header = tuple(ui.dim(title) for title in ("AI model".ljust(pad), *titles))
+        ui.table([header, *rows], align="l" * (len(titles) - 2) + "rrr", gap=2)
     elif rows:
         show_blocks(blocks)
     for model, reason in missing.items():

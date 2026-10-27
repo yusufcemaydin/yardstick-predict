@@ -38,7 +38,7 @@ Set `YARDSTICK_NUMBERED_MENUS=1` or add `"numbered_menus": true` to `settings.js
 yardstick-predict predict "Add a login page with tests"
 ```
 
-It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. Each forecast's first line is what to expect on average. Under it are its 25%, median and 75% lines. A quarter of real results come in under the 25% line, half under the median and three quarters under the 75% line. A forecast with not enough data behind it is marked ⚠ as a rough guide. The default effort level, which no one picks, isn't shown.
+It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. A column after the effort level names each line of a forecast. The expected line comes first. It's what to expect on average. Under it are the 25%, median and 75% lines. A quarter of real results come in under the 25% line, half under the median and three quarters under the 75% line. The effort level shows once, on the expected line. A forecast with not enough data behind it is marked ⚠ as a rough guide. The default effort level, which no one picks, isn't shown.
 
 `--model` and `--effort` name them yourself. `--predictor` picks another predictor. `--json` prints the answer programs get. Use it to pick a model, set a time limit or see what a batch of tasks will cost before you start.
 

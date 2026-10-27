@@ -95,7 +95,7 @@ Each choice opens a list of AI models at their effort levels, 6 to a page, with 
   ↑↓ move · enter forecast this one · space tick several · ←→ page · esc go back
 ```
 
-The forecasts show 6 to a page, under the task as a title of 3 lines at most. Each forecast's first line is what to expect on average. Under it are its 25%, median and 75% lines, named in the effort column. A quarter of real results come in under the 25% line, half under the median and three quarters under the 75% line. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task, Use another of your models for the same task or Back to home. Use another of your models shows only when you have more than one.
+The forecasts show 6 to a page, under the task as a title of 3 lines at most. A column after the effort level names each line of a forecast. The expected line comes first. It's what to expect on average. Under it are the 25%, median and 75% lines. The effort level shows once, on the expected line. A quarter of real results come in under the 25% line, half under the median and three quarters under the 75% line. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task, Use another of your models for the same task or Back to home. Use another of your models shows only when you have more than one.
 
 ## 4. Update
 

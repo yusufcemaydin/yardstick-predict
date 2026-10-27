@@ -879,12 +879,20 @@ def test_the_forecast_table_shows_the_25_median_and_75_lines_and_warns_on_rough_
     cli.show_forecasts("Create a fun game", result, screen=True)
     out = plain(capsys.readouterr().out)
     assert re.search(r"AI model\s+effort\s+time\s+tokens\s+cost\s*\n", out)
-    assert re.search(r"claude-opus-5-5\s+max\s+16 min\s+23\.0M\s+\$7\.42\s*\n", out)  # it passed on many runs
+    assert re.search(r"claude-opus-5-5\s+max\s+expected\s+16 min\s+23\.0M\s+\$7\.42\s*\n", out)  # passed on many runs
     # Under it, the lines a quarter, half and three quarters of results come in under: the curve has 900 at its
     # middle on every target, a quarter of it under about 687 and three quarters under about 1,179.
     assert re.search(r"\n\s+25%\s+11 min\s+687\s+\$687\s*\n\s+median\s+15 min\s+900\s+\$900\s*\n", out)
     assert re.search(r"\n\s+75%\s+20 min\s+1k\s+\$1\.2k\s*\n", out)
-    assert re.search(r"⚠\s+high\s+5 min\s+7\.7M\s+\$3\.18", out)  # marked, with why under the table
+    # Each line is named in a column of its own, after the effort level. The effort level shows on the first alone.
+    lines = out.split("\n")
+    at = next(n for n, line in enumerate(lines) if line.lstrip().startswith("claude-opus-5-5"))
+    column = lines[at].index("expected")
+    assert lines[at].index("max") < column
+    for line, label in zip(lines[at + 1 : at + 4], ("25%", "median", "75%"), strict=True):
+        assert line.index(label) == column and not line[:column].strip(), line
+    assert re.search(r"⚠\s+high\s+expected\s+5 min\s+7\.7M\s+\$3\.18", out)  # marked, with why under the table
+    assert re.search(r"gpt-6\.1-sol\s+⚠\s+xhigh\s+expected\s+11 min", out)  # no curve, so only what to expect
     squashed = " ".join(out.split())
     assert "⚠ Not enough data: claude-opus-5-5 at high, gpt-6.1-sol and gpt-6-astra." in squashed
     assert "Not enough data to forecast claude-haiku-5-5 (6 runs) and claude-opus-4-7 (3 runs)." in squashed
@@ -895,6 +903,19 @@ def test_the_forecast_table_shows_the_25_median_and_75_lines_and_warns_on_rough_
     out = plain(capsys.readouterr().out)
     squashed = " ".join(out.split())
     assert "Create a fun game" in out and "predictor main, updated" in out and "add --json for details" in squashed
+
+
+def test_a_table_where_each_forecast_has_one_line_names_no_lines(capsys):
+    made("main")
+    forecasts = [
+        {"model": "claude-opus-5-5", "effort": "max", "seconds": 960.0, "tokens": 23_000_000, "usd": 7.42},
+        {"model": "gpt-6.1-sol", "effort": "xhigh", "seconds": 660.0, "tokens": 3_900_000, "usd": 1.16},
+    ]
+    cli.show_forecasts("x", {"predictor": "main", "forecasts": forecasts}, screen=True)
+    out = plain(capsys.readouterr().out)
+    assert re.search(r"claude-opus-5-5\s+max\s+16 min\s+23\.0M\s+\$7\.42\s*\n", out)
+    assert re.search(r"gpt-6\.1-sol\s+xhigh\s+11 min\s+3\.9M\s+\$1\.16\s*\n", out)
+    assert "expected" not in out and cli.QUARTILES_NOTE not in " ".join(out.split())
 
 
 def test_a_program_never_gets_a_forecast_with_not_enough_data_but_a_person_sees_it_marked(

@@ -12,21 +12,21 @@ $ yardstick-predict predict "Add a login page with tests"
 
   Add a login page with tests
 
-  AI model            effort   time  tokens   cost
-  claude-opus-5-5     max     4 min    1.8M  $0.92
-                      25%     3 min    1.1M  $0.60
-                      median  4 min    1.6M  $0.84
-                      75%     5 min    2.2M  $1.19
-  gpt-6.1-sol      ⚠  xhigh   5 min    950k  $0.41
-                      25%     3 min    531k  $0.23
-                      median  5 min    862k  $0.37
-                      75%     7 min    1.4M  $0.60
+  AI model            effort             time  tokens   cost
+  claude-opus-5-5     max     expected  4 min    1.8M  $0.92
+                              25%       3 min    1.1M  $0.60
+                              median    4 min    1.6M  $0.84
+                              75%       5 min    2.2M  $1.19
+  gpt-6.1-sol      ⚠  xhigh   expected  5 min    950k  $0.41
+                              25%       3 min    531k  $0.23
+                              median    5 min    862k  $0.37
+                              75%       7 min    1.4M  $0.60
 
   ⚠ Not enough data: gpt-6.1-sol.
   Those are a rough guide. Plan with a wider margin there.
-  Each forecast's first line is what to expect on average. A quarter of real
-  results come in under its 25% line, half under its median and three quarters
-  under its 75% line. Costs are at API prices.
+  The expected line is what to expect on average. A quarter of real results
+  come in under the 25% line, half under the median and three quarters under
+  the 75% line. Costs are at API prices.
   Learned from your own runs · predictor main, updated 2 days ago · add --json
   for details
 ```

@@ -4,6 +4,10 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+### Fixed
+
+- The forecast table names each line of a forecast in a column of its own, after the effort level: expected, then 25%, median and 75%. The effort level shows once, on the expected line. The 25%, median and 75% lines used to be named in the effort column, where they looked like effort levels.
+
 ## [0.5.0] - 2026-10-27
 
 A bare `yardstick-predict` in a terminal opens a home screen with clear choices. It no longer refreshes every predictor at once behind a bar with no label.
