@@ -1,10 +1,11 @@
-"""The Features step of setup: each feature with its options under it, turned on and off by number.
+"""The Features step of setup: each feature with its options under it, turned on and off by number. all turns on
+every feature with all its options.
 
-The first three features are always on: they cost nothing and send nothing anywhere. The others are
-choices. Most cost embedding tokens or send text to another company. The conversation costs nothing, but
-it suits a person's sessions better than a program's one-off runs. LLM analysis also asks how it's paid
-for and which AI model reads the tasks. Next to each feature the feature check tested, the screen shows
-what the check said last.
+The first three features are always on. For them, each prompt goes to Voyage, which works out what it means.
+The others are choices. Most cost embedding tokens or send text to another company. The conversation costs
+nothing. It suits a person's sessions better than a program's one-off runs. LLM analysis also asks how it's paid
+for and which AI model reads the tasks. Next to each feature the feature check tested, the screen shows what the
+check said last.
 """
 
 from __future__ import annotations
@@ -66,13 +67,17 @@ def _group(name: str) -> features.Group | None:
 
 
 def ask(
-    custom: dict[str, str] | None = None, start: Picked | None = None, verdicts: dict[str, dict] | None = None
+    custom: dict[str, str] | None = None,
+    start: Picked | None = None,
+    verdicts: dict[str, dict] | None = None,
+    called: str = "predictor",
 ) -> Picked:
     """Show every feature with its options, and let a person turn them on and off until they press Enter.
 
     The features `start` picks start on, with their options. Without it, the default features do, with all their
     options. LLM analysis runs as `start` says, and is asked about only when `start` doesn't say. Next to each
-    feature go the feature check's `verdicts` on it, by default the latest ones remembered.
+    feature go the feature check's `verdicts` on it, by default the latest ones remembered. `called` is what the
+    screen calls the predictor: model on the home screen.
     """
     groups = list(features.MENU)
     verdicts = check.latest() if verdicts is None else verdicts
@@ -87,7 +92,7 @@ def ask(
     for name in custom or {}:
         on[name] = {"on"} if start is not None and name in start.features else set()
     while True:
-        _show(groups, on, custom or {}, verdicts)
+        _show(groups, on, custom or {}, verdicts, called)
         reply = input(ui.prompt("Turn on or off", "[Enter when done]")).strip().lower()
         if not reply:
             break
@@ -107,15 +112,25 @@ def ask(
 
 
 def _show(
-    groups: list[features.Group], on: dict[str, set[str]], custom: dict[str, str], verdicts: dict[str, dict]
+    groups: list[features.Group],
+    on: dict[str, set[str]],
+    custom: dict[str, str],
+    verdicts: dict[str, dict],
+    called: str = "predictor",
 ) -> None:
     ui.heading("Features")
-    ui.note("What the predictor learns from. The first three are always on, cost nothing and send nothing anywhere.")
+    _note(
+        f"What the {called} learns from. The first three are always on. For them, each prompt goes to Voyage, "
+        "which works out what it means."
+    )
     ui.line()
     entries = [(g.title, g.says, g.always, g.key, g.options) for g in groups]
     entries += [(name, says, False, name, ()) for name, says in custom.items()]
     title_width = max(len(title) for title, *_ in entries) + 3
     option_width = max((len(o.says) for *_, options in entries for o in options), default=0) + 3
+    # Each option says on or off at the end of its line, lined up with the others. Where the terminal is too
+    # narrow for that, it says so first, and its words wrap after it.
+    lined_up = 2 + 9 + option_width + 3 <= ui.columns() - 1
 
     def state(is_on: bool) -> str:
         return ui.green("on") if is_on else ui.dim("off")
@@ -123,26 +138,47 @@ def _show(
     for number, (title, says, always, key, options) in enumerate(entries, start=1):
         mark = ui.dim("always on") if always else state(bool(on[key]))
         ui.line(f"{ui.accent(str(number).rjust(2))}  {ui.bold(title.ljust(title_width))}{mark}")
-        ui.line(f"    {ui.dim(says)}")
-        said = check.summary(verdicts.get(key) or {})
-        if said:
-            ui.line(f"    {ui.dim(said)}")
+        for text in (says, check.summary(verdicts.get(key) or {})):
+            for part in ui.wrapped(text, 6) if text else []:  # broken to fit the terminal
+                ui.line(f"    {ui.dim(part)}")
         for letter, option in zip("abcdefgh", () if always else options):
-            ui.line(f"      {ui.accent(letter)}  {option.says.ljust(option_width)}{state(option.key in on[key])}")
+            is_on = option.key in on[key]
+            if lined_up:
+                ui.line(f"      {ui.accent(letter)}  {option.says.ljust(option_width)}{state(is_on)}")
+                continue
+            for row, part in enumerate(ui.wrapped(option.says, 16)):
+                first = f"      {ui.accent(letter)}  {state(is_on)}{' ' * (5 - len('on' if is_on else 'off'))}"
+                ui.line((first if row == 0 else " " * 14) + part)
     ui.line()
-    ui.note("Type a number to turn a feature on or off, or a number and a letter for one option, like 9 or 6b.")
+    _note(
+        "Type a number to turn a feature on or off. Type a number and a letter for one option, like 9 or 6b. Type "
+        "all to turn on every feature with all its options."
+    )
+
+
+def _note(text: str) -> None:
+    """A note broken to fit the terminal."""
+    for part in ui.wrapped(text):
+        ui.note(part)
 
 
 def _toggle(token: str, groups: list[features.Group], on: dict[str, set[str]], custom: dict[str, str]) -> None:
+    if token == "all":  # every feature on, with all its options
+        for group in groups:
+            if not group.always:
+                on[group.key] = {o.key for o in group.options}
+        for name in custom:
+            on[name] = {"on"}
+        return
     match = re.fullmatch(r"(\d+)([a-h]?)", token)
     names = [g.key for g in groups] + list(custom)
     if not match or not 1 <= int(match.group(1)) <= len(names):
-        ui.note(f"{token!r} isn't one of the numbers. Type a number from 1 to {len(names)}, like 9 or 6b.")
+        ui.note(f"{token!r} isn't one of the numbers. Type a number from 1 to {len(names)}, like 9 or 6b. Or type all.")
         return
     name = names[int(match.group(1)) - 1]
     group = _group(name)
     if group is not None and group.always:
-        ui.note(f"{group.title} is always on. It costs nothing.")
+        ui.note(f"{group.title} is always on. It can't be turned off.")
         return
     every = [o.key for o in group.options] if group else ["on"]
     letter = match.group(2)
@@ -159,7 +195,7 @@ def _toggle(token: str, groups: list[features.Group], on: dict[str, set[str]], c
 def ask_access() -> dict:
     """How LLM analysis is paid for, and which AI model reads the tasks."""
     ui.heading("LLM analysis")
-    ui.note("It sends each task's prompt and the end of the conversation before it to the AI model you pick.")
+    _note("It sends each task's prompt and the end of the conversation before it to the AI model you pick.")
     ui.line()
     ways = list(llm.PROVIDERS.values())
     ui.table([(ui.accent(str(n)), ui.bold(way.title), ui.dim(way.says)) for n, way in enumerate(ways, start=1)])
@@ -180,6 +216,6 @@ def ask_access() -> dict:
 def _pick(question: str, count: int) -> int:
     while True:
         reply = input(ui.prompt(question, "[1]")).strip() or "1"
-        if reply.isdigit() and 1 <= int(reply) <= count:
+        if ui.number_typed(reply) and 1 <= int(reply) <= count:
             return int(reply)
         ui.note(f"Type a number from 1 to {count}.")

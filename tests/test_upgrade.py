@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import jsonschema
 import pytest
+from builders import flat
 from test_cli import quick, quick_predictor  # noqa: F401 (quick is a fixture: a model type that trains at once)
 from test_forecast import schema
 
@@ -155,7 +156,10 @@ def test_status_says_a_model_saved_by_0_3_still_forecasts(saved_by_0_3, capsys):
     assert pipeline.from_previous_version(saved_by_0_3) and not pipeline.outdated(saved_by_0_3)
     assert main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "made by the previous version, and it still forecasts" in out and "yardstick-predict refresh" in out
+    assert (
+        "made by the previous version. It still forecasts." in out
+        and "yardstick-predict refresh --predictor" in flat(out)
+    )
     assert "Trained on 192 tasks." in out and re.search(r"claude-opus-5-5\s+forecasts on", out)
     assert main(["status", "--json"]) == 0
     entry = json.loads(capsys.readouterr().out)["predictors"][0]
@@ -165,7 +169,7 @@ def test_status_says_a_model_saved_by_0_3_still_forecasts(saved_by_0_3, capsys):
 def test_a_refresh_trains_a_model_saved_by_0_3_again_in_this_versions_format(saved_by_0_3, as_0_3_forecast, capsys):
     assert main(["refresh", "--yes"]) == 0
     out = capsys.readouterr().out
-    assert "made by the previous version. It still forecasts, and training it again brings" in out
+    assert "made by the previous version. It still forecasts, and training it again brings" in flat(out)
     assert "Trained on 192 tasks." in out
     again = Predictor("default")
     assert not pipeline.from_previous_version(again) and not pipeline.outdated(again)
@@ -218,7 +222,7 @@ def test_a_feature_this_version_doesnt_know_is_skipped_with_a_note(capsys):
     assert pipeline.chosen_features(predictor) == ["prompt", "context"]
     assert main(["refresh", "--yes"]) == 0
     out = capsys.readouterr().out
-    assert out.count("Skipping weather: this version doesn't know it. A newer version or a plugin added it.") == 1
+    assert flat(out).count("Skipping weather: this version doesn't know it. A newer version or a plugin added it.") == 1
     assert "Nothing new" in out
     assert Predictor("default").config["features"] == ["prompt", "weather", "context"]  # kept for what knows it
 

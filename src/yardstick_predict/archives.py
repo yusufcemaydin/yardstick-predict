@@ -420,6 +420,11 @@ def _claude_origin(line: dict, text: str) -> str | None:
     return "person"
 
 
+def _text(value) -> str | None:
+    """A record's field as text: None when it's missing, empty or of another type."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _claude_call(line: dict) -> tuple[tuple, _Call] | None:
     message = line.get("message")
     if not isinstance(message, dict):
@@ -1245,8 +1250,9 @@ def _read_codex_file(
             meta, began = payload, moment
             continue
         if kind == "turn_context":
-            model = payload.get("model") or model
-            effort = payload.get("effort") or effort
+            # A field of another type, as a damaged or a future record may hold, is passed over like a missing one.
+            model = _text(payload.get("model")) or model
+            effort = _text(payload.get("effort")) or effort
             if turn is not None:
                 turn.model, turn.effort = model, effort
             continue

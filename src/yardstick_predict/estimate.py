@@ -93,7 +93,7 @@ def of(
     vectors: int,
     asks: int,
     new_tasks: list[Task] | None = None,
-    dataset: int = 0,
+    dataset: float = 0,
     checked: int = 0,
 ) -> Estimate:
     """What the rest of setup or a refresh takes.
@@ -102,7 +102,7 @@ def of(
     and their options, how LLM analysis runs, its model's settings and how many tasks it learns from. `tokens`
     go to Voyage and make `vectors` embeddings. LLM analysis reads `asks` tasks, and when it describes them, the
     descriptions are embedded too. `new_tasks` are the ones the dataset doesn't have yet, all of `tasks` by
-    default, and `dataset` is how many bytes it takes now. With the feature check, `checked` is how many features
+    default, and `dataset` is how many bytes its data takes now. With the feature check, `checked` is how many features
     it leaves out, one at a time: it fits each test window's trial once with every feature and once without
     each, and no final model.
     """

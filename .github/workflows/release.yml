@@ -2,7 +2,7 @@ name: Release
 
 # Pushing a version tag, such as v0.4.0, builds the package and publishes it on PyPI. Nothing else starts this
 # workflow: not pull requests, and not pushes to a branch. CONTRIBUTING.md says how to release, and what to set up
-# on PyPI once.
+# on PyPI once. It publishes only when the tests pass on the tagged commit and the built wheel installs and runs.
 
 on:
   push:
@@ -39,9 +39,48 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  test:
+    name: Tests on the tagged commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false  # the tests need no access to GitHub
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --locked
+      - name: Style
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+      - name: Tests
+        run: uv run pytest -q
+
+  try:
+    name: Install the wheel and run it
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: package
+          path: dist/
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+      - name: Install it the way a user would, with nothing else installed
+        run: |
+          uv tool install dist/*.whl
+          shown="$(yardstick-predict --version)"
+          if [ "$shown" != "yardstick-predict ${GITHUB_REF_NAME#v}" ]; then
+            echo "::error::The installed command says $shown, not the version of the tag $GITHUB_REF_NAME."
+            exit 1
+          fi
+          yardstick-predict status
+
   publish:
     name: Publish on PyPI
-    needs: build
+    needs: [build, test, try]
     runs-on: ubuntu-latest
     # PyPI trusts uploads from this repository, this workflow and this environment, so no password or token is kept
     # anywhere. Only this job gets the proof of where it runs, and it builds nothing, so no build code can use it.

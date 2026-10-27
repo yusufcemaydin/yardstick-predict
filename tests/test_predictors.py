@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
-from builders import ClaudeSession, history
+from builders import ClaudeSession, flat, history
 from conftest import KEY
 from test_cli import ONE_WINDOW, QuickModel, fake_analysis, quick, quick_predictor, quick_train  # noqa: F401
 from test_feature_store import old_predictor
@@ -80,7 +80,7 @@ def records_of(flags: list[str]) -> Path:
 # The list -------------------------------------------------------------------------------------------------
 
 
-def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, quickly):
+def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, monkeypatch, quickly):
     assert main(["create", "--yes", *quickly, "--features", "context,time"]) == 0
     Predictor.create("work", [], EMBEDDING, features=["prompt"])  # not trained yet
     broken = store.predictor_folder("broken")
@@ -88,19 +88,32 @@ def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, q
     (broken / "predictor.json").write_text("{")
     capsys.readouterr()
 
+    monkeypatch.setenv("COLUMNS", "400")  # room for the table, and for the paths of the test's own folders
     code, out = run(capsys, "list")
     assert code == 1  # a predictor it shows can't be used
     lines = {line.split()[0]: line for line in out.splitlines() if line.strip()}
     assert re.search(r"features +learned from +trained +forecasts for", out)
-    assert re.search(r"default \(default\) +Context, Time +40 tasks +just now +claude-opus-5-5$", lines["default"])
+    assert re.search(r"main \(default\) +Context, Time +40 tasks +just now +claude-opus-5-5$", lines["main"])
     assert re.search(r"work +only the ones always on +- +not yet +none yet$", lines["work"])
     assert "can't be used, see below" in lines["broken"]
     assert "Predictor 'broken' can't be used" in out and "yardstick-predict delete broken" in out
 
+    # Where the table won't fit, each predictor gets a few lines of its own.
+    for width in (80, 45):
+        monkeypatch.setenv("COLUMNS", str(width))
+        code, out = run(capsys, "list")
+        shown = out[: out.index("Predictor 'broken'")].splitlines()
+        assert max(len(line) for line in shown) < width and "learned from" not in shown[0]
+        assert "  main (default)" in shown and "  work" in shown and "  broken" in shown
+        assert "Context, Time, learned from 40 tasks, trained just now" in flat(out)
+        assert "    forecasts for claude-opus-5-5" in shown and "    forecasts for none yet" in shown
+        assert "    only the ones always on, not trained yet" in shown
+    monkeypatch.setenv("COLUMNS", "80")
+
     code, out = run(capsys, "list", "--json")
     listed = {entry["name"]: entry for entry in json.loads(out)["predictors"]}
-    assert listed["default"]["features"] == ["prompt", "context", "time"] and listed["default"]["default"]
-    assert listed["default"]["learned_from"] == 40 and listed["default"]["forecasts_for"] == ["claude-opus-5-5"]
+    assert listed["main"]["features"] == ["prompt", "context", "time"] and listed["main"]["default"]
+    assert listed["main"]["learned_from"] == 40 and listed["main"]["forecasts_for"] == ["claude-opus-5-5"]
     assert listed["work"] == {
         "name": "work",
         "default": False,
@@ -113,10 +126,10 @@ def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, q
     # Status shows the same, in detail.
     code, out = run(capsys, "status", "--json")
     shown = {entry["name"]: entry for entry in json.loads(out)["predictors"]}
-    for name in ("default", "work"):
+    for name in ("main", "work"):
         for fact in ("learned_from", "trained_at", "forecasts_for"):
             assert shown[name][fact] == listed[name][fact], (name, fact)
-    code, out = run(capsys, "status", "--predictor", "default")
+    code, out = run(capsys, "status", "--predictor", "main")
     assert "Trained on 40 tasks." in out and re.search(r"claude-opus-5-5 +forecasts on", out)
 
 
@@ -148,9 +161,17 @@ def test_status_shows_the_coverage_the_features_listing_counts(capsys, quickly):
 
     code, out = run(capsys, "status")
     assert code == 0
-    line = next(line for line in out.splitlines() if line.strip().startswith("Coverage"))
+    # The line is broken to fit the terminal, so its parts are read back together.
+    lines = out.splitlines()
+    start = next(number for number, line in enumerate(lines) if line.strip().startswith("Coverage"))
+    end = next(
+        number
+        for number in range(start + 1, len(lines))
+        if not lines[number].startswith("  ") or lines[number].strip().startswith(("Features", "Trained", "Its "))
+    )
+    line = " ".join(part.strip() for part in lines[start:end])
     expected = ", ".join(f"{title} {share:.0%}" for title, share in shares.items())
-    assert line.strip() == f"Coverage of the 40 tasks it can learn from: {expected}"
+    assert line == f"Coverage of the 40 tasks it can learn from: {expected}"
 
     code, out = run(capsys, "status", "--json")
     found = json.loads(out)
@@ -169,7 +190,7 @@ def test_status_says_why_it_cant_count_coverage_and_shows_the_rest(capsys):
     old = old_predictor("older")  # an older version made it, so its vectors move into the feature store first
     with locks.held(old.dir / "refresh.lock"):
         code, out = run(capsys, "status", "--predictor", "older")
-    assert "while another command sets it up or refreshes it" in out
+    assert "while another command sets it up or refreshes it" in flat(out)
     assert not Predictor("older").config.get("feature_store")  # nothing moved while it was busy
 
 
@@ -208,7 +229,7 @@ def test_each_training_saves_what_went_into_it_without_any_text(capsys, tmp_path
     history(records, tasks=40, start=START)
     assert main(["create", "--yes", "--archive", f"claude-code={records}", *ONE_WINDOW]) == 0
     capsys.readouterr()
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     meta = json.loads((predictor.model_dir / "model.json").read_text())
     table = pq.read_table(predictor.prepared_path)
     assert table.num_rows == meta["tasks"] == 40  # one row for each task the model learned from
@@ -260,7 +281,7 @@ def test_each_training_saves_what_went_into_it_without_any_text(capsys, tmp_path
 
 def test_a_model_type_from_a_plugin_gets_a_prepared_dataset_too(capsys, quickly):
     assert main(["create", "--yes", *quickly, "--features", "time"]) == 0
-    table = pq.read_table(Predictor("default").prepared_path)
+    table = pq.read_table(Predictor("main").prepared_path)
     assert table.num_rows == 40 and {"number.days_since_2020", "number.hour_of_day"} <= set(table.column_names)
     assert json.loads(table.schema.metadata[b"yardstick"])["model_type"] == "quick"
 
@@ -268,7 +289,7 @@ def test_a_model_type_from_a_plugin_gets_a_prepared_dataset_too(capsys, quickly)
 # Deleting a predictor ------------------------------------------------------------------------------------
 
 
-def test_deleting_a_predictor_asks_first_and_changes_nothing_else(capsys, monkeypatch, quickly):
+def test_deleting_a_predictor_asks_first_and_changes_nothing_else(capsys, monkeypatch, quickly, wide):
     for name in ("default", "work"):
         assert main(["create", name, "--yes", *quickly, "--features", "context"]) == 0
     capsys.readouterr()
@@ -381,7 +402,7 @@ def can_link(folder: Path) -> bool:
 
 
 @pytest.mark.usefixtures("quick")
-def test_deleting_a_predictor_that_is_a_link_deletes_only_the_link(capsys, tmp_path):
+def test_deleting_a_predictor_that_is_a_link_deletes_only_the_link(capsys, tmp_path, wide):
     if not can_link(tmp_path):
         pytest.skip("This computer doesn't let the tests make links.")
     from test_embeddings import _task
@@ -467,7 +488,7 @@ def test_a_setup_of_the_same_name_as_a_predictor_being_deleted_keeps_all_it_make
     import shutil
 
     assert main(["create", "--yes", *quickly]) == 0
-    folder = store.predictor_folder("default")
+    folder = store.predictor_folder("main")
     setup: list[threading.Thread] = []
     codes: list[int] = []
     ready = threading.Event()
@@ -491,13 +512,13 @@ def test_a_setup_of_the_same_name_as_a_predictor_being_deleted_keeps_all_it_make
         return real_rmtree(path, *args, **kwargs)
 
     monkeypatch.setattr(shutil, "rmtree", rmtree)
-    assert main(["delete", "default", "--yes"]) == 0
+    assert main(["delete", "main", "--yes"]) == 0
     setup[0].join(120)
     assert not setup[0].is_alive() and codes == [0]
     assert refused[:1] == [True]  # the delete held the name's lock as the setup first asked for it
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.count_tasks() == 40 and (predictor.model_dir / "model.json").is_file()
-    assert predictor.prepared_path.is_file() and default_name() == "default"
+    assert predictor.prepared_path.is_file() and default_name() == "main"
 
 
 def test_each_name_has_a_lock_of_its_own_with_a_short_file_name():
@@ -543,7 +564,7 @@ def test_a_broken_predictor_can_be_deleted(capsys):
     predictor.close()
     (predictor.dir / "predictor.json").write_text("")  # an older version stopped halfway through saving it
     assert main(["status"]) == 1
-    assert "or delete the predictor with yardstick-predict delete default" in capsys.readouterr().out
+    assert "or delete the predictor with yardstick-predict delete default" in flat(capsys.readouterr().out)
     code, out = run(capsys, "delete", "default", "--yes")
     assert code == 0 and "Deleted default." in out and not predictor.dir.exists()
 
@@ -589,7 +610,10 @@ def test_the_status_line_says_plainly_when_its_predictor_is_gone(monkeypatch):
     assert forecast("Add a login page") == "yardstick · no forecast: default was deleted"
     monkeypatch.setattr(forecasting, "load", real)
     # The one left is used without a default. It has no model yet.
-    line = "yardstick · no forecast: Predictor 'work' has no model yet. Run yardstick-predict."
+    line = (
+        "yardstick · no forecast: Predictor 'work' has no model yet. Train it with: yardstick-predict refresh "
+        "--predictor work"
+    )
     assert forecast("Fix the parser") == line
     Predictor.create("home", [], EMBEDDING)
     line = "yardstick · no forecast: no default predictor. Choose one with: yardstick-predict default NAME"
@@ -614,6 +638,7 @@ def test_deleting_a_stored_feature_says_who_uses_it_and_what_making_it_again_cos
 
     asked = answering(monkeypatch, "n")
     code, out = run(capsys, "features", "delete", CONTEXT)
+    out = flat(out)  # the lines broken to fit the terminal, joined
     assert code == 0 and asked == ["Delete it for good? [y/N]"]
     assert "Delete a stored feature" in out and "context embeddings by voyage-4, 256 numbers" in out
     assert f"Used by default and work. The next refresh of each makes it again, for {with_context} tasks." in out
@@ -626,6 +651,7 @@ def test_deleting_a_stored_feature_says_who_uses_it_and_what_making_it_again_cos
     (home / "cache" / "embeddings.sqlite").unlink()
     answering(monkeypatch, "y")
     code, out = run(capsys, "features", "delete", CONTEXT)
+    out = flat(out)  # the lines broken to fit the terminal, joined
     assert re.search(r"The cache of vectors holds none of their \d+ texts, so they go to Voyage: [\d,]+ tokens, ", out)
     assert "A refresh shows what it costs and asks before it spends anything, unless you give it --yes." in out
     assert code == 0 and "Deleted context embeddings by voyage-4, 256 numbers." in out
@@ -647,8 +673,8 @@ def test_a_program_deletes_a_stored_feature_with_yes_and_reads_json(capsys, monk
     answering(monkeypatch, "n")
     code, out = run(capsys, "features", "delete", answers)
     assert "LLM answers by Codex's own model, through your ChatGPT subscription" in out
-    assert "Used by default. Its next refresh makes it again, for 40 tasks." in out
-    assert "LLM analysis: 40 tasks with Codex's own model through your chatgpt subscription" in out
+    assert "Used by main. Its next refresh makes it again, for 40 tasks." in out
+    assert "LLM analysis: 40 tasks with Codex's own model through your ChatGPT subscription" in flat(out)
     monkeypatch.setattr(command, "interactive", lambda: False)
 
     code, out = run(capsys, "features", "delete", answers)
@@ -663,10 +689,10 @@ def test_a_program_deletes_a_stored_feature_with_yes_and_reads_json(capsys, monk
     code, out = run(capsys, "features", "delete", answers, "--yes", "--json")
     assert code == 0
     found = json.loads(out)
-    assert found["deleted"]["id"] == answers and found["deleted"]["used_by"] == ["default"]
+    assert found["deleted"]["id"] == answers and found["deleted"]["used_by"] == ["main"]
     assert found["deleted"]["tasks"] == 40 and found["notes"] == []
     assert found["remake"]["tasks"] == 40 and found["remake"]["usd"] is None  # a subscription pays for it
-    assert answers not in feature_store.index() and Predictor("default").llm_labels() == {}
+    assert answers not in feature_store.index() and Predictor("main").llm_labels() == {}
     for flags, error in (((), "invalid_request"), ((answers,), "unknown_feature"), (("nope",), "unknown_feature")):
         code, out = run(capsys, "features", "delete", *flags, "--yes", "--json")
         assert code == 1 and json.loads(out)["error"]["code"] == error
@@ -725,17 +751,17 @@ def test_a_stored_feature_isnt_deleted_while_a_command_that_saves_to_the_store_r
     real_refresh = command._refresh
     seen: list[tuple[int, str]] = []
 
-    def refresh(args, predictor):
+    def refresh(args, predictor, answer):
         # While the refresh runs, a program tries to delete a stored feature it may be saving to.
         seen.append(run(capsys, "features", "delete", answers, "--yes", "--json"))
-        return real_refresh(args, predictor)
+        return real_refresh(args, predictor, answer)
 
     monkeypatch.setattr(command, "_refresh", refresh)
     assert main(["refresh", "--yes"]) == 0
     code, out = seen[0]
     error = json.loads(out)["error"]
     assert code == 1 and error["code"] == "busy" and "Try again when it's done." in error["message"]
-    assert answers in feature_store.index() and len(Predictor("default").llm_labels()) == 40
+    assert answers in feature_store.index() and len(Predictor("main").llm_labels()) == 40
 
 
 def test_an_older_predictor_moves_into_the_store_only_while_no_stored_feature_is_deleted(capsys):
@@ -748,7 +774,7 @@ def test_an_older_predictor_moves_into_the_store_only_while_no_stored_feature_is
         code, out = run(capsys, "features", "--json")
         assert code == 1 and json.loads(out)["predictors"][0]["error"] == command.STORE_BUSY
         code, out = run(capsys, "status")
-        assert "Its coverage can't be counted while another command is using the feature store." in out
+        assert "Its coverage can't be counted while another command is using the feature store." in flat(out)
         assert not Predictor("older").config.get("feature_store")  # nothing moved in meanwhile
     code, out = run(capsys, "features", "--json")
     assert code == 0 and Predictor("older").config.get("feature_store")
@@ -774,6 +800,7 @@ def test_making_llm_answers_again_counts_an_analysis_for_each_set_of_parts_asked
     feature_store.save_answers(answers, {"t0": {"kind": "feature", "by": "anthropic:claude-opus-5-5"}})
     answering(monkeypatch, "n")
     code, out = run(capsys, "features", "delete", answers.id)
+    out = flat(out)  # the lines broken to fit the terminal, joined
     assert "Used by alike, described and kind. The next refresh of each makes it again, for 6 tasks." in out
     assert "They ask for different parts of the analysis, so their tasks are read once for each." in out
     assert "LLM analysis: 6 tasks, read 12 times in all, with Claude Opus 5.5, about $0.10 at list price." in out
@@ -808,6 +835,7 @@ def test_making_llm_answers_again_counts_the_fewest_and_the_most_readings(capsys
     feature_store.save_answers(answers, {"t0": {"kind": "feature", "by": "anthropic:claude-opus-5-5"}})
     answering(monkeypatch, "n")
     code, out = run(capsys, "features", "delete", answers.id)
+    out = flat(out)  # the lines broken to fit the terminal, joined
     assert "so a task can be read more than once: from 6 to 12 readings in all when they refresh one at a time" in out
     assert "depending on which goes first. Below is the most." in out and "read once for each" not in out
     assert "LLM analysis: 6 tasks, read 12 times in all, with Claude Opus 5.5, about $0.10 at list price." in out
@@ -830,8 +858,8 @@ def test_a_stored_feature_no_predictor_uses_goes_without_any_cost(capsys, monkey
 def test_the_features_listing_keeps_its_flags(capsys, quickly):
     assert main(["create", "--yes", *quickly]) == 0
     capsys.readouterr()
-    code, out = run(capsys, "features", "--predictor", "default", "--json")
-    assert code == 0 and [entry["name"] for entry in json.loads(out)["predictors"]] == ["default"]
+    code, out = run(capsys, "features", "--predictor", "main", "--json")
+    assert code == 0 and [entry["name"] for entry in json.loads(out)["predictors"]] == ["main"]
     code, out = run(capsys, "features")
     assert code == 0 and "id embedding.prompt.voyage-4.256" in out
     assert main(["features", "remove", "x"]) == 2  # only delete goes there
@@ -853,3 +881,40 @@ def test_what_making_a_feature_again_costs_counts_a_shared_text_once():
     found = pipeline.remake(prompts, [predictor, other])
     assert found.cached == 1 and found.tokens == sum(len(f"task {n}".split()) + 1 for n in (0, 2, 4))
     assert pipeline.remake(feature_store.embedding("context", "voyage-4", 256), [predictor]).texts == 1
+
+
+def test_a_predictor_whose_settings_cant_be_read_isnt_renamed(capsys):
+    quick_predictor("default")
+    work = quick_predictor("work")
+    store.set_default("work")
+    (work.dir / "predictor.json").write_text("{not json")
+    assert main(["rename", "work", "fixed"]) == 1
+    assert "It wasn't renamed." in capsys.readouterr().err
+    assert predictor_names() == ["default", "work"] and store.settings()["default"] == "work"  # nothing moved
+
+
+@pytest.mark.usefixtures("quick")
+def test_renaming_a_link_leaves_the_folder_it_leads_to_as_it_was(capsys, tmp_path):
+    if not can_link(tmp_path):
+        pytest.skip("This computer doesn't let the tests make links.")
+    default = quick_predictor("default")
+    default.close()
+    store.predictor_folder("work").symlink_to(default.dir, target_is_directory=True)
+    before = (default.dir / "predictor.json").read_text()
+    assert main(["rename", "work", "home"]) == 0
+    assert store.predictor_folder("home").is_symlink() and predictor_names() == ["default", "home"]
+    assert (default.dir / "predictor.json").read_text() == before  # its name is still default
+
+
+def test_settings_changed_at_the_same_time_all_stay():
+    import threading
+
+    names = [f"note_{number}" for number in range(24)]
+    threads = [threading.Thread(target=store.save_setting, args=(name, True)) for name in names]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert all(store.settings().get(name) is True for name in names)  # no change was lost to another
+    store.forget_setting("note_0")
+    assert "note_0" not in store.settings() and store.settings().get("note_1") is True

@@ -1,6 +1,6 @@
 [project]
 name = "yardstick-predict"
-version = "0.4.0"
+version = "0.5.0"
 description = "Forecast how long a coding-agent task will take and what it will cost, before it runs."
 readme = "README.md"
 license = "Apache-2.0"
@@ -29,12 +29,8 @@ dependencies = [
     # The feature store keeps embeddings and LLM answers in Parquet files. Only refresh, setup and the features
     # listing load it, never a forecast.
     "pyarrow>=18",
-]
-
-[project.optional-dependencies]
-# Only for LLM analysis paid with an API key: the providers' own official libraries. A subscription uses the
-# Claude Code or Codex command already on your computer and needs neither.
-llm = [
+    # LLM analysis paid with an API key calls the providers' own official libraries. A subscription uses the
+    # Claude Code or Codex command already on your computer instead.
     "anthropic>=1.12,<2",
     "openai>=3.26,<4",
 ]
@@ -57,19 +53,29 @@ dev = [
 requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
+[tool.uv]
+# A new release of a library gets into uv.lock only once it has been out for 7 days. A bad release is usually found
+# and pulled by then. This keeps the tests and the release builds to libraries that have had that time. It doesn't
+# change what an install of yardstick-predict gets: CONTRIBUTING.md says how to wait there too.
+exclude-newer = "7 days"
+required-version = ">=0.11"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/yardstick_predict"]
 
 # Only these files go in the source package. Anything else in the folder, ignored by git or not, stays out.
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/docs", "/schemas", "/README.md", "/LICENSE", "/CONTRIBUTING.md", "/SECURITY.md", "/uv.lock"]
+include = [
+    "/src", "/tests", "/docs", "/schemas", "/README.md", "/CHANGELOG.md", "/LICENSE", "/CONTRIBUTING.md", "/SECURITY.md",
+    "/AGENTS.md", "/CLAUDE.md", "/uv.lock",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

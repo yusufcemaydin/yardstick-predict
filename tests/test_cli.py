@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import jsonschema
 import pytest
-from builders import ClaudeSession, CodexSession, history
+from builders import ClaudeSession, CodexSession, flat, history
 from conftest import KEY
 
 from yardstick_predict import benchmarks, cli, embeddings, forecast, llm, model_types, pipeline
@@ -49,8 +49,8 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     assert "180 tasks" in out
     assert re.search(r"claude-opus-5-5\s+forecasts on", out)
     assert "Forecasts are on for claude-opus-5-5" in out and 'yardstick-predict predict "Add a login page' in out
-    assert default_name() == "default"  # the first predictor is the default
-    predictor = Predictor("default")
+    assert default_name() == "main"  # the first predictor is the default
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "conversation", "context"]
     assert predictor.config["embedding"]["model"] == "voyage-4"
     assert predictor.config["model"]["type"] == "xgboost"
@@ -73,13 +73,13 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     monkeypatch.setattr(cli, "terminal_output", lambda: True)
     sent = len(ready.requests)
     code, out = run(capsys, "predict", "fix the api")
-    row = r"\s+\d+ (s|min|h)\s+[\d.]+[kM]? tokens\s+\$"
+    row = r"\s+\d+ (s|min|h)\s+[\d.]+[kM]?\s+\$"
     assert code == 0 and re.search(r"claude-opus-5-5\s+high" + row, out) and re.search(r"\n\s+max" + row, out)
     # One prompt at several effort levels is embedded once. The JSON forecast above already paid for it, and
     # the cache of vectors kept it, so this one sends it no more.
     texts = [text for body in ready.requests for text in body["input"]]
     assert texts.count("fix the api") == 1 and len(ready.requests) == sent
-    assert "predictor default, updated just now" in out and "{" not in out
+    assert "predictor main, updated just now" in out and "{" not in out
     monkeypatch.setattr(cli, "terminal_output", lambda: False)
 
     code, out = run(capsys, "status", "--json")
@@ -142,7 +142,7 @@ def test_a_task_counts_toward_the_free_tokens_only_when_all_its_texts_fit():
 def test_pressing_enter_on_the_free_tokens_question_assumes_no_credits(capsys, ready, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda question="": "")
     assert cli.get_key("voyage-4", can_ask=True) == KEY
-    assert "y   yes, or I'm not sure - report costs assuming no credits" in capsys.readouterr().out
+    assert "y   yes or not sure. Costs then count no free tokens." in capsys.readouterr().out
     assert embeddings.account(KEY)["free_tokens"] == "unknown"
 
 
@@ -151,11 +151,11 @@ def test_a_program_must_agree_to_the_cost(capsys, records, ready):
     assert code == 2
     assert "list price" in out and "--yes" in out
     assert predictor_names() == []  # nothing is created before the yes
-    assert len(ready.requests) == 1  # only the tiny key check was sent
+    assert not ready.requests  # nothing at all went to Voyage, not even a check of the key
 
     code, out = run(capsys, "create", "--archive", f"claude-code={records}", "--yes", *ONE_WINDOW)
     assert code == 0, out
-    stored = b"".join(p.read_bytes() for p in Predictor("default").dir.parent.parent.rglob("*") if p.is_file())
+    stored = b"".join(p.read_bytes() for p in Predictor("main").dir.parent.parent.rglob("*") if p.is_file())
     assert KEY.encode() not in stored
     assert sum(embeddings.account(KEY)["used"].values()) > 0
 
@@ -185,7 +185,7 @@ def test_features_and_advanced_settings_are_chosen_with_flags(capsys, records, r
         "2",
     )
     assert code == 0, out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "benchmarks"]
     assert predictor.config["model"]["heads"] == ["seconds", "usd"]
     assert predictor.config["model"]["family"] == "weibull"
@@ -223,7 +223,7 @@ def test_a_typed_prompt_is_forecast_as_a_persons(capsys, monkeypatch):
     Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
     asked = []
 
-    def answer(predictor, tasks, distribution, model=None):
+    def answer(predictor, tasks, distribution, model=None, rough=False):
         asked.extend(tasks)
         return {"forecasts": []}
 
@@ -295,18 +295,25 @@ def test_a_forecast_waits_for_a_model_being_swapped_in():
     assert model_ready(predictor) and time.time() - started >= 0.15
 
 
-def test_bad_choices_get_a_plain_reason(capsys, records, ready):
-    assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "horoscope"]) == 1
-    assert "Unknown feature" in capsys.readouterr().err
+def test_bad_choices_get_a_plain_reason(capsys, monkeypatch, records, ready):
+    from yardstick_predict import pipeline
+
+    real_read = pipeline.read_all
+    monkeypatch.setattr(pipeline, "read_all", lambda *args, **kwargs: pytest.fail("It read the records first"))
+    for flags in (["--features", "horoscope"], ["--features", "skills:bogus"], ["--llm-provider", "claude"]):
+        assert main(["create", "--yes", "--archive", f"claude-code={records}", *flags]) == 1
+        said = capsys.readouterr().err
+        assert "Nothing was read or spent." in said and ("Unknown feature" in said or "skills" in said or "llm" in said)
+    monkeypatch.setattr(pipeline, "read_all", real_read)
     assert main(["create", "--yes", "--archive", f"claude-code={records}", "--shape", "weibull", "--loss", "crps"]) == 1
     assert "crps" in capsys.readouterr().err
 
 
 def test_a_new_predictor_is_named_first(monkeypatch):
-    replies = iter(["", "Not A Name", "default", "work"])
+    replies = iter(["", "", "Not A Name", "main", "work"])
     monkeypatch.setattr("builtins.input", lambda question="": next(replies))
-    assert cli.ask_name([]) == "default"  # the first predictor is called default unless you pick a name
-    assert cli.ask_name(["default"]) == "work"  # an empty, a bad and a taken name are each asked again
+    assert cli.ask_name([]) == "main"  # the first predictor is called main unless you pick a name
+    assert cli.ask_name(["main"]) == "work"  # an empty, a bad and a taken name are each asked again
 
 
 def test_commands_use_the_default_predictor_you_choose(capsys):
@@ -376,8 +383,194 @@ def test_refresh_adds_only_new_tasks(capsys, records, ready):
     assert code == 2 and "--yes" in out
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "Found 3 new tasks" in out
-    assert Predictor("default").count_tasks() == 183
-    assert len(Predictor("default").embedded("prompt")) == 183
+    assert Predictor("main").count_tasks() == 183
+    assert len(Predictor("main").embedded("prompt")) == 183
+
+
+def test_setup_stops_at_a_folder_of_records_that_isnt_there(capsys, monkeypatch, ready, quick, tmp_path):
+    sent = len(ready.requests)
+    nowhere = tmp_path / "nowhere"
+    code, out = run(capsys, "create", "--yes", "--json", "--archive", f"codex={nowhere}", *quick)
+    message = f"There's no folder at {nowhere}. Nothing was read or spent."
+    assert code == 1 and json.loads(out)["error"] == {"code": "invalid_request", "message": message}
+    assert len(ready.requests) == sent and predictor_names() == []
+    # A person in a terminal is told the same before anything is asked, with every folder that isn't there named.
+    monkeypatch.setattr(cli, "interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("It asked a question first"))
+    assert main(["create", "other", "--archive", f"codex={nowhere}", "--archive", f"codex={tmp_path / 'gone'}"]) == 1
+    said = " ".join(capsys.readouterr().err.split())
+    assert f"There are no folders at {nowhere} and {tmp_path / 'gone'}. Nothing was read or spent." in said
+
+
+def test_a_refresh_says_when_a_folder_of_records_isnt_there_and_keeps_its_tasks(
+    capsys, few, ready, quick, tmp_path, wide
+):
+    from yardstick_predict.screens.update import short_path
+
+    assert run(capsys, "create", "--express", "--archive", f"claude-code={few}", *quick)[0] == 0
+    few.rename(tmp_path / "moved")  # as when the records move, or their drive isn't plugged in
+    warning = cli.no_folder(short_path(Predictor("main").config["archives"][0]), ["main"])
+    code, out = run(capsys, "refresh", "--yes", "--json")
+    answer = json.loads(out)
+    assert code == 0 and warning in answer["notes"] and answer["removed_tasks"] == 0
+    assert Predictor("main").count_tasks() == 40  # every task read from there stays
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 0 and warning in " ".join(out.split())
+
+
+def test_setup_and_refresh_answer_a_program_in_json(capsys, few, ready, quick):
+    # Without --yes, setup says what it would do and what it costs, and does nothing.
+    code, out = run(capsys, "create", "--json", "--archive", f"claude-code={few}", *quick)
+    answer = json.loads(out)  # standard output holds the answer alone: what setup says on the way went elsewhere
+    assert code == 2 and answer["done"] is False and answer["predictor"] == "main" and answer["found_tasks"] == 40
+    embedding = answer["cost"]["embedding"]
+    assert embedding["texts"] > 0 and embedding["model"] == "voyage-4" and answer["cost"]["analysis"] is None
+    assert answer["cost"]["usd"] == embedding["usd"] and predictor_names() == []
+    code, out = run(capsys, "create", "--yes", "--json", "--archive", f"claude-code={few}", *quick)
+    answer = json.loads(out)
+    assert code == 0 and answer["done"] and answer["trained"] and answer["default"]
+    assert answer["learned_from"] == 40 and answer["forecasts_for"] == ["claude-opus-5-5"]
+    assert answer["embedded"] > 0 and answer["notes"] == []
+    code, out = run(capsys, "refresh", "--json")
+    answer = json.loads(out)
+    assert code == 0 and answer["done"] and answer["up_to_date"] and not answer["trained"]
+    assert answer["forecasts_for"] == ["claude-opus-5-5"]
+
+    session = ClaudeSession(few, "brand-new", START + 90 * 86400)
+    for n in range(3):
+        session.prompt(f"new task {n}")
+        session.reply(5)
+    session.save(mtime=START)
+    code, out = run(capsys, "refresh", "--json")
+    answer = json.loads(out)
+    assert code == 2 and not answer["done"] and answer["new_tasks"] == 3
+    planned = answer["cost"]["embedding"]["texts"]  # their prompts, and the ends of the conversation before them
+    assert planned >= 3 and Predictor("main").count_tasks() == 40  # nothing saved without --yes
+    code, out = run(capsys, "refresh", "--yes", "--json")
+    answer = json.loads(out)
+    assert code == 0 and answer["done"] and answer["trained"] and answer["new_tasks"] == 3
+    assert answer["embedded"] == planned
+    assert Predictor("main").count_tasks() == 43
+
+    code, out = run(capsys, "refresh", "--json", "--predictor", "nope")
+    assert code == 1 and json.loads(out)["error"]["code"] == "unknown_predictor"
+    code, out = run(capsys, "create", "main", "--json", "--yes", "--archive", f"claude-code={few}", *quick)
+    assert code == 1 and json.loads(out)["error"]["code"] == "predictor_exists"
+    code, out = run(capsys, "create", "--json", "--yes", "--archive", f"claude-code={few}", *quick)
+    assert code == 1 and json.loads(out)["error"]["code"] == "invalid_request"  # a second one needs a name
+
+
+def test_a_second_predictor_pays_for_no_vector_the_feature_store_has(capsys, few, ready, quick):
+    import shutil
+
+    from yardstick_predict import store
+
+    assert main(["create", "first", "--express", "--archive", f"claude-code={few}", *quick]) == 0
+    shutil.rmtree(store.home() / "cache")  # the cache of vectors is gone: only the feature store has them
+    capsys.readouterr()
+    sent = len(ready.requests)
+    code, out = run(capsys, "create", "second", "--yes", "--json", "--archive", f"claude-code={few}", *quick)
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and answer["cost"]["embedding"]["texts"] == 0 and answer["embedded"] == 0
+    assert len(ready.requests) == sent  # nothing went to Voyage, not even a check of the key
+    assert len(Predictor("second").embedded("prompt")) == 40
+
+
+def test_a_refresh_with_nothing_for_voyage_needs_no_key(capsys, monkeypatch, few, ready, quick):
+    assert main(["create", "--express", "--archive", f"claude-code={few}", *quick]) == 0
+    feature = "embedding.prompt.voyage-4.256"
+    assert main(["features", "delete", feature, "--yes"]) == 0  # the cache of vectors still holds every text
+    capsys.readouterr()
+    monkeypatch.delenv("VOYAGE_API_KEY")
+    sent = len(ready.requests)
+    code, out = run(capsys, "refresh", "--yes", "--json")
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and answer["cost"]["embedding"]["texts"] == 0
+    assert len(ready.requests) == sent and len(Predictor("main").embedded("prompt")) == 40  # all from the cache
+
+
+def test_a_task_whose_text_changed_is_read_again_and_others_are_not(capsys, monkeypatch, few, ready, quick):
+    import dataclasses
+
+    from test_llm import answer_for, ids_in
+
+    from yardstick_predict.pipeline import analysis_plan
+
+    monkeypatch.setattr(llm, "_anthropic", lambda model, system, text, shape, **limits: answer_for(ids_in(text)))
+    flags = ["--features", "llm:kind", "--llm-provider", "anthropic", "--archive", f"claude-code={few}", *quick]
+    assert main(["create", "--yes", *flags]) == 0
+    predictor = Predictor("main")
+    labels = predictor.llm_labels()
+    tasks = predictor.tasks()
+    assert all(labels[task.id].get("read") for task in tasks)  # each answer says what it read, through the store
+    assert analysis_plan(tasks, predictor.config, labels) == []
+    changed = [dataclasses.replace(tasks[0], prompt="Fix the security bug in the login form"), *tasks[1:]]
+    assert [ask.id for ask in analysis_plan(changed, predictor.config, labels)] == [tasks[0].id]
+    old = {task_id: {k: v for k, v in found.items() if k != "read"} for task_id, found in labels.items()}
+    assert analysis_plan(changed, predictor.config, old) == []  # an answer that doesn't say what it read stays
+
+
+def test_a_spending_limit_stops_before_anything_is_spent(capsys, few, ready, quick):
+    setup = ["create", "--yes", "--json", "--archive", f"claude-code={few}", *quick]
+    code, out = run(capsys, *setup, "--max-cost", "0")
+    error = json.loads(out)["error"]
+    assert code == 1 and error["code"] == "over_max_cost"
+    assert "more than your limit of $0. Nothing was spent or saved. Raise --max-cost" in error["message"]
+    assert predictor_names() == [] and not ready.requests  # nothing went to Voyage
+    for bad in ("-1", "nan"):
+        code, out = run(capsys, *setup, "--max-cost", bad)
+        assert code == 1 and json.loads(out)["error"]["code"] == "invalid_request"
+    code, out = run(capsys, *setup, "--max-cost", "1")
+    answer = json.loads(out)
+    assert code == 0 and answer["done"] and answer["max_cost"] == 1 and 0 < answer["spent"] <= 1
+
+    session = ClaudeSession(few, "brand-new", START + 90 * 86400)
+    for n in range(3):
+        session.prompt(f"new task {n}")
+        session.reply(5)
+    session.save(mtime=START)
+    sent = len(ready.requests)
+    code, out = run(capsys, "refresh", "--yes", "--json", "--max-cost", "0")
+    assert code == 1 and json.loads(out)["error"]["code"] == "over_max_cost"
+    assert len(ready.requests) == sent and Predictor("main").count_tasks() == 40  # nothing spent or saved
+    code, out = run(capsys, "refresh", "--yes", "--max-cost", "0")  # a person gets the same reason
+    assert code == 1 and Predictor("main").count_tasks() == 40
+    code, out = run(capsys, "refresh", "--yes", "--json", "--max-cost", "1")
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and 0 < answer["spent"] <= 1 and Predictor("main").count_tasks() == 43
+
+
+def test_llm_analysis_stops_at_the_spending_limit_and_training_goes_on(capsys, few, ready, quick, monkeypatch):
+    from test_llm import answer_for, ids_in
+
+    reads, writes = llm.TOKENS_PER_TASK
+
+    def costly(model, system, text, shape, **limits):  # each task really costs twice the price shown
+        ids = ids_in(text)
+        return {
+            **answer_for(ids),
+            "_usage": {"model": model, "input": 2 * reads * len(ids), "output": 2 * writes * len(ids)},
+        }
+
+    monkeypatch.setattr(llm, "_anthropic", costly)
+    per_task = llm.cost(1, "claude-opus-5-5")
+    limit = 40 * per_task + 0.01  # the price shown fits, with room for the embedding
+    flags = ["--features", "llm:kind", "--llm-provider", "anthropic", "--archive", f"claude-code={few}", *quick]
+    code, out = run(capsys, "create", "--yes", "--json", "--max-cost", f"{limit:.4f}", *flags)
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and answer["analyzed"] < 40
+    assert answer["spent"] <= limit and any("stopped at your spending limit" in note for note in answer["notes"])
+    assert answer["cost"]["analysis"]["usd"] == pytest.approx(40 * per_task)
+
+
+def test_a_spending_limit_cant_be_kept_without_a_price(capsys, few, ready, quick):
+    flags = ["--features", "llm:kind", "--llm-provider", "anthropic", "--llm-model", "claude-not-in-the-list"]
+    code, out = run(
+        capsys, "create", "--yes", "--json", "--max-cost", "5", "--archive", f"claude-code={few}", *flags, *quick
+    )
+    error = json.loads(out)["error"]
+    assert code == 1 and error["code"] == "cost_unknown" and "claude-not-in-the-list" in error["message"]
+    assert predictor_names() == []
 
 
 def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, records, ready, monkeypatch):
@@ -411,7 +604,7 @@ def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, r
     stop["now"] = True
     code, out = run(capsys, "refresh", "--yes")
     assert code == 130
-    assert Predictor("default").count_tasks() == 183  # the new tasks were saved, but the model is the old one
+    assert Predictor("main").count_tasks() == 183  # the new tasks were saved, but the model is the old one
 
     stop["now"] = False
     code, out = run(capsys, "refresh", "--yes")
@@ -439,13 +632,13 @@ def test_a_task_that_finishes_after_it_was_saved_as_stopped_is_embedded(tmp_path
     session.save(mtime=START)
     code, out = run(capsys, "create", "--yes", "--archive", f"codex={runs}", "--features", "", "--model-type", "stub")
     assert code == 0, out
-    assert not Predictor("default").embedded("prompt")  # saved as stopped, so not learned from
+    assert not Predictor("main").embedded("prompt")  # saved as stopped, so not learned from
 
     session.lines.append(finished)
     session.save(mtime=START + 3600)
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0, out
-    assert Predictor("default").embedded("prompt") == {"codex:t1"}
+    assert Predictor("main").embedded("prompt") == {"codex:t1"}
 
 
 def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, ready, monkeypatch):
@@ -462,8 +655,8 @@ def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, r
     monkeypatch.setattr(embeddings, "_post", flaky)
     assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "", *ONE_WINDOW]) == 1
     error = capsys.readouterr().err  # a problem that stops the command goes to the error stream
-    assert "payment method" in error and "Run yardstick-predict refresh --predictor default to finish" in error
-    predictor = Predictor("default")
+    assert "payment method" in error and "Run yardstick-predict refresh --predictor main to finish" in error
+    predictor = Predictor("main")
     # The two requests that got through held 100 texts. A text several tasks share gives each its vector.
     assert 100 <= len(predictor.embedded("prompt")) < 180
     assert embeddings.account(KEY)["free_tokens"] == "used"
@@ -519,9 +712,9 @@ def test_llm_analysis_reads_each_task_once_and_its_descriptions_are_embedded(cap
         *ONE_WINDOW,
     )
     assert code == 0, out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["llm"] == {"provider": "codex", "model": llm.DEFAULT_CODEX}
-    assert "LLM analysis: 180 tasks with Codex's own model through your chatgpt subscription" in out
+    assert "LLM analysis: 180 tasks with Codex's own model through your ChatGPT subscription" in flat(out)
     assert "Analyzed 180 tasks." in out
     assert len(predictor.llm_labels()) == 180 and len(predictor.embedded("llm")) == 180
 
@@ -541,19 +734,19 @@ def test_llm_analysis_that_cant_run_says_why_and_training_goes_on(capsys, record
     code, out = run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "llm", *ONE_WINDOW)
     assert code == 0 and "about $1.44 at list price" in out
     assert "ANTHROPIC_API_KEY" in out and "Training goes on without LLM analysis" in out
-    assert Predictor("default").llm_labels() == {}  # nothing was noted, so a refresh tries them all again
+    assert Predictor("main").llm_labels() == {}  # nothing was noted, so a refresh tries them all again
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "LLM analysis: 180 tasks" in out
 
 
 def test_a_model_made_by_a_version_before_the_previous_release_is_trained_again_on_refresh(capsys, records, ready):
     assert run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "", *ONE_WINDOW)[0] == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     path = predictor.model_dir / "model.json"
     path.write_text(json.dumps({**json.loads(path.read_text()), "format": model_types.PREVIOUS_FORMAT - 1}))
     assert pipeline.outdated(predictor) and not pipeline.from_previous_version(predictor)
     code, out = run(capsys, "status")
-    assert code == 0 and "gives no forecasts until it's trained again" in out
+    assert code == 0 and "gives no forecasts until it's trained again" in flat(out)
     # Its settings are from before the conversation was a feature to choose, when every predictor read it.
     predictor.config["format"] = 1
     predictor.save_config()
@@ -563,7 +756,7 @@ def test_a_model_made_by_a_version_before_the_previous_release_is_trained_again_
 
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "made by an older version" in out and not pipeline.outdated(predictor)
-    assert Predictor("default").config["features"] == ["prompt", "conversation"]
+    assert Predictor("main").config["features"] == ["prompt", "conversation"]
     assert "session_tasks_before" in json.loads(path.read_text())["numbers"]  # so it still reads the conversation
 
 
@@ -651,6 +844,39 @@ def fails_after_the_key_check(monkeypatch):
     return real_post
 
 
+class FragileModel(QuickModel):
+    """A quick model saved in two files, so a test can take one away."""
+
+    def save(self, folder):
+        super().save(folder)
+        (folder / "trees.json").write_text("{}")
+
+
+def load_fragile(folder):
+    json.loads((folder / "trees.json").read_text())  # FileNotFoundError when it's gone
+    return FragileModel(json.loads((folder / "model.json").read_text()))
+
+
+def test_a_damaged_model_says_so_and_a_refresh_trains_it_again(capsys, monkeypatch, few, ready):
+    train = lambda tasks, rows, settings: FragileModel(quick_train(tasks, rows, settings).meta)  # noqa: E731
+    monkeypatch.setitem(model_types._TYPES, "fragile", (train, load_fragile))
+    assert main(["create", "--express", "--archive", f"claude-code={few}", "--model-type", "fragile"]) == 0
+    capsys.readouterr()
+    (Predictor("main").model_dir / "trees.json").unlink()
+    code, out = run(
+        capsys,
+        "predict",
+        stdin=json.dumps({"version": 1, "tasks": [{"id": "a", "prompt": "fix it", "models": ["claude-opus-5-5"]}]}),
+        monkeypatch=monkeypatch,
+    )
+    error = json.loads(out)["error"]
+    assert code == 1 and error["code"] == "not_trained" and "has a damaged model" in error["message"]
+    code, out = run(capsys, "refresh", "--yes", "--json")
+    answer = json.loads(out)
+    assert code == 0 and answer["trained"] and answer["retrain_reason"] == "damaged" and answer["new_tasks"] == 0
+    assert (Predictor("main").model_dir / "trees.json").is_file()  # made again
+
+
 class Terminal(io.StringIO):
     """Standard input as a person's terminal."""
 
@@ -694,6 +920,73 @@ def test_command_line_errors_reach_a_program_as_json(capsys, monkeypatch):
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "invalid_request"
     assert main(["status", "--json", "--predictor", "nope"]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "unknown_predictor"
+    # Any command a program asks for JSON answers in JSON, even when its command line is wrong.
+    for argv in (["create", "--json", "--bogus"], ["refresh", "--json", "--max-cost"], ["default", "--json"]):
+        assert main(argv) == 1, argv
+        error = json.loads(capsys.readouterr().out)["error"]
+        assert error["code"] == "invalid_request" and error["message"].startswith("The command line isn't right")
+    # So does one that needs XGBoost when it can't load.
+    monkeypatch.setattr(cli, "xgboost_problem", lambda argv: "XGBoost couldn't load: a stand-in reason")
+    for argv in (["create", "--json", "--yes"], ["refresh", "--json"], ["check", "--json"]):
+        assert main(argv) == 1, argv
+        assert json.loads(capsys.readouterr().out)["error"]["code"] == "missing_library"
+
+
+def test_an_unexpected_error_is_said_in_a_line_and_its_details_are_kept(capsys, monkeypatch):
+    from yardstick_predict import store
+
+    def broken(args):
+        raise RuntimeError("boom \x1b]0;a title\x07today")
+
+    monkeypatch.setattr(cli, "cmd_list", broken)
+    assert main(["list"]) == 1
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err and captured.out == ""  # no page of Python
+    said = " ".join(captured.err.split())
+    assert "Something went wrong that yardstick-predict didn't expect: RuntimeError: boom today" in said
+    kept = store.home() / cli.CRASH_FILE
+    assert f"The details are in {kept}. They may hold text from your work" in said
+    assert f"Please report it at {cli.ISSUES}" in said
+    details = kept.read_text()
+    assert "Traceback" in details and "RuntimeError" in details and "Command: list" in details
+    assert main(["list", "--json"]) == 1  # a program gets it in JSON
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error["code"] == "internal_error" and error["message"].endswith("RuntimeError: boom today")
+    monkeypatch.setenv(cli.DEBUG, "1")
+    assert main(["list"]) == 1
+    assert "Traceback" in capsys.readouterr().err  # the details where it happens, on request
+
+
+def test_output_no_one_reads_anymore_ends_quietly(capsys, monkeypatch):
+    def piped(args):
+        raise BrokenPipeError
+
+    monkeypatch.setattr(cli, "cmd_list", piped)
+    assert main(["list"]) == 141
+    assert capsys.readouterr().err == ""
+
+
+def test_predict_reads_a_request_from_a_file(capsys, monkeypatch, tmp_path, quick, ready):
+    quick_predictor()
+    request = {"version": 1, "tasks": [{"id": "a", "prompt": "fix it", "models": ["claude-opus-5-5"]}]}
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(request))
+    monkeypatch.setattr(cli, "terminal_output", lambda: True)  # even in a terminal, a request gets JSON back
+    monkeypatch.setattr("sys.stdin", Terminal())
+    assert main(["predict", "--request", str(path)]) == 0
+    forecast = json.loads(capsys.readouterr().out)["forecasts"][0]
+    assert forecast["task"] == "a" and forecast["seconds"] == 60.0
+    assert main(["predict", "--request", str(tmp_path / "missing.json")]) == 1
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error["code"] == "invalid_request" and "Can't read the request file" in error["message"]
+    path.write_text("{not json")
+    assert main(["predict", "--request", str(path)]) == 1
+    assert "isn't valid JSON" in json.loads(capsys.readouterr().out)["error"]["message"]
+    assert main(["predict", "fix it", "--request", str(path)]) == 1  # the task in quotes, or a request: not both
+    assert "not both" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(request)))
+    assert main(["predict", "--request", "-"]) == 0  # - is standard input
+    assert json.loads(capsys.readouterr().out)["forecasts"][0]["task"] == "a"
 
 
 def test_choosing_a_predictor_has_its_own_error_codes(capsys, monkeypatch):
@@ -753,10 +1046,13 @@ def test_status_reads_only_what_the_saved_model_says_about_itself(capsys, monkey
     assert json.loads(capsys.readouterr().out)["predictors"][0]["report"]["tested_on"] == 40
 
 
-def test_the_missing_key_error_goes_to_the_error_stream(capsys):
-    assert cli.get_key("voyage-4", can_ask=False) is None
+def test_the_missing_key_error_goes_to_the_error_stream(capsys, few):
+    assert main(["create", "--yes", "--archive", f"claude-code={few}"]) == 1
     captured = capsys.readouterr()
     assert "No Voyage key found" in captured.err and "No Voyage key found" not in captured.out
+    with pytest.raises(cli.CommandError) as stopped:
+        cli.get_key("voyage-4", can_ask=False)
+    assert stopped.value.reason == "no_embedding_key"  # a program that asked for JSON gets this code
 
 
 # Saved state -----------------------------------------------------------------------------------------------
@@ -894,12 +1190,12 @@ def test_on_windows_the_folder_is_made_private_once_and_never_stops_a_command(tm
     assert not store.private_on_windows(other, run=missing) and not (other / ".private").exists()
 
 
-def test_predictor_names_that_cant_be_folders_are_refused(capsys):
+def test_predictor_names_that_cant_be_folders_are_refused(capsys, tmp_path):
     from yardstick_predict.store import name_problem
 
     assert name_problem("work") is None
     assert name_problem("work\n") and name_problem("con") and name_problem("lpt1")
-    assert main(["create", "nul", "--yes", "--archive", "codex=/nowhere"]) == 1
+    assert main(["create", "nul", "--yes", "--archive", f"codex={tmp_path}"]) == 1
     assert "Windows keeps the name nul" in capsys.readouterr().err
     with pytest.raises(ValueError):
         Predictor.create("work\n", [], {"model": "voyage-4", "dimensions": 256})
@@ -909,14 +1205,14 @@ def test_predictor_names_that_cant_be_folders_are_refused(capsys):
 # Setup and refresh -----------------------------------------------------------------------------------------
 
 
-def test_bad_numbers_are_refused_before_anything_is_read(capsys, ready):
+def test_bad_numbers_are_refused_before_anything_is_read(capsys, ready, tmp_path):
     for flags, words in (
         (["--half-life", "-5"], "--half-life is a number of days: 0 or more"),
         (["--half-life", "nan"], "--half-life must be a number"),
         (["--half-life", "inf"], "--half-life must be a number"),
         (["--dropout", "nan"], "--dropout must be a number"),
     ):
-        assert main(["create", "--yes", *flags, "--archive", "codex=/nowhere"]) == 1
+        assert main(["create", "--yes", *flags, "--archive", f"codex={tmp_path}"]) == 1
         assert words in capsys.readouterr().err
     assert ready.requests == [] and predictor_names() == []
 
@@ -934,7 +1230,7 @@ def test_yes_in_a_terminal_asks_nothing(capsys, monkeypatch, few, ready, quick):
     monkeypatch.setattr("builtins.input", lambda question="": pytest.fail(f"It asked: {question}"))
     monkeypatch.setattr(cli.getpass, "getpass", lambda question="": pytest.fail("It asked for a key"))
     assert main(["create", "--yes", *quick, "--archive", f"claude-code={few}"]) == 0
-    assert Predictor("default").config["features"] == ["prompt", "conversation", "context"]  # the defaults
+    assert Predictor("main").config["features"] == ["prompt", "conversation", "context"]  # the defaults
     session = ClaudeSession(few, "more", START + 90 * 86400)
     session.prompt("one more task")
     session.reply(5)
@@ -1037,7 +1333,7 @@ def test_a_plugin_in_the_current_folder_loads_from_any_folder_later(capsys, monk
         flags = ["--plugin", "my_features_for_tests", "--features", "words_for_tests"]
         assert main(["create", "--yes", *quick, *flags, "--archive", f"claude-code={few}"]) == 0
         saved = (project / "my_features_for_tests.py").resolve()
-        assert Predictor("default").config["plugins"] == [str(saved)]
+        assert Predictor("main").config["plugins"] == [str(saved)]
 
         # Later, from another folder, as the status line's forecasts run.
         monkeypatch.chdir(tmp_path)
@@ -1057,18 +1353,21 @@ def test_a_plugin_in_the_current_folder_loads_from_any_folder_later(capsys, monk
         model_types.find_plugin("missing.py")
 
 
-def test_the_guided_refresh_says_a_predictor_is_busy_and_goes_on(capsys, monkeypatch):
+def test_update_all_says_a_predictor_is_busy_and_goes_on(capsys, monkeypatch):
     from yardstick_predict import locks
+    from yardstick_predict.screens import keys, update
 
     for name in ("busy", "free"):
         Predictor.create(name, [], {"model": "voyage-4", "dimensions": 256})
     checked = []
-    monkeypatch.setattr(cli, "_refresh", lambda args, predictor: checked.append(predictor.name) or 0)
+    monkeypatch.setattr(update, "update", lambda work: checked.extend(job.predictor.name for job in work) or 0)
+    pressed = ["2", "1", keys.ESC]  # Update, Update all, then quit
+    monkeypatch.setattr(keys, "reader", lambda: lambda: pressed.pop(0))
     monkeypatch.setattr(cli, "interactive", lambda: True)
     with locks.held(Predictor("busy").dir / "refresh.lock"):
-        assert main([]) == 1
+        assert main([]) == 0
     assert checked == ["free"]
-    assert "busy is being set up or refreshed by another command" in capsys.readouterr().err
+    assert "busy is being set up or updated by another command" in capsys.readouterr().out
 
 
 def test_ctrl_d_at_a_question_stops_cleanly(capsys, monkeypatch):
@@ -1124,7 +1423,7 @@ def test_a_rate_limit_shows_its_reason_with_the_advice():
 
 def test_a_refresh_stops_using_the_vector_of_a_text_that_became_empty_and_pays_nothing(capsys, few, ready, quick):
     assert main(["create", "--yes", *quick, "--archive", f"claude-code={few}"]) == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     emptied = sorted(predictor.embedded("context"))[0]
     predictor.db.execute("UPDATE tasks SET context = '' WHERE id = ?", (emptied,))
     predictor.db.commit()
@@ -1136,7 +1435,7 @@ def test_a_refresh_stops_using_the_vector_of_a_text_that_became_empty_and_pays_n
     assert len(ready.requests) == sent and " uses " not in capsys.readouterr().out  # no cost line, nothing paid
     # Its vector stays in the feature store, for a predictor whose task still has that text. Training here
     # finds it made from another text, so it leaves it out.
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     task = next(task for task in predictor.tasks() if task.id == emptied)
     assert "context" not in pipeline.feature_rows(predictor, [task])[0].vectors
 
@@ -1150,14 +1449,35 @@ def test_a_refresh_takes_out_tasks_their_records_no_longer_hold(capsys, tmp_path
         session.clock += 60
     session.save(mtime=START)
     assert main(["create", "--yes", *quick, "--features", "", "--archive", f"claude-code={root}"]) == 0
-    assert Predictor("default").count_tasks() == 3
+    assert Predictor("main").count_tasks() == 3
     session.lines = session.lines[:-2]  # the last task is gone from the record
     session.save(mtime=START + 60)
     capsys.readouterr()
     assert main(["refresh", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "Nothing new" not in out and "taken out" in out
-    assert Predictor("default").count_tasks() == 2
+    assert Predictor("main").count_tasks() == 2
+
+
+def test_a_refresh_plans_nothing_for_tasks_it_takes_out(capsys, tmp_path, ready, quick):
+    from yardstick_predict.pipeline import plan_refresh, scan
+
+    root = tmp_path / "records"
+    session = ClaudeSession(root, "s1", START)
+    for n in range(3):
+        session.prompt(f"task {n}")
+        session.reply(5)
+        session.clock += 60
+    session.save(mtime=START)
+    assert main(["create", "--yes", *quick, "--features", "", "--archive", f"claude-code={root}"]) == 0
+    predictor = Predictor("main")
+    gone = [task.id for task in predictor.tasks() if task.prompt == "task 2"]
+    session.lines = session.lines[:-2]  # the last task is gone from the record
+    session.save(mtime=START + 60)
+    found = scan(predictor)
+    assert found.removed == gone
+    planned = plan_refresh(predictor, found, KEY)
+    assert gone[0] not in {task.id for task in planned.tasks}  # neither priced nor analyzed
 
 
 def test_a_predictor_read_by_an_older_reader_reads_its_records_again_once(capsys, tmp_path, ready, quick):
@@ -1171,22 +1491,25 @@ def test_a_predictor_read_by_an_older_reader_reads_its_records_again_once(capsys
         session.clock += 60
     session.save(mtime=START)
     assert main(["create", "--yes", *quick, "--features", "", "--archive", f"claude-code={root}"]) == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     predictor.config["reader"] = READER_VERSION - 1  # as an older version left it
     predictor.save_config()
     capsys.readouterr()
     assert main(["refresh", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "read them all again" in out and "grew" not in out
-    assert Predictor("default").config["reader"] == READER_VERSION
+    assert Predictor("main").config["reader"] == READER_VERSION
     assert main(["refresh", "--yes"]) == 0
     assert "read them all again" not in capsys.readouterr().out  # only once
 
 
 def test_the_report_says_how_many_tasks_of_its_own_each_ai_model_needs(capsys):
     cli.print_report({"report": {"tested_on": 0, "min_tasks_to_test": 60, "models": {}}})
-    assert "Each AI model needs 60 of its own" in capsys.readouterr().out
+    assert "Each AI model needs 60 tasks of its own" in " ".join(capsys.readouterr().out.split())
     few = {"served": False, "reason": "not_enough_data", "tasks_tested": 0, "tasks": 12, "failed_checks": []}
     cli.print_report({"report": {"tested_on": 40, "min_tasks_to_test": 60, "models": {"claude-opus-5-5": few}}})
     out = capsys.readouterr().out
-    assert "Tested on each AI model's newest tasks, 40 in all" in out and "12 tasks, needs 60" in out
+    squashed = " ".join(out.split())
+    assert "How close its forecasts came on each AI model's newest tasks, 40 in all" in squashed
+    assert "not enough data, 12 tasks, needs 60" in squashed or "not enough data · 12 tasks, needs 60" in squashed
+    assert "test" not in out

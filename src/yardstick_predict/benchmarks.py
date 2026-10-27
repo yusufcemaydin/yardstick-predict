@@ -12,7 +12,7 @@ import json
 import math
 import re
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 SOURCE = "https://openrouter.ai/api/v1/models"
 FACTS = (
@@ -24,7 +24,7 @@ FACTS = (
     "benchmark_released",
     "benchmark_reasons",
 )
-_EPOCH = datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp()
+_EPOCH = datetime(2020, 1, 1, tzinfo=UTC).timestamp()
 
 
 def normalize(name: str) -> str:

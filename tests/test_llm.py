@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
+from builders import flat
 
 from yardstick_predict import llm
 
@@ -359,5 +361,105 @@ def test_setup_says_once_that_claude_code_isnt_signed_in_and_trains_without_it(c
     cli.analyze_with_progress(predictor, [llm.Ask(f"t{i}", "x") for i in range(60)])
     out = capsys.readouterr().out
     assert out.count("Claude Code isn't signed in here.") == 1
-    assert "Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again." in out
+    assert "Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again." in flat(out)
     assert predictor.llm_labels() == {}  # nothing noted, so the next refresh asks about every task
+
+
+def test_another_services_words_never_hold_a_code_a_terminal_acts_on():
+    assert str(llm.LLMError("Anthropic's API said: \x1b[2Jgone\r")) == "Anthropic's API said: gone"
+
+
+# A spending limit -------------------------------------------------------------------------------------------------
+
+OPUS = {"provider": "anthropic", "model": "claude-opus-5-5"}
+
+
+def most(asks: list) -> float:
+    """The most a request for these tasks can cost on Claude Opus 5.5, worked out as the budget does."""
+    system = llm.INSTRUCTIONS.format(fields="\n".join(f"- {llm.FIELDS[name]}" for name in FIELDS))
+    text = system + llm._message(asks) + json.dumps(llm.schema(FIELDS))
+    tokens = len(text.encode()) + llm.FRAMING_TOKENS
+    return llm.prices.call_cost("claude-opus-5-5", tokens, 0, 0, 0, llm.answer_tokens(len(asks)))
+
+
+def answering(calls: list, at_most: bool):
+    """Anthropic's API, answering every task. With `at_most`, each request uses the most tokens it could."""
+
+    def call(model, system, text, shape, most_tokens=llm.MOST_ANSWER_TOKENS, fallback=True):
+        ids = ids_in(text)
+        calls.append({"tasks": len(ids), "most_tokens": most_tokens, "fallback": fallback})
+        used = len((system + text + json.dumps(shape)).encode()) + llm.FRAMING_TOKENS if at_most else 10
+        usage = {"model": model, "input": used, "output": most_tokens if at_most else 10}
+        return {**answer_for(ids), "_usage": usage}
+
+    return call
+
+
+def test_a_budget_lets_no_request_start_unless_the_most_it_can_cost_fits(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(llm, "_anthropic", answering(calls, at_most=True))  # every request costs the most it can
+    asks = [llm.Ask(f"t{i}", f"Prompt {i}") for i in range(40)]
+    budget = llm.Budget(2.5 * most(asks[:8]))
+    found = llm.analyze(asks, OPUS, FIELDS, budget=budget)
+    assert budget.spent <= budget.usd + 1e-12  # never past the limit, though every answer was as long as it may be
+    assert 16 < len(found.answers) < 40  # two whole requests, then smaller ones while they fit
+    assert "stopped at your spending limit" in found.problem and "left for a later run" in found.problem
+    # Each answer may be no longer than was set aside for it, and a declined request goes to no other AI model.
+    assert all(call["most_tokens"] == llm.answer_tokens(call["tasks"]) and not call["fallback"] for call in calls)
+
+
+def test_a_budget_gives_back_what_a_request_didnt_cost(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(llm, "_anthropic", answering(calls, at_most=False))  # every request costs very little
+    asks = [llm.Ask(f"t{i}", f"Prompt {i}") for i in range(40)]
+    budget = llm.Budget(1.5 * most(asks[:8]))  # not room for two whole requests at the most they can cost
+    found = llm.analyze(asks, OPUS, FIELDS, budget=budget)
+    assert len(found.answers) == 40 and found.problem is None and budget.spent < 0.01
+    assert budget.held == pytest.approx(0, abs=1e-9)  # what was set aside came back with each answer
+
+
+def test_ctrl_c_during_llm_analysis_doesnt_wait_for_a_request_to_come_back(tmp_path):
+    import sys
+
+    script = tmp_path / "stop.py"
+    script.write_text(
+        "import sys, time\n"
+        "from yardstick_predict import llm\n"
+        "def slow(model, system, text, shape, **limits):\n"
+        "    if 't0' not in text:\n"
+        "        time.sleep(5)\n"
+        "    return {'tasks': []}\n"
+        "llm._anthropic = slow\n"
+        "def stop(found, done):\n"
+        "    raise KeyboardInterrupt\n"
+        "asks = [llm.Ask(f't{i}', 'x', conversation=f'c{i}') for i in range(2)]\n"
+        "try:\n"
+        "    llm.analyze(asks, {'provider': 'anthropic', 'model': 'claude-opus-5-5'}, ['description'], stop)\n"
+        "except KeyboardInterrupt:\n"
+        "    sys.exit(130)\n"
+    )
+    started = time.monotonic()
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, timeout=30)
+    assert done.returncode == 130 and time.monotonic() - started < 4  # it didn't wait 5 seconds for the slow one
+
+
+def test_what_a_request_really_cost_comes_from_the_tokens_it_used():
+    found = {"tasks": [], "_usage": {"model": "claude-opus-5-5", "input": 1_000_000, "output": 0}}
+    rates = llm.prices.price("claude-opus-5-5")
+    assert llm.spent(found, "claude-opus-5-5") == pytest.approx(rates["input"]) and "_usage" not in found
+    # An answer from a fallback model with no price in the list counts at the price of the one asked for.
+    found = {"_usage": {"model": "some-new-model", "input": 0, "output": 1_000_000}}
+    assert llm.spent(found, "claude-opus-5-5") == pytest.approx(rates["output"])
+    assert llm.spent({"tasks": []}, "claude-opus-5-5") is None  # no usage said
+
+
+def test_a_cost_or_a_limit_is_said_with_the_digits_that_matter():
+    from yardstick_predict.spending import dollars
+
+    assert [dollars(usd) for usd in (0, 1.4231, 0.01, 0.003, 0.00000594)] == [
+        "$0",
+        "$1.42",
+        "$0.01",
+        "$0.0030",
+        "$0.0000059",
+    ]

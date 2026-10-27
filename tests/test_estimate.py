@@ -7,7 +7,7 @@ import os
 import re
 
 import pytest
-from builders import ClaudeSession, history
+from builders import ClaudeSession, flat, history
 from conftest import KEY
 from test_cli import QuickModel, fake_analysis, quick_train
 from test_model import synthetic
@@ -138,7 +138,7 @@ def ready(voyage, monkeypatch):
 
 
 def said(capsys) -> str:
-    return capsys.readouterr().out
+    return flat(capsys.readouterr().out)
 
 
 def test_setup_and_refresh_say_once_how_long_they_take_before_going_ahead(capsys, monkeypatch, records, ready):
@@ -164,6 +164,28 @@ def test_setup_and_refresh_say_once_how_long_they_take_before_going_ahead(capsys
     out = said(capsys)
     assert out.count("Embedding and training take under a minute. The dataset takes about") == 1
     assert out.count("Training may use up to about") == 1 and "more than a quarter of this computer's" in out
+
+
+def test_the_room_the_data_takes_never_goes_down_from_one_refresh_to_the_next(capsys, records, ready):
+    from yardstick_predict.store import Predictor
+
+    assert main(["create", "--yes", "--features", "", "--archive", f"claude-code={records}"]) == 0
+    predictor = Predictor("main")
+    predictor.config["features"] = ["prompt", "context"]  # the next refresh embeds every task's context
+    predictor.save_config()
+    sizes = []
+    for n in range(2):
+        session = ClaudeSession(records, f"more-{n}", START + (90 + n) * 86400)
+        session.prompt(f"one more task {n}")
+        session.reply(5)
+        session.save(mtime=START)
+        capsys.readouterr()
+        assert main(["refresh"]) == 2  # a program sees the cost first, then must agree
+        found = re.search(r"The dataset takes about (\d+) KB on disk", said(capsys))
+        sizes.append(int(found.group(1)))
+        assert main(["refresh", "--yes"]) == 0
+    # The vectors the first one made are in the feature store, and they still count.
+    assert sizes[1] >= sizes[0]
 
 
 def test_the_line_names_llm_analysis_by_the_way_its_paid(capsys, monkeypatch, records, ready):
@@ -193,7 +215,7 @@ def test_every_long_step_shows_a_bar_in_a_terminal(capsys, monkeypatch, records,
     flags = ["--model-type", "quick", "--features", "", "--archive", f"claude-code={records}"]
     assert main(["create", "other", "--yes", *flags]) == 0
     out = ANSI.sub("", said(capsys))
-    assert "Training and testing" in out and " steps" not in out
+    assert "Training, then checking its forecasts" in out and " steps" not in out
 
 
 def test_text_outside_english_counts_by_its_bytes():

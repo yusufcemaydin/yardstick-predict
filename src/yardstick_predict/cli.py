@@ -1,6 +1,6 @@
 """The yardstick-predict command.
 
-    yardstick-predict              Set up, or check for new runs and refresh.
+    yardstick-predict              In a terminal, the home screen: Estimate, Update, Models and Add New.
     yardstick-predict create       Create a predictor from your past runs.
     yardstick-predict refresh      Add new runs, embed them and retrain.
     yardstick-predict predict      Forecast a task: a table in a terminal, JSON for programs.
@@ -11,6 +11,7 @@
     yardstick-predict features     List each predictor's features: what's stored, and how many tasks each covers.
                                    features delete ID deletes a stored feature.
     yardstick-predict default      Show or choose the predictor used when a command names none.
+    yardstick-predict rename       Give a predictor another name.
 
 It only asks questions when a person runs it in a terminal. When a program runs it, it never asks.
 """
@@ -18,12 +19,14 @@ It only asks questions when a person runs it in a terminal. When a program runs 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import getpass
 import importlib.util
 import json
 import math
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -45,10 +48,89 @@ from .store import (
 
 SIMPLE_RULE = "The simple rule gives every task on a model the same forecast: the spread of that model's past tasks."
 REASONS = {
-    "unknown_model": "no forecast: no past tasks on this model",
-    "not_enough_data": "no forecast yet: too few tasks on this model",
-    "not_accurate_enough": "no forecast: it didn't pass the test",
+    "unknown_model": "no data",
+    "not_enough_data": "not enough data",
+    "not_accurate_enough": "not enough data",
 }
+"""Why an AI model in a person's table has no forecast, in plain words. A program gets the reason's code."""
+
+
+class CommandError(SystemExit):
+    """A command can't go on: a message for a person, and a code for a program that asked for JSON. It stops the
+    command as a SystemExit with the message does, so a person sees the message."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+
+
+def for_program(args, run) -> int:
+    """Run a command for a program that asked for JSON. What the command says on the way goes to the error stream,
+    so standard output holds the JSON answer alone. `run` fills the answer it's given and returns the exit code.
+    When the command can't go on, the answer is the error, with its code."""
+    answer: dict = {"version": 1}
+    stdout = sys.stdout
+    try:
+        sys.stdout = sys.stderr
+        code = run(answer)
+    except CommandError as error:
+        answer, code = {"version": 1, "error": {"code": error.reason, "message": error.message}}, 1
+    except BrokenPredictor as error:
+        answer, code = {"version": 1, "error": {"code": "broken_predictor", "message": str(error)}}, 1
+    except SystemExit as stop:
+        if not isinstance(stop.code, str):
+            raise
+        answer, code = {"version": 1, "error": {"code": "failed", "message": stop.code}}, 1
+    finally:
+        sys.stdout = stdout
+    print(json.dumps(answer, indent=2))
+    return code
+
+
+_limit = None
+"""The spending limit of the setup or refresh running now, from --max-cost, as a spending.Limit. None without one."""
+
+
+@contextlib.contextmanager
+def limited(args):
+    """Keep to the --max-cost limit while the block runs: each step that costs money checks it first."""
+    global _limit
+    usd = getattr(args, "max_cost", None)
+    if usd is not None and (not math.isfinite(usd) or usd < 0):
+        raise CommandError("invalid_request", "--max-cost is a number of US dollars, 0 or more, such as 1.50.")
+    from . import spending
+
+    _limit = spending.Limit(usd) if usd is not None else None
+    try:
+        yield _limit
+    finally:
+        _limit = None
+
+
+def keep_to_limit(cost, what: str, more_usd: float = 0.0) -> None:
+    """Stop before anything is spent when what's planned may cost more than the --max-cost limit allows. `cost` is a
+    spending.Cost, or a list of them for an update of several models. `what` is the command, such as refresh.
+    `more_usd` is what else it spends, such as the key check."""
+    from .spending import dollars
+
+    if _limit is None:
+        return
+    costs = cost if isinstance(cost, list) else [cost]
+    unknown = next((found for found in costs if found.most_usd is None), None)
+    if unknown is not None:
+        raise CommandError(
+            "cost_unknown",
+            f"The price of {unknown.analysis_model} isn't in yardstick's list. A spending limit can't be kept without "
+            "it. Nothing was spent or saved. To go ahead, leave out --max-cost.",
+        )
+    most = sum(found.most_usd for found in costs) + more_usd
+    if not _limit.fits(most):
+        raise CommandError(
+            "over_max_cost",
+            f"This {what} would cost up to {dollars(most)} at list price, more than your limit of "
+            f"{dollars(_limit.usd)}. Nothing was spent or saved. Raise --max-cost to go ahead.",
+        )
 
 
 def interactive() -> bool:
@@ -103,7 +185,7 @@ def cost_lines(cost: embeddings.Cost, model: str, tasks: int) -> list[str]:
     about = "" if cost.exact else "about "
     lines = [f"Embedding {tasks:,} tasks with {model} uses {about}{cost.tokens:,} tokens."]
     if not cost.free_left:
-        lines.append(f"It costs {ui.bold(f'${cost.list_usd:.2f}')} at Voyage's list price.")
+        lines.append(f"It costs {ui.bold(money(cost.list_usd))} at Voyage's list price.")
     elif cost.free_left >= cost.tokens:
         lines.append(
             f"Your free tokens cover it, so it costs {ui.bold('nothing')}. "
@@ -112,7 +194,7 @@ def cost_lines(cost: embeddings.Cost, model: str, tasks: int) -> list[str]:
     else:
         lines.append(
             f"Your free tokens cover {millions(cost.free_left)} of them. "
-            f"The rest costs {ui.bold(f'${cost.your_usd:.2f}')}."
+            f"The rest costs {ui.bold(money(cost.your_usd))}."
         )
     if not cost.exact:
         lines.append("The token count is an estimate, because Voyage's tokenizer didn't download.")
@@ -140,7 +222,7 @@ def explain(error: embeddings.VoyageError) -> str:
             return f"Voyage kept limiting requests. {advice}"
         return f"Voyage kept limiting requests: {reason}{'' if reason.endswith('.') else '.'}\n{advice}"
     if error.status == 0:
-        return f"Couldn't reach Voyage. Check your internet connection. ({error.detail})"
+        return f"{error}. Check your internet connection."
     return str(error)
 
 
@@ -164,8 +246,10 @@ def damaged_usage_note(key: str | None) -> None:
 # The Voyage key ----------------------------------------------------------------------------------------
 
 
-def get_key(model: str, can_ask: bool) -> str | None:
-    """Find a working key. A person can paste one, and it is saved in the computer's password store."""
+def get_key(model: str, can_ask: bool, check: bool = True) -> str | None:
+    """Find a working key. A person can paste one, and it is saved in the computer's password store. None when a
+    person pastes none. It stops the command when there's no key and none can be asked for, or when the key fails.
+    Without `check`, the key isn't tried yet, so nothing goes to Voyage: verify_key tries it once it's needed."""
     key, source = embeddings.find_key()
     pasted = False
     ui.heading("Voyage key")
@@ -179,18 +263,13 @@ def get_key(model: str, can_ask: bool) -> str | None:
         if not key:
             return None
     else:
-        ui.error(
-            "No Voyage key found. Set VOYAGE_API_KEY, or run yardstick-predict in a terminal, without --yes or "
-            "--express, to paste one."
+        raise CommandError(
+            "no_embedding_key",
+            "No Voyage key found. Set VOYAGE_API_KEY. Or run this command in a terminal without --yes or --express: "
+            "it asks for one.",
         )
-        return None
-    ui.working("Checking the key")
-    try:
-        embeddings.check_key(key, model)
-    except embeddings.VoyageError as error:
-        ui.error(f"The key didn't work.\n{explain(error)}")
-        return None
-    ui.ok("The key works.")
+    if check:
+        verify_key(key, model)
     if pasted:
         if embeddings.save_key(key):
             ui.ok("Saved in your computer's password store, so you won't need to paste it again.")
@@ -198,32 +277,50 @@ def get_key(model: str, can_ask: bool) -> str | None:
             ui.note("This computer has no password store to save it in. Set VOYAGE_API_KEY to skip pasting next time.")
     if can_ask and not embeddings.account(key).get("asked"):
         ui.line()
-        ui.note("Voyage gives every account 200 million free tokens. yardstick can't see your balance, so it keeps")
-        ui.note("its own count.")
+        ui.note(
+            "Voyage gives every account 200 million free tokens. yardstick can't see your balance. It keeps its own "
+            "count."
+        )
         ui.out(ui.prompt("Has this account used any of its free tokens before?").rstrip())
         ui.line(f"    {ui.accent('n')}   no, it's a new account")
-        ui.line(f"    {ui.accent('y')}   yes, or I'm not sure - report costs assuming no credits")
-        # Pressing Enter assumes no credits, so a cost is never shown lower than it may be.
+        ui.line(f"    {ui.accent('y')}   yes or not sure. Costs then count no free tokens.")
+        # Pressing Enter counts no free tokens, so a cost is never shown lower than it may be.
         reply = input(f"    {ui.dim('[n/Y]')} ").strip().lower()
         embeddings.set_free_tokens(key, "new" if reply in ("n", "no") else "unknown")
     return key
 
 
+def verify_key(key: str, model: str) -> None:
+    """Try the key with one tiny request, and stop the command when it doesn't work. Under a spending limit, the
+    tokens it sends count toward it."""
+    ui.working("Checking the key")
+    try:
+        used = embeddings.check_key(key, model)
+    except embeddings.VoyageError as error:
+        raise CommandError("embedding_failed", f"The key didn't work.\n{explain(error)}") from None
+    if _limit is not None:
+        from . import spending
+
+        _limit.spent += spending.voyage_usd(used, model)
+    ui.ok("The key works.")
+
+
 # Questions ---------------------------------------------------------------------------------------------
 
 
-def ask_name(existing: list[str]) -> str:
-    """A name for a new predictor. The first one is called 'default' unless you pick another name."""
-    suggestion = "" if "default" in existing else "default"
+def ask_name(existing: list[str], called: str = "predictor") -> str:
+    """A name for a new predictor. The first one is called main unless you pick another name. `called` is what
+    the question calls it: model on the home screen, as every screen calls a predictor."""
+    suggestion = "" if existing else "main"
     while True:
-        reply = input(ui.prompt("Name this predictor:", f"[{suggestion}]" if suggestion else "")).strip()
+        reply = input(ui.prompt(f"Name this {called}:", f"[{suggestion}]" if suggestion else "")).strip()
         name = reply or suggestion
         if not name:
             ui.note("Type a name, such as work.")
         elif name_problem(name):
             ui.note(name_problem(name))
         elif name in existing:
-            ui.note(f"There's already a predictor called {name}. Pick another name.")
+            ui.note(f"There's already a {called} called {name}. Pick another name.")
         else:
             return name
 
@@ -236,10 +333,12 @@ def parse_archive(spec: str) -> dict:
     if "=" in spec:
         fmt, path = spec.split("=", 1)
         if fmt not in FORMATS:
-            raise SystemExit(f"Unknown record format {fmt!r}. Use one of: {', '.join(FORMATS)}.")
+            raise CommandError("invalid_request", f"Unknown record format {fmt!r}. Use one of: {', '.join(FORMATS)}.")
         path = os.path.abspath(os.path.expanduser(path))
         return {"name": os.path.basename(path.rstrip("/\\")) or "custom", "format": fmt, "path": path}
-    raise SystemExit(f"Can't read --archive {spec!r}. Use claude-code, codex, or FORMAT=PATH like codex=~/runs.")
+    raise CommandError(
+        "invalid_request", f"Can't read --archive {spec!r}. Use claude-code, codex, or FORMAT=PATH like codex=~/runs."
+    )
 
 
 def unique_names(archives: list[dict]) -> list[dict]:
@@ -254,9 +353,31 @@ def unique_names(archives: list[dict]) -> list[dict]:
     return archives
 
 
+def no_folder(path: str, names: list[str]) -> str:
+    """What to say of a folder of records that isn't there, as when its records moved or its drive isn't plugged
+    in. `names` are the predictors that read from it."""
+    one = len(names) == 1
+    return (
+        f"There's no folder at {path}. {in_words(names)} {'keeps' if one else 'keep'} the tasks "
+        f"{'it' if one else 'they'} read from there. {'It reads' if one else 'They read'} nothing new there until "
+        "the records are back."
+    )
+
+
+def given_archives(given: list[str]) -> list[dict]:
+    """The folders of records named with --archive. One that isn't there stops the command: read, it would look like
+    a folder with no tasks in it."""
+    archives = [parse_archive(spec) for spec in given]
+    missing = list(dict.fromkeys(a["path"] for a in archives if not archive_path(a).is_dir()))
+    if missing:
+        there = "There's no folder at" if len(missing) == 1 else "There are no folders at"
+        raise CommandError("invalid_request", f"{there} {in_words(missing)}. Nothing was read or spent.")
+    return archives
+
+
 def choose_archives(can_ask: bool, given: list[str]) -> list[dict]:
     if given:
-        return [parse_archive(spec) for spec in given]
+        return given_archives(given)
     found = [dict(a) for a in DEFAULT_ARCHIVES if archive_path(a).is_dir()]
     if not can_ask:
         return found
@@ -290,12 +411,15 @@ def choose_features(can_ask: bool, args):
     """The features a person picks on the Features screen, or a program names with flags."""
     from . import menu
 
-    try:
-        if args.features is not None or not can_ask:
+    if args.features is not None or not can_ask:
+        try:
             return menu.from_flags(args.features, args.llm_provider, args.llm_model)
-        return menu.ask(custom_features())
+        except ValueError as error:  # it's checked before a record is read
+            raise CommandError("invalid_request", f"{error} Nothing was read or spent.") from None
+    try:
+        return menu.ask(custom_features(), called=getattr(args, "called", "predictor"))
     except ValueError as error:
-        raise SystemExit(str(error)) from None
+        raise CommandError("invalid_request", str(error)) from None
 
 
 def custom_features() -> dict[str, str]:
@@ -324,7 +448,7 @@ def feature_summary(config: dict) -> str:
         if name == "llm" and how.get("provider") in llm.PROVIDERS:
             label += f", by {llm.title(how['model'])} through {llm.PROVIDERS[how['provider']].title.lower()}"
         found.append(label)
-    return "; ".join(found)
+    return in_words(found)
 
 
 def unknown_features_note(predictor: Predictor) -> None:
@@ -361,7 +485,7 @@ def analysis_lines(asks: int, how: dict, tasks: int | None = None) -> list[str]:
     if not provider.billed:
         requests = -(-asks // provider.batch)
         return [
-            f"LLM analysis: {read} with {model} through your {provider.title.lower()}, "
+            f"LLM analysis: {read} with {model} through your {provider.title}, "
             f"in about {requests:,} requests. It counts toward your plan's usage limits."
         ]
     usd = llm.cost(asks, how["model"])
@@ -370,14 +494,14 @@ def analysis_lines(asks: int, how: dict, tasks: int | None = None) -> list[str]:
 
 
 def say_estimate(
-    tasks: list, config: dict, plan, asks: list, new_tasks: list | None = None, dataset: int = 0, checked: int = 0
+    tasks: list, config: dict, plan, asks: list, new_tasks: list | None = None, dataset: float = 0, checked: int = 0
 ) -> None:
     """One line on how long the rest takes, what it's made of and the room the dataset takes, before the
     question to go ahead. Then a note on memory, only when training may use a lot of this computer's.
 
     `tasks` are all the predictor's tasks once the new ones are in, `config` its settings, `plan` what goes to
     Voyage and `asks` the tasks LLM analysis reads. `new_tasks` are the ones the dataset doesn't have yet, all of
-    `tasks` by default, and `dataset` is how many bytes it takes now. `checked` is how many features the feature
+    `tasks` by default, and `dataset` is how many bytes its data takes now. `checked` is how many features the feature
     check tests the model without, when it runs.
     """
     from . import estimate
@@ -389,21 +513,37 @@ def say_estimate(
         ui.note(memory)
 
 
-def analyze_with_progress(predictor: Predictor, asks: list) -> None:
-    """Run LLM analysis with a progress bar. When it can't run, training goes on without it."""
+def analyze_with_progress(predictor: Predictor, asks: list, reserve: float = 0.0) -> tuple[int, str | None]:
+    """Run LLM analysis with a progress bar. When it can't run, training goes on without it. Returns how many tasks
+    it analyzed, and what went wrong, when something did.
+
+    Under a spending limit, LLM analysis paid with an API key gets what's left of it, less `reserve`, what the
+    embedding still to come may cost. No request starts that may take it past that, and what it really cost counts
+    toward the limit.
+    """
+    from . import llm
     from .pipeline import run_analysis
 
+    how = predictor.config.get("llm") or {}
+    budget = None
+    if _limit is not None and llm.PROVIDERS[how["provider"]].billed:
+        budget = llm.Budget(_limit.left() - reserve)
     ui.heading("LLM analysis")
     ui.note("Each batch is saved as it arrives, so you can stop and resume later.")
-    answered, problem = run_analysis(predictor, asks, lambda done, total: ui.progress(done, total, "tasks"))
+    try:
+        answered, problem = run_analysis(predictor, asks, lambda done, total: ui.progress(done, total, "tasks"), budget)
+    finally:
+        if budget is not None:
+            _limit.spent += budget.spent
     if not answered and problem:
         ui.fail(problem)
         ui.note("Training goes on without LLM analysis for now. Once that's fixed, a refresh tries again.")
-        return
+        return answered, problem
     missed = len(asks) - answered
     ui.ok(f"Analyzed {answered:,} tasks." + (f" {missed:,} weren't answered." if missed else ""))
     if problem:
         ui.note(f"{problem} A refresh tries the rest again, up to twice for a task it refused.")
+    return answered, problem
 
 
 NUMBER_FLAGS = {"dropout": "0.1", "test_share": "0.3", "validation_share": "0.15", "half_life": "30"}
@@ -419,9 +559,9 @@ def check_numbers(args) -> None:
         value = getattr(args, name, None)
         flag = "--" + name.replace("_", "-")
         if value is not None and not math.isfinite(value):
-            raise SystemExit(f"{flag} must be a number, such as {example}, not {value}.")
+            raise CommandError("invalid_request", f"{flag} must be a number, such as {example}, not {value}.")
     if getattr(args, "half_life", None) is not None and args.half_life < 0:
-        raise SystemExit("--half-life is a number of days: 0 or more. 0 counts every task alike.")
+        raise CommandError("invalid_request", "--half-life is a number of days: 0 or more. 0 counts every task alike.")
 
 
 def advanced_settings(args) -> dict:
@@ -448,7 +588,7 @@ def advanced_settings(args) -> dict:
     try:
         return model.settings_for(settings)
     except ValueError as error:
-        raise SystemExit(str(error)) from None
+        raise CommandError("invalid_request", str(error)) from None
 
 
 # Reports -----------------------------------------------------------------------------------------------
@@ -493,63 +633,96 @@ def thresholds(report: dict) -> dict:
 
 
 def print_report(meta: dict) -> None:
-    """How the test went for each AI model, from the meta a trained model saves."""
+    """How close the forecasts came on each AI model's newest tasks, from the meta a trained model saves. It's said
+    in plain words: an AI model whose forecasts weren't close enough, or had too few tasks to show it, has not
+    enough data."""
     report = meta.get("report") or {}
     needed = report.get("min_tasks_to_test") or 60
     if not report.get("tested_on"):
-        ui.note(
-            f"There aren't enough tasks to test forecasts yet. Each AI model needs {needed:,} of its own. "
+        wrapped_note(
+            f"There's not enough data to check its forecasts yet. Each AI model needs {needed:,} tasks of its own. "
             "Until then, it gives no forecasts."
         )
         return
     checks = thresholds(report)
     least = checks["min_test_tasks"]
-    ui.line(f"Tested on each AI model's newest tasks, {report['tested_on']:,} in all, as if they hadn't happened yet.")
+    for part in ui.wrapped(
+        f"How close its forecasts came on each AI model's newest tasks, {report['tested_on']:,} in all, "
+        "as if they hadn't happened yet:"
+    ):
+        ui.line(part)
     ui.line()
     names = {"seconds": "time", "tokens": "tokens", "usd": "cost"}
     results = [(name, report["models"][name]) for name in tested_models(report)]
     if not results:
         return
     pad = max(len(name) for name, _ in results)
-    flags = {"ok": ui.green(ui.mark("ok")), "fail": ui.red(ui.mark("fail")), "none": ui.dim("-")}
+    flags = {"ok": ui.green(ui.mark("ok")), "thin": ui.yellow(ui.mark("warn"))}
     lead = pad + 3 + (2 if ui.styled() else 0)
 
     def flag(kind: str) -> str:
         return f"{flags[kind]} " if ui.styled() else ""
 
+    def verdict(name: str, label: str, mark: str, words: list[str]) -> None:
+        """An AI model's line: its name, then what came of its forecasts. Too wide, the words go under the name."""
+        shown = f"{label}   {mark}" + ui.join(words)
+        if ui.width(shown) < ui.columns() - 2:
+            ui.line(shown)
+            return
+        ui.line(ui.bold(ui.cut(name, ui.columns() - 3)))
+        for part in ui.wrapped(", ".join(words), 4 + ui.width(mark)):
+            ui.line(f"  {mark}{part}")
+            mark = " " * ui.width(mark)
+
+    def why(text: str) -> None:
+        """A reason under an AI model's line, broken to fit the terminal. It lines up under the AI model's words
+        where there's room for that, else it starts closer to the edge."""
+        indent = lead if 2 + lead + 20 < ui.columns() else 4
+        for part in ui.wrapped(text, 2 + indent):
+            ui.line(" " * indent + ui.dim(part))
+
     for name, result in results:
         tested = result["tasks_tested"]
         label = ui.bold(name) + " " * (pad - len(name))
         if result["served"]:
-            ui.line(f"{label}   {flag('ok')}" + ui.join(["forecasts on", f"tested on {tested:,} tasks"]))
+            verdict(name, label, flag("ok"), ["forecasts on", f"checked on {tested:,} tasks"])
             scores = [(names[t], result[t]) for t in names if t in result]
             if scores:
                 better = [f"{n} {s['better_than_simple_rule']:.0%}" for n, s in scores]
                 rows = [(ui.dim("better than the simple rule"), *better)]
                 if all(s.get("in_90_range") is not None for _, s in scores):
                     rows.append((ui.dim("inside the 90% range"), *(f"{n} {s['in_90_range']:.0%}" for n, s in scores)))
-                ui.table(rows, indent=2 + lead)
+                # Lined up under the AI model's words when that fits the terminal, else closer to the edge. A
+                # terminal too narrow for the table gets each line as words broken to fit.
+                wide = sum(max(ui.width(row[i]) for row in rows) + 3 for i in range(len(rows[0]))) - 3
+                if 4 + wide < ui.columns():
+                    ui.table(rows, indent=2 + lead if 2 + lead + wide < ui.columns() else 4)
+                else:
+                    for label, *values in rows:
+                        for part in ui.wrapped(f"{ui.plain(label)}: {', '.join(values)}", 4):
+                            ui.line(f"  {ui.dim(part)}")
         elif result["reason"] == "not_enough_data":
             count = result.get("tasks")
             if tested == 0 and isinstance(count, int) and count < needed:
-                why = f"{count:,} tasks, needs {needed}"
+                short = f"{count:,} tasks, needs {needed}"
             elif tested == 0:
-                why = f"needs {least} recent tasks to test it on"
+                short = f"needs {least} recent tasks"
             elif tested < least:
-                why = f"{tested} test tasks, needs {least}"
+                short = f"{tested} recent tasks, needs {least}"
             else:
-                why = "too few known values to test its time, tokens or cost"
-            ui.line(f"{label}   {flag('none')}" + ui.join(["not yet", why]))
+                short = "too few known times, tokens or costs"
+            verdict(name, label, flag("thin"), ["not enough data", short])
         else:
-            ui.line(f"{label}   {flag('fail')}" + ui.join(["no forecasts", f"tested on {tested:,} tasks"]))
+            verdict(name, label, flag("thin"), ["not enough data", f"checked on {tested:,} tasks"])
             for failed in result.get("failed_checks", []):
-                ui.line(" " * lead + ui.dim(failed_check(failed, result, names, checks)))
+                why(failed_check(failed, result, names, checks))
     ui.line()
-    ui.note(SIMPLE_RULE)
+    wrapped_note(SIMPLE_RULE)
 
 
 def failed_check(failed: str, result: dict, names: dict, checks: dict | None = None) -> str:
-    """One failed check, in plain words. `checks` holds the test's thresholds, as thresholds() gives them."""
+    """Why an AI model's forecasts weren't close enough, in plain words. `checks` holds the bars they had to clear,
+    as thresholds() gives them."""
     checks = checks or thresholds({})
     target, check = failed.split(".")
     scores = result[target]
@@ -610,8 +783,11 @@ def relaunch_with_openmp(argv: list[str]) -> None:
 
 def xgboost_problem(argv: list[str]) -> str | None:
     """Why XGBoost can't load, in plain words, or None when it loads."""
+    from .model_types import without_scikit_learn
+
     try:
-        import xgboost  # noqa: F401
+        with without_scikit_learn():
+            import xgboost  # noqa: F401
     except Exception as error:
         if "libomp" in str(error):
             relaunch_with_openmp(argv)
@@ -631,20 +807,26 @@ def pick_predictor(name: str | None) -> Predictor:
     names = predictor_names()
     if name:
         if name not in names:
-            raise SystemExit(f"There's no predictor called {name!r}. Your predictors: {', '.join(names) or 'none'}.")
+            message = f"There's no predictor called {name!r}. Your predictors: {', '.join(names) or 'none'}."
+            raise CommandError("unknown_predictor", message)
         return Predictor(name)
     if not names:
-        raise SystemExit("There's no predictor yet. Run yardstick-predict to create one.")
+        raise CommandError("no_predictor", "There's no predictor yet. Run yardstick-predict to create one.")
     chosen = default_name()
     if chosen is None:
-        raise SystemExit(
+        raise CommandError(
+            "no_default_predictor",
             f"You have several predictors and no default: {', '.join(names)}. Name one with --predictor, "
-            "or choose a default with: yardstick-predict default NAME"
+            "or choose a default with: yardstick-predict default NAME",
         )
     return Predictor(chosen)
 
 
 def cmd_home(args) -> int:
+    if interactive():
+        from .screens import home
+
+        return home.run()
     names = predictor_names()
     if not names:
         ui.out(ui.bold("yardstick-predict"))
@@ -652,47 +834,21 @@ def cmd_home(args) -> int:
         ui.out(ui.dim("It learns from your own past Claude Code and Codex runs. Nothing leaves your computer except"))
         ui.out(ui.dim("the text you choose to embed, such as your prompts, and that goes only to Voyage."))
         ui.out()
-        if not interactive():
-            ui.out("No predictor yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express")
-            return 1
-        if ui.ask("There's no predictor yet. Create one now?", True):
-            return cmd_create(make_parser().parse_args(["create"]))
-        return 0
-    if not interactive():
-        for name in names:
-            try:
-                predictor = Predictor(name)
-            except BrokenPredictor as error:
-                ui.out(f"{name}: {error}")
-                continue
-            facts = [
-                f"{predictor.embedding_model} embeddings",
-                f"{predictor.count_tasks():,} tasks",
-                f"updated {ago(predictor.config.get('refreshed_at'))}",
-            ]
-            ui.out(f"{name}: {', '.join(facts)}")
-        return 0
-    code = 0
+        ui.out("No predictor yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express")
+        return 1
     for name in names:
-        # One predictor that's busy or broken doesn't keep the others from being checked.
         try:
-            done = cmd_refresh(argparse.Namespace(predictor=name, yes=False, ask_first=True))
+            predictor = Predictor(name)
         except BrokenPredictor as error:
-            ui.heading(name)
-            ui.error(str(error))
-            done = 1
-        except SystemExit as stop:
-            if not isinstance(stop.code, str):
-                raise
-            ui.heading(name)
-            ui.error(stop.code)
-            done = 1
-        code = max(code, done)
-    ui.out()
-    ui.out(
-        ui.join([ui.dim("New predictor: yardstick-predict create"), ui.dim("Default: yardstick-predict default NAME")])
-    )
-    return code
+            ui.out(f"{name}: {error}")
+            continue
+        facts = [
+            f"{predictor.embedding_model} embeddings",
+            f"{predictor.count_tasks():,} tasks",
+            f"updated {ago(predictor.config.get('refreshed_at'))}",
+        ]
+        ui.out(f"{name}: {', '.join(facts)}")
+    return 0
 
 
 def already_exists(name: str) -> str:
@@ -707,63 +863,95 @@ def unknown_embedding(model: str) -> str:
 def cmd_create(args) -> int:
     from contextlib import ExitStack
 
-    # Setup takes locks as it goes, and holds them until it's done.
-    with ExitStack() as held:
-        return _create(args, held)
+    def create(answer: dict) -> int:
+        # Setup takes locks as it goes, and holds them until it's done.
+        with ExitStack() as held:
+            return _create(args, held, answer)
+
+    def limited_create(answer: dict) -> int:
+        with limited(args):
+            return create(answer)
+
+    if getattr(args, "json", False):
+        return for_program(args, limited_create)
+    return limited_create({})
 
 
-def _create(args, held) -> int:
+def _create(args, held, answer: dict) -> int:
     """Set up a new predictor: read the records, choose the features, then embed, analyze and train. `held` keeps
-    the locks it takes until it's done."""
-    from . import model_types
+    the locks it takes until it's done. `answer` is filled with what a program reads: the predictor, what it costs
+    and what was done."""
+    from . import model_types, spending
 
     if args.express:
         args.yes = True
-    # With --yes or --express it asks nothing, even in a terminal. Every choice takes its default.
-    can_ask = interactive() and not args.yes
+    # With --yes or --express it asks nothing, even in a terminal. Every choice takes its default. Nor does a
+    # program that asked for JSON.
+    can_ask = interactive() and not args.yes and not getattr(args, "json", False)
+    called = getattr(args, "called", "predictor")  # the home screen calls it a model, as every screen does
+    given_archives(args.archive)  # a folder named that isn't there is said before anything is asked
     existing = predictor_names()
     if can_ask:
         ui.out()
-        ui.out(ui.bold("New predictor"))
-    name = args.name or (ask_name(existing) if can_ask else None)
-    if name is None:
-        if "default" in existing:
-            raise SystemExit("Give the new predictor a name, like: yardstick-predict create work")
-        name = "default"
+        ui.out(ui.bold(f"New {called}"))
+    name = args.name or (ask_name(existing, called) if can_ask else None)
+    if name is None:  # a program that names none gets main, as a person's first one is called
+        if "main" in existing:
+            raise CommandError("invalid_request", "Give the new predictor a name, like: yardstick-predict create work")
+        name = "main"
     problem = name_problem(name)
     if problem:
-        raise SystemExit(problem)
+        raise CommandError("invalid_request", problem)
     if name in existing:
-        raise SystemExit(already_exists(name))
+        raise CommandError("predictor_exists", already_exists(name))
     first = not existing
     make_default = first or (
-        can_ask and ui.ask("Make it your default predictor? Commands use it when they name none.", False)
+        can_ask and ui.ask(f"Make it your default {called}? Commands use it when they name none.", False)
+    )
+    answer.update(
+        predictor=name,
+        done=False,
+        default=bool(make_default),
+        found_tasks=0,
+        cost=None,
+        analyzed=0,
+        embedded=0,
+        trained=False,
+        learned_from=None,
+        forecasts_for=[],
+        max_cost=None if _limit is None else _limit.usd,
+        spent=None,
+        notes=[],
     )
     try:
         # Each plugin is saved by where it was found, so it loads the same from any folder later.
         plugins = [model_types.find_plugin(plugin) for plugin in args.plugin]
         model_types.load_plugins(plugins)
     except model_types.PluginError as error:
-        raise SystemExit(f"{error} Nothing was read or spent.") from None
+        raise CommandError("plugin_failed", f"{error} Nothing was read or spent.") from None
     model_settings = advanced_settings(args)
     try:
         model_types.get(model_settings.get("type", "xgboost"))
     except (ValueError, ImportError, AttributeError) as error:
-        raise SystemExit(f"{error} Nothing was read or spent.") from None
+        raise CommandError("invalid_request", f"{error} Nothing was read or spent.") from None
     if args.embedding is not None and args.embedding not in embeddings.MODELS:
-        raise SystemExit(f"{unknown_embedding(args.embedding)} Nothing was read or spent.")
+        raise CommandError("invalid_request", f"{unknown_embedding(args.embedding)} Nothing was read or spent.")
     from .model import MIN_TASKS
 
     # The built-in model needs 30 tasks it can learn from. A model type from a plugin sets its own needs.
     built_in = model_settings.get("type", "xgboost") == "xgboost"
     least = MIN_TASKS if built_in else 1
     if args.max_tasks is not None and args.max_tasks < least:
-        raise SystemExit(f"Use --max-tasks {least} or more. Training needs at least {least} tasks.")
+        raise CommandError(
+            "invalid_request", f"Use --max-tasks {least} or more. Training needs at least {least} tasks."
+        )
+    # Features named with flags are checked before a record is read, so a mistyped one is said at once.
+    picked = choose_features(can_ask, args) if args.features is not None or not can_ask else None
 
     ui.heading("Your past runs")
     archives = unique_names(choose_archives(can_ask, args.archive))
     if not archives:
-        raise SystemExit("No records to learn from. Add a folder with --archive FORMAT=PATH.")
+        raise CommandError("no_records", "No records to learn from. Add a folder with --archive FORMAT=PATH.")
     ui.working("Reading your records. A big history takes a minute")
     from . import features, llm
     from .pipeline import (
@@ -777,6 +965,7 @@ def _create(args, held) -> int:
         save_scan,
         train,
     )
+    from .store import Embedded
 
     found = read_all(archives, on_progress=lambda done, total: ui.progress(done, total, "bytes"))
     counts = [(archive["name"], found.per_archive.get(archive["name"], 0)) for archive in archives]
@@ -785,17 +974,19 @@ def _create(args, held) -> int:
         ui.ok(f"Read {total:,} tasks from {counts[0][0]}.")
     else:
         ui.ok(f"Read {total:,} tasks: " + ui.join([f"{source} {count:,}" for source, count in counts]))
+    answer["found_tasks"] = len(found.new_tasks)
     if not found.new_tasks:
-        raise SystemExit("Found no finished tasks in those records.")
+        raise CommandError("no_records", "Found no finished tasks in those records.")
     from .pipeline import learnable
 
     ready = len(learnable(found.new_tasks, args.max_tasks))
     if built_in and ready < least:
-        raise SystemExit(
+        raise CommandError(
+            "not_enough_data",
             f"Only {ready} of those tasks can be learned from. Training needs at least {least}. "
-            "Nothing was spent. Add more records, or try again after more runs."
+            "Nothing was spent. Add more records, or try again after more runs.",
         )
-    picked = choose_features(can_ask, args)
+    picked = picked or choose_features(can_ask, args)
     chosen, settings = picked.features, picked.config()
     # From here, setup reads the feature store to plan what to make, and then saves to it. It holds the lock of the
     # store's users until it's done, so no features delete takes away what it planned with or saved.
@@ -808,14 +999,26 @@ def _create(args, held) -> int:
     # The check is advice for a person setting up step by step. A program, or a person who named the features
     # with flags, gets the features they named.
     checking = can_ask and args.features is None and built_in and offer_check(chosen, found.new_tasks, args.max_tasks)
-    items = embedding_items(found.new_tasks, chosen, limit=args.max_tasks, config=settings, labels=answers)
+    ids = {task.id for task in found.new_tasks}
+
+    def items(model: str) -> list:
+        """The texts to embed with this Voyage model. None the feature store holds a vector of, made from the same
+        text for another predictor, as a refresh counts them. So a second predictor pays for nothing it has."""
+        stored = {
+            name: Embedded(
+                feature_store.vector_hashes(feature_store.embedding(name, model, embeddings.DIMENSIONS), ids)
+            )
+            for name in chosen
+            if features.is_text(name)
+        }
+        return embedding_items(found.new_tasks, chosen, stored, args.max_tasks, settings, answers)
 
     model_name = args.embedding or (None if can_ask else "voyage-4")
     plans: dict = {}
     if model_name is None:
         ui.heading("Embedding model")
         ui.working("Working out what each Voyage model would cost")
-        plans = {m: price(items, m, None) for m in embeddings.MODELS}
+        plans = {m: price(items(m), m, None) for m in embeddings.MODELS}
         options = list(embeddings.MODELS)
         rows = [
             (
@@ -828,21 +1031,27 @@ def _create(args, held) -> int:
             for number, option in enumerate(options, start=1)
         ]
         ui.table(rows, align="llrrl")
-        ui.note("The predictor keeps this model for good. To change it later, create a new predictor.")
+        ui.note(f"The {called} keeps this Voyage model for good. To change it later, make a new {called}.")
         while model_name is None:
             reply = input(ui.prompt("Which Voyage model should embed your tasks?", "[1]")).strip() or "1"
-            if reply.isdigit() and 1 <= int(reply) <= len(options):
+            if ui.number_typed(reply) and 1 <= int(reply) <= len(options):
                 model_name = options[int(reply) - 1]
             else:
                 ui.note(f"Type a number from 1 to {len(options)}.")
     if model_name not in embeddings.MODELS:
-        raise SystemExit(unknown_embedding(model_name))
+        raise CommandError("invalid_request", unknown_embedding(model_name))
 
-    key = get_key(model_name, can_ask)
+    # A person's key is tried at once, so a pasted one is saved only when it works. A program's is tried once it goes
+    # ahead, so its preview sends nothing.
+    key = get_key(model_name, can_ask, check=can_ask)
     if not key:
         return 1
     # Each Voyage model's tokens are counted once. The key only changes how many of them are free.
-    plan = with_key(plans[model_name], model_name, key) if model_name in plans else price(items, model_name, key)
+    plan = (
+        with_key(plans[model_name], model_name, key)
+        if model_name in plans
+        else price(items(model_name), model_name, key)
+    )
     ui.heading("Cost")
     damaged_usage_note(key)
     for text in cost_lines(plan.cost, model_name, plan.tasks):
@@ -874,6 +1083,13 @@ def _create(args, held) -> int:
             ui.note("For the check, it reads only your newest tasks. If it helps, you can have it read the rest after.")
         if "description" in features.options(settings, "llm"):
             ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
+    described = len(asks) if asks and "description" in features.options(settings, "llm") else 0
+    cost = spending.cost_of(settings, model_name, plan, asks, described)
+    answer["cost"] = cost.as_json()
+    check_later = not can_ask and bool(plan.texts or described)  # the key is tried before anything goes to Voyage
+    keep_to_limit(cost, "setup", spending.voyage_usd(embeddings.KEY_CHECK_TOKENS, model_name) if check_later else 0.0)
+    if _limit is not None:
+        answer["spent"] = 0.0
     checked = len(chosen) - 1 if checking else 0  # every feature but the prompt
     say_estimate(
         found.new_tasks, {**settings, "model": model_settings, "max_tasks": limit}, plan, asks, checked=checked
@@ -884,9 +1100,9 @@ def _create(args, held) -> int:
         )
     else:
         question = (
-            "Analyze and embed them, and train the predictor now?"
+            f"Analyze them, embed them and train the {called} now?"
             if asks
-            else "Embed them and train the predictor now?"
+            else f"Embed them and train the {called} now?"
         )
     if can_ask and not ui.ask(question, True):
         ui.note("Stopped. Nothing was created.")
@@ -894,6 +1110,8 @@ def _create(args, held) -> int:
     if not can_ask and not args.yes:
         ui.line("Add --yes to go ahead.")
         return 2
+    if check_later:
+        verify_key(key, model_name)  # before LLM analysis, which would be paid for in vain with a key that fails
 
     config: dict = {**settings, "model": model_settings, "plugins": plugins}
     if limit:
@@ -909,11 +1127,11 @@ def _create(args, held) -> int:
     with name_lock(name):
         folder.mkdir(parents=True, exist_ok=True)
         if not held.enter_context(locks.held(folder / "refresh.lock", wait=False)):
-            raise SystemExit(f"A predictor called {name!r} is being set up by another command.")
+            raise CommandError("busy", f"A predictor called {name!r} is being set up by another command.")
         try:
             predictor = Predictor.create(name, archives, embedding, **config)
         except ValueError:
-            raise SystemExit(already_exists(name)) from None
+            raise CommandError("predictor_exists", already_exists(name)) from None
         # The dataset closes as setup ends, before the predictor's lock goes. Otherwise it stays open until Python
         # tidies up, and Windows can't delete an open file, as a delete in the same program, such as a test, would.
         held.callback(predictor.close)
@@ -923,20 +1141,29 @@ def _create(args, held) -> int:
     warning = refresh_benchmarks(predictor)
     if warning:
         ui.note(warning)
-    if asks:
-        analyze_with_progress(predictor, asks)
-        plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
-    if plan.items and not embed_with_progress(predictor, plan, key):
-        return 1
-    if checking:
-        stop = check_and_choose(predictor, key)
-        if stop is not None:
-            return stop
+        answer["notes"].append(warning)
+    try:
+        if asks:
+            reserve = spending.embedding_most_usd(plan, model_name, described)  # kept for the embedding after it
+            answer["analyzed"], problem = analyze_with_progress(predictor, asks, reserve)
+            if problem:
+                answer["notes"].append(problem)
+            plan = plan_embeddings(predictor, key)  # now with the descriptions LLM analysis wrote
+        if plan.items:
+            answer["embedded"] = embed_with_progress(predictor, plan, key)
+        if checking:
+            stop = check_and_choose(predictor, key, called)
+            if stop is not None:
+                return stop
+    finally:
+        if _limit is not None:
+            answer["spent"] = round(_limit.spent, 6)
     model = train_and_report(predictor, train)
-    if model is None:
-        return 1
     default_when_ready(predictor)
-    say_how_to_use(model, name)
+    say_how_to_use(model, name, called=called)
+    answer.update(
+        done=True, trained=True, learned_from=model.meta.get("tasks"), forecasts_for=served_models(model.meta["report"])
+    )
     return 0
 
 
@@ -970,9 +1197,20 @@ def default_when_ready(predictor: Predictor) -> None:
         predictor.save_config()
 
 
-def embed_with_progress(predictor: Predictor, plan, key: str) -> bool:
+def embed_with_progress(predictor: Predictor, plan, key: str) -> int:
+    """Embed what the plan holds with a progress bar, and return how many texts went to Voyage. When Voyage stops
+    it, it stops the command: what was embedded so far is saved."""
+    from . import spending
     from .pipeline import run_embeddings
 
+    most = spending.embedding_most_usd(plan, predictor.embedding_model)
+    if _limit is not None and not _limit.fits(most):
+        raise CommandError(
+            "over_max_cost",
+            f"Embedding would take the spending past your limit of {spending.dollars(_limit.usd)}. "
+            f"{spending.dollars(_limit.spent)} is spent already. Embedding may cost up to {spending.dollars(most)} at "
+            "list price. What was done so far is saved. With a higher --max-cost, the next refresh goes on from there.",
+        )
     ui.heading("Embedding")
     ui.note("Each batch is saved as it arrives, so you can stop and resume later.")
     seen = {"total": 0}
@@ -986,27 +1224,28 @@ def embed_with_progress(predictor: Predictor, plan, key: str) -> bool:
     except embeddings.VoyageError as error:
         if "free token" in error.detail.lower() or "payment" in error.detail.lower():
             embeddings.set_free_tokens(key, "used")
-        ui.error(
+        raise CommandError(
+            "embedding_failed",
             f"{explain(error)}\nWhat was embedded so far is saved. "
-            f"Run yardstick-predict refresh --predictor {predictor.name} to finish."
-        )
-        return False
+            f"Run yardstick-predict refresh --predictor {predictor.name} to finish.",
+        ) from None
+    if _limit is not None:
+        _limit.spent += most
     ui.ok(f"Embedded {seen['total']:,} texts." if seen["total"] else "Embedded.")
-    return True
+    return seen["total"]
 
 
 def train_and_report(predictor: Predictor, train):
-    """Train, test and show how each AI model did. None when there's too little to train on."""
+    """Train, test and show how each AI model did. With too little to train on, it stops the command."""
     from .model import NotEnoughData
 
     ui.heading("Training")
     # The built-in model's bar takes this line's place. A model type from a plugin keeps it.
-    ui.working("Training and testing. This takes a minute")
+    ui.working("Training, then checking its forecasts. This takes a minute")
     try:
         model = train(predictor, lambda done, total: ui.progress(done, total, "steps"))
     except NotEnoughData as error:
-        ui.error(str(error))
-        return None
+        raise CommandError("not_enough_data", str(error)) from None
     ui.ok(f"Trained on {model.meta['tasks']:,} tasks.")
     for name in model.meta.get("features_without_values") or []:
         ui.note(
@@ -1017,28 +1256,30 @@ def train_and_report(predictor: Predictor, train):
     return model
 
 
-def say_how_to_use(model, name: str, full: bool = True) -> None:
-    """Which AI models get forecasts, and how to ask for one, with their real names."""
+def say_how_to_use(model, name: str, full: bool = True, called: str = "predictor") -> None:
+    """Which AI models get forecasts, and how to ask for one, with their real names. `called` is model on the home
+    screen, where Update adds new tasks."""
     served = served_models(model.meta["report"])
     listed = (served[0] if len(served) == 1 else ", ".join(served[:-1]) + " and " + served[-1]) if served else ""
     if not full:
         if served:
             ui.ok(f"Forecasts are on for {listed}.")
         return
-    ui.heading("Ready")
-    if not served:
-        ui.line("No AI model passed the test yet, so forecasts come back empty, with the reason.")
-        ui.note("Run yardstick-predict again once you have more tasks. It adds them and retrains.")
-        return
     is_default = default_name() == name
     pick = "" if is_default else f" --predictor {name}"
+    again = "choose Update on the home screen" if called == "model" else f"run yardstick-predict refresh{pick}"
+    ui.heading("Ready")
+    if not served:
+        ui.line("No AI model has enough data yet. Until one has, forecasts come back empty, with the reason.")
+        ui.note(f"Once you have more tasks, {again}. It adds them and retrains.")
+        return
     ui.line(f"Forecasts are on for {listed}.")
     ui.line("Before you start a task, ask what it will take:")
     ui.line(ui.accent(f'  yardstick-predict predict{pick} "Add a login page with tests"'))
     if is_default:
-        ui.note("It's your default predictor, so commands use it when they name none.")
+        ui.note(f"It's your default {called}. Commands use it when they name none.")
     ui.note("Programs send JSON to yardstick-predict predict and read JSON back.")
-    ui.note("Run yardstick-predict every week or so to add new tasks and retrain.")
+    ui.note(f"Every week or so, {again} to add new tasks and retrain.")
 
 
 # The feature check -------------------------------------------------------------------------------------
@@ -1061,7 +1302,7 @@ def offer_check(chosen: list[str], tasks: list, limit: int | None) -> bool:
     if max(counts.values(), default=0) < min_tasks_to_test():
         return False
     ui.heading("Feature check")
-    ui.note("Some features carry no signal for your kind of work, and with few tasks a feature can't show anything.")
+    ui.note("Some features carry no signal for your kind of work. With few tasks, a feature can't show anything.")
     return ui.ask("Check which of these features actually help? Recommended.", True)
 
 
@@ -1075,7 +1316,7 @@ def run_check(predictor: Predictor):
 
     ui.heading("Feature check")
     # The bar takes this line's place once the first trial model is being fitted.
-    ui.working("Testing the model with every feature, then without each one")
+    ui.working("Comparing forecasts with every feature, then without each one")
     try:
         result = check.run(check.inputs(predictor), lambda done, total: ui.progress(done, total, "steps"))
     except NotEnoughData as error:
@@ -1091,7 +1332,8 @@ def say_checked(result) -> None:
     """Say how many features the check tested, on how many of the AI models' newest tasks."""
     count = len(result.features)
     tested = result.report.get("tested_on", 0)
-    ui.ok(f"Checked {count} feature{'' if count == 1 else 's'} on {tested:,} test task{'' if tested == 1 else 's'}.")
+    tasks = f"{tested:,} newest task{'' if tested == 1 else 's'}"
+    ui.ok(f"Checked {count} feature{'' if count == 1 else 's'} on your {tasks}.")
 
 
 def show_check(result) -> None:
@@ -1101,42 +1343,55 @@ def show_check(result) -> None:
     tested = [model for model in result.models if result.tasks_tested(model)]
     if not tested:
         needed = result.report.get("min_tasks_to_test") or 60
-        ui.note(f"There aren't enough tasks to check the features yet. Each AI model needs {needed:,} of its own.")
+        wrapped_note(
+            f"There's not enough data to check the features yet. Each AI model needs {needed:,} tasks of its own."
+        )
         return
-    ui.line("Tested on each AI model's newest tasks, with every feature and then without each one.")
+    for part in ui.wrapped("Forecasts of each AI model's newest tasks, with every feature and then without each one:"):
+        ui.line(part)
     ui.line()
     looks = {check.HELPED: ui.green, check.NO_HELP: str, check.NOT_ENOUGH: ui.dim}
     rows = [("", *(ui.dim(model) for model in tested))]
     for name in result.features:
         found = [result.verdicts[name][model]["verdict"] for model in tested]
         rows.append((ui.bold(check.title(name)), *(looks[kind](check.WORDS[kind]) for kind in found)))
-    ui.table(rows)
+    wide = 2 + sum(max(ui.width(row[i]) for row in rows) + 3 for i in range(len(rows[0]))) - 3
+    if wide < ui.columns():
+        ui.table(rows)
+    else:
+        # A column for each AI model would run past the terminal's edge, so each feature says it in words.
+        for name in result.features:
+            ui.line(ui.bold(check.title(name)))
+            by_model = {model: result.verdicts[name][model] for model in tested}
+            for part in ui.wrapped(check.sentences(by_model), 4):
+                ui.line(f"  {part}")
     ui.line()
-    ui.note(f"A feature helped when an AI model's test scored more than {check.WORSE_BY:.0%} worse without it.")
-    ui.note(
-        f"Not enough data: the AI model had too few tasks to test, or under {check.LEAST_SHARE:.0%} of its test "
-        "tasks, or of the earlier tasks the test learned from, had the feature."
+    wrapped_note(f"A feature helped when an AI model's forecasts were over {check.WORSE_BY:.0%} worse without it.")
+    wrapped_note(
+        f"Not enough data: the AI model had too few tasks. Or under {check.LEAST_SHARE:.0%} of its newest tasks had "
+        "the feature, or of the tasks before them."
     )
     short = check.sampled_too_little(result)
     if "llm" in result.alone and len(short) < len(tested):
-        ui.note(
-            "LLM analysis read only some of your tasks, so it was judged on those alone: the test learned from "
-            "and forecast only tasks it read, with it and without it."
+        wrapped_note(
+            "LLM analysis read only some of your tasks. So it was judged on those alone: the forecasts with it and "
+            "without it learned from and forecast only the tasks it read."
         )
     untested = [model for model in result.models if not result.tasks_tested(model)]
     if untested:
-        ui.note(f"Too few tasks to test: {', '.join(untested)}.")
+        wrapped_note(f"Not enough data: {in_words(untested)}.")
     if short:
-        ui.note(
-            f"LLM analysis read only a sample of your tasks, too few to judge it for {', '.join(short)}. To judge "
+        wrapped_note(
+            f"LLM analysis read only a sample of your tasks, too few to judge it for {in_words(short)}. To judge "
             "it fully, keep it, let it read the rest, then run: yardstick-predict check"
         )
 
 
-def check_and_choose(predictor: Predictor, key: str) -> int | None:
-    """In setup: run the feature check, then let the person keep the features it suggests or change them.
+def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") -> int | None:
+    """In setup: run the feature check, then ask once whether to keep the features that helped. No opens the Features
+    screen to change them.
 
-    The features that helped at least one AI model start on. When the check can't test any AI model, the features
+    The features that helped at least one AI model stay on. When the check can't test any AI model, the features
     stay as chosen. Whatever the final choice still needs is shown with its cost and asked for first: LLM analysis
     of the tasks its sample left out, and embedding any text the check didn't have. Returns None to go on and
     train, or the command's exit code when it stops.
@@ -1152,11 +1407,11 @@ def check_and_choose(predictor: Predictor, key: str) -> int | None:
         options = {name: chosen for name, chosen in (config.get("options") or {}).items() if name in helped}
         start = menu.Picked([features.REQUIRED, *helped], options, dict(config.get("llm") or {}))
         ui.line()
-        if helped:
-            ui.note("The features that helped are on below. Press Enter to keep them, or change them first.")
+        if keep_what_helped(config["features"], helped, called):
+            picked = menu.Picked(start.features, start.options, start.llm if "llm" in helped else {})
         else:
-            ui.note("None of them helped, so they're off below. Press Enter to keep it that way, or turn some on.")
-        picked = menu.ask(custom_features(), start)
+            ui.note("Change them below. Press Enter when they're as you want them.")
+            picked = menu.ask(custom_features(), start, called=called)
         config.pop("llm", None)
         config.update(picked.config())
         predictor.save_config()
@@ -1182,9 +1437,27 @@ def check_and_choose(predictor: Predictor, key: str) -> int | None:
                 f"yardstick-predict refresh --predictor {predictor.name}"
             )
             return 0
-    if plan.items and not embed_with_progress(predictor, plan, key):
-        return 1
+    if plan.items:
+        embed_with_progress(predictor, plan, key)
     return None
+
+
+def keep_what_helped(chosen: list[str], helped: list[str], called: str) -> bool:
+    """After the feature check, in setup: say which of the chosen features stay on and which go off, then ask once
+    whether to go on with that. Enter says yes. No opens the Features screen to change them first."""
+    from .screens.listing import LEARNS_FROM
+
+    optional = [name for name in chosen if name != "prompt"]
+    kept = [LEARNS_FROM.get(name, name) for name in optional if name in helped]
+    dropped = [LEARNS_FROM.get(name, name) for name in optional if name not in helped]
+    if kept:
+        ui.line("The features that helped an AI model stay on. The rest go off.")
+        ui.line(f"On: {in_words(kept)}.")
+    else:
+        ui.line(f"None of the features you chose helped an AI model. The {called} learns from the three always on.")
+    if dropped:
+        ui.line(f"Off: {in_words(dropped)}.")
+    return ui.ask(f"Keep this and go on to make the {called}?", True)
 
 
 def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
@@ -1193,7 +1466,7 @@ def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
     With `sampled`, it read a sample for the feature check. Turned on only after the check, it read nothing yet.
     """
     from . import features
-    from .pipeline import analysis_plan
+    from .pipeline import analysis_plan, plan_embeddings
 
     labels = predictor.llm_labels()
     rest = analysis_plan(predictor.tasks(), predictor.config, labels, predictor.config.get("max_tasks"))
@@ -1206,37 +1479,95 @@ def analyze_the_rest(predictor: Predictor, sampled: bool) -> bool:
         ui.line(text)
     if "description" in features.options(predictor.config, "llm"):
         ui.note("Its descriptions are embedded too, which adds a little to the Voyage cost.")
+    reserve = 0.0
+    if _limit is not None:
+        from . import spending
+
+        described = len(rest) if "description" in features.options(predictor.config, "llm") else 0
+        cost = spending.cost_of(
+            predictor.config, predictor.embedding_model, plan_embeddings(predictor, None), rest, described
+        )
+        if cost.most_usd is None or not _limit.fits(cost.most_usd):
+            raise CommandError(
+                "over_max_cost",
+                "Reading the rest with LLM analysis would take the spending past your limit. Setup stopped here, "
+                "with your choice of features kept. With a higher --max-cost, finish with: "
+                f"yardstick-predict refresh --predictor {predictor.name}",
+            )
+        reserve = cost.embedding_most_usd  # kept for embedding what's still to come
     if not ui.ask("Analyze them now?", True):
         return False
-    analyze_with_progress(predictor, rest)
+    analyze_with_progress(predictor, rest, reserve)
     return True
 
 
 def cmd_refresh(args) -> int:
+    def run(answer: dict) -> int:
+        with limited(args):
+            return refresh(args, answer)
+
+    if args.json:
+        return for_program(args, run)
+    return run({})
+
+
+def refresh(args, answer: dict) -> int:
+    """Add a predictor's new tasks, embed them and train it again. `answer` is filled with what a program reads:
+    what was found, what it costs, and what was done."""
     predictor = pick_predictor(args.predictor)
+    answer["predictor"] = predictor.name
     if predictor.newer:
         # A refresh would save the settings, the dataset and the model the way this older version does.
-        raise SystemExit(
+        raise CommandError(
+            "newer_version",
             f"{predictor.name} was saved by a newer version of yardstick-predict, so this version leaves it as it "
-            "is. Upgrade with: uv tool upgrade yardstick-predict"
+            "is. Upgrade with: uv tool upgrade yardstick-predict",
         )
+    # The Update screen asks once, with every cost. It keeps to a --max-cost limit too.
+    if interactive() and not args.yes and not args.json:
+        from .screens import update
+
+        predictor.close()
+        return update.run([predictor.name])
     # A predictor deleted just as this command found it isn't saved again, with none of its tasks.
     deleted = f"There's no predictor called {predictor.name!r} anymore: it was deleted."
     if gone(predictor):
-        raise SystemExit(deleted)
+        raise CommandError("unknown_predictor", deleted)
     from . import feature_store
 
     # Two refreshes at once could each train, and the slower one could save an older model over a newer one.
     with locks.held(predictor.dir / "refresh.lock", wait=False) as mine:
         if not mine:
-            raise SystemExit(
-                f"{predictor.name} is being set up or refreshed by another command. Try again when it's done."
+            raise CommandError(
+                "busy", f"{predictor.name} is being set up or refreshed by another command. Try again when it's done."
             )
         if gone(predictor):
-            raise SystemExit(deleted)
+            raise CommandError("unknown_predictor", deleted)
         # It reads the feature store to plan what to make, and saves to it, so no features delete runs meanwhile.
         with feature_store.writing():
-            return _refresh(args, predictor)
+            return _refresh(args, predictor, answer)
+
+
+BEHIND_NOTES = {
+    "unfinished": ["Training didn't finish last time. The model is out of date."],
+    "outdated": ["This model was made by an older version, which trained it another way. It needs training again."],
+    "previous": [
+        "This model was made by the previous version. It still forecasts, and training it again brings",
+        "this version's improvements.",
+    ],
+    "damaged": ["A file of this model is missing or can't be read. Training it again repairs it."],
+}
+"""What a refresh says when the model is trained again even with nothing new, by the reason plan_refresh gives."""
+
+
+def retrain_reason(planned) -> str | None:
+    """Why a refresh trains the model, for a program: new_work, no_model, unfinished, outdated, previous or damaged.
+    None when it's up to date."""
+    if planned.up_to_date:
+        return None
+    if planned.model is None:
+        return "no_model"
+    return planned.behind or "new_work"
 
 
 def gone(predictor: Predictor) -> bool:
@@ -1244,30 +1575,41 @@ def gone(predictor: Predictor) -> bool:
     return not (predictor.dir / "predictor.json").is_file()
 
 
-def _refresh(args, predictor: Predictor) -> int:
-    from . import model_types
+def _refresh(args, predictor: Predictor, answer: dict) -> int:
+    from . import model_types, spending
     from .pipeline import (
-        analysis_plan,
-        chosen_features,
-        from_previous_version,
         load_plugins,
         model_meta,
-        model_ready,
-        outdated,
         plan_embeddings,
+        plan_refresh,
         refresh_benchmarks,
         save_scan,
         scan,
         train,
     )
 
+    answer.update(
+        done=False,
+        up_to_date=False,
+        new_tasks=0,
+        changed_tasks=0,
+        removed_tasks=0,
+        cost=None,
+        retrain_reason=None,
+        analyzed=0,
+        embedded=0,
+        trained=False,
+        forecasts_for=trained_facts(predictor, model_meta(predictor))["forecasts_for"],
+        max_cost=None if _limit is None else _limit.usd,
+        spent=None,
+        notes=[],
+    )
     try:
         load_plugins(predictor)
     except model_types.PluginError as error:
-        raise SystemExit(str(error)) from None
-    # With --yes it asks nothing, even in a terminal.
-    can_ask = interactive() and not getattr(args, "yes", False)
-    ask_first = getattr(args, "ask_first", False)
+        raise CommandError("plugin_failed", str(error)) from None
+    # With --yes it asks nothing, even in a terminal, and nor does a program that asked for JSON.
+    can_ask = interactive() and not getattr(args, "yes", False) and not getattr(args, "json", False)
     ui.heading(predictor.name)
     ui.note(f"Last updated {ago(predictor.config.get('refreshed_at'))}.")
     unknown_features_note(predictor)
@@ -1275,6 +1617,13 @@ def _refresh(args, predictor: Predictor) -> int:
     found = scan(predictor, on_progress=lambda done, total: ui.progress(done, total, "bytes"))
     counts = [f"{source} {count:,}" for source, count in found.per_archive.items() if count]
     ui.ok(f"Found {len(found.new_tasks):,} new tasks" + (f": {ui.join(counts)}" if counts else "."))
+    from .screens.update import short_path
+
+    for archive in predictor.config["archives"]:
+        if not archive_path(archive).is_dir():  # read, it would look like a folder with nothing new
+            text = no_folder(short_path(archive), [predictor.name])
+            ui.warn(text)
+            answer["notes"].append(text)
     if getattr(found, "reader", None) is not None and predictor.config.get("reader") != found.reader:
         # A newer version reads records more accurately. It read them all again, once.
         ui.note(
@@ -1290,38 +1639,19 @@ def _refresh(args, predictor: Predictor) -> int:
     removed = getattr(found, "removed", [])
     if removed:
         ui.note(f"{len(removed):,} saved tasks aren't in their records anymore, so they're taken out.")
-    has_model = model_ready(predictor)
-    meta = model_meta(predictor) if has_model else None
-    behind = bool(predictor.config.get("needs_training"))
-    if behind and has_model:
-        ui.note("Training didn't finish last time. The model is out of date.")
-    elif has_model and outdated(predictor, meta):
-        behind = True
-        ui.note("This model was made by an older version, which trained it another way. It needs training again.")
-    elif has_model and from_previous_version(predictor, meta):
-        behind = True
-        ui.note("This model was made by the previous version. It still forecasts, and training it again brings")
-        ui.note("this version's improvements.")
+    answer.update(new_tasks=len(found.new_tasks), changed_tasks=len(found.updated_tasks), removed_tasks=len(removed))
     model_name = predictor.embedding_model
     key, _ = embeddings.find_key()
-    from . import features
-    from .pipeline import embedding_items, price
-
-    chosen = chosen_features(predictor)
-    # A saved task that grew replaces its old copy. It may now be learned from, such as one that finished.
-    updated = {task.id: task for task in found.updated_tasks}
-    everything = [updated.get(task.id, task) for task in predictor.tasks()] + found.new_tasks
-    # The new tasks count too: the feature store may have their vectors already, from another predictor.
-    ids = {task.id for task in everything}
-    have = {name: predictor.embedded(name, ids) for name in chosen if features.is_text(name)}
-    labels = predictor.llm_labels() if "llm" in chosen else None
-    pending = embedding_items(everything, chosen, have, predictor.config.get("max_tasks"), predictor.config, labels)
-    plan = price(pending, model_name, key)
-    asks = analysis_plan(everything, predictor.config, labels or {}, predictor.config.get("max_tasks"))
-    nothing_new = (
-        not found.new_tasks and not found.updated_tasks and not removed and not plan.items and not asks and not behind
-    )
-    if nothing_new and has_model:
+    planned = plan_refresh(predictor, found, key)
+    for text in BEHIND_NOTES.get(planned.behind if planned.model is not None else None, []):
+        ui.note(text)
+    everything, plan, asks = planned.tasks, planned.embed, planned.asks
+    cost = spending.cost_of(predictor.config, model_name, plan, asks, planned.described)
+    answer["cost"] = cost.as_json()
+    answer["retrain_reason"] = retrain_reason(planned)
+    if _limit is not None:
+        answer["spent"] = 0.0
+    if planned.up_to_date:
         # A record file that changed with nothing new in it, such as one that was only touched, isn't read
         # again next time. Nor is every file, after a new version of the reader read them all and found
         # nothing new.
@@ -1330,6 +1660,7 @@ def _refresh(args, predictor: Predictor) -> int:
             predictor.config["reader"] = found.reader
             predictor.save_config()
         ui.ok("Nothing new. The model is up to date.")
+        answer.update(done=True, up_to_date=True)
         return 0
     if plan.items:
         damaged_usage_note(key)
@@ -1338,17 +1669,23 @@ def _refresh(args, predictor: Predictor) -> int:
     if asks:
         for text in analysis_lines(len(asks), predictor.config["llm"]):
             ui.line(text)
+    if planned.described:
+        from .llm import DESCRIPTION_TOKENS
+
+        tokens = planned.described * DESCRIPTION_TOKENS
+        ui.note(f"Its descriptions are embedded too: about {tokens:,} more tokens, priced as above.")
     dataset = predictor.dir / "dataset.sqlite"
-    size = dataset.stat().st_size if dataset.is_file() else 0
+    size = (dataset.stat().st_size if dataset.is_file() else 0) + planned.stored
     say_estimate(everything, predictor.config, plan, asks, found.new_tasks, size)
+    keep_to_limit(cost, "refresh")
     if can_ask:
-        if not ui.ask("Refresh now? This adds the new tasks, embeds them and retrains.", not ask_first):
+        if not ui.ask("Refresh now? This adds the new tasks, embeds them and retrains.", True):
             ui.note("Keeping the current model.")
             return 0
     elif not args.yes:
         ui.line("Add --yes to go ahead.")
         return 2
-    if plan.items or asks:
+    if plan.texts or planned.described:  # a key only for what goes to Voyage: LLM analysis needs none of it
         key = key or get_key(model_name, can_ask)
         if not key:
             return 1
@@ -1356,23 +1693,33 @@ def _refresh(args, predictor: Predictor) -> int:
     warning = refresh_benchmarks(predictor)
     if warning:
         ui.note(warning)
-    if asks:
-        analyze_with_progress(predictor, asks)
-    # The plan priced above is what's left to embed now that the tasks are saved, so its counts are reused.
-    if plan.items and not embed_with_progress(predictor, plan, key):
-        return 1
-    # Each text the plan above needed has its vector now, so this one pays only for the descriptions LLM
-    # analysis just wrote.
-    rest = plan_embeddings(predictor, key)
-    if rest.items:
-        key = key or get_key(model_name, can_ask)
-        if not key or not embed_with_progress(predictor, rest, key):
-            return 1
+        answer["notes"].append(warning)
+    try:
+        if asks:
+            # What embedding may cost after it is kept out of what LLM analysis may spend.
+            reserve = spending.embedding_most_usd(plan, model_name, planned.described)
+            answer["analyzed"], problem = analyze_with_progress(predictor, asks, reserve)
+            if problem:
+                answer["notes"].append(problem)
+        # The plan priced above is what's left to embed now that the tasks are saved, so its counts are reused.
+        if plan.items:
+            answer["embedded"] += embed_with_progress(predictor, plan, key)
+        # Each text the plan above needed has its vector now, so this one pays only for the descriptions LLM
+        # analysis just wrote.
+        rest = plan_embeddings(predictor, key)
+        if rest.items:
+            if rest.texts:
+                key = key or get_key(model_name, can_ask)
+                if not key:
+                    return 1
+            answer["embedded"] += embed_with_progress(predictor, rest, key)
+    finally:
+        if _limit is not None:
+            answer["spent"] = round(_limit.spent, 6)
     model = train_and_report(predictor, train)
-    if model is None:
-        return 1
     default_when_ready(predictor)
     say_how_to_use(model, predictor.name, full=False)
+    answer.update(done=True, trained=True, forecasts_for=served_models(model.meta["report"]))
     return 0
 
 
@@ -1383,7 +1730,8 @@ def cmd_predict(args) -> int:
     table = prompt is not None and terminal_output() and not args.json and not args.distribution
     predictor = None
     try:
-        predictor, result = forecast_request(args, prompt)
+        # A person's table shows every AI model, with a warning on the rough ones. A program gets only tested ones.
+        predictor, result = forecast_request(args, prompt, rough=table)
         code = 0
     except RequestError as error:
         result, code = error.as_answer(), 1
@@ -1391,7 +1739,7 @@ def cmd_predict(args) -> int:
         first_line = (str(error).strip().splitlines() or [""])[0]
         message = f"Something went wrong that yardstick-predict didn't expect: {type(error).__name__}: {first_line}"
         result, code = RequestError("internal_error", message.rstrip(": ")).as_answer(), 1
-    person = prompt is None and sys.stdin.isatty() and terminal_output() and not args.json
+    person = prompt is None and args.request is None and sys.stdin.isatty() and terminal_output() and not args.json
     if table or person:
         if code:
             ui.error(result["error"]["message"])
@@ -1402,27 +1750,72 @@ def cmd_predict(args) -> int:
     return code
 
 
-def forecast_request(args, prompt: str | None) -> tuple[Predictor, dict]:
-    """The predictor and the answer for a prompt on the command line, or for a JSON request on standard input."""
+def forecast_request(args, prompt: str | None, rough: bool = False) -> tuple[Predictor, dict]:
+    """The predictor and the answer for a prompt on the command line, or for a JSON request from a file or standard
+    input.
+
+    With `rough`, for a person's table: every AI model the predictor knows, at each effort level it often ran at,
+    with the curves the table's ranges come from. One that failed the test or wasn't tested keeps its reason.
+    """
     from .forecast import RequestError, answer, load, parse
 
+    if prompt is not None and getattr(args, "request", None) is not None:
+        raise RequestError("invalid_request", "Give the task in quotes or a request with --request, not both.")
+    if prompt is not None and not prompt.strip():
+        raise RequestError(
+            "invalid_request", 'Give the task some text, like: yardstick-predict predict "Fix the login bug"'
+        )
     if prompt is None:
-        if sys.stdin.isatty():
-            raise RequestError("invalid_request", 'Give the task in quotes, like: yardstick-predict predict "Fix it"')
-        try:
-            request = json.load(sys.stdin)
-        except ValueError as error:
-            raise RequestError("invalid_request", f"The request isn't valid JSON: {error}") from None
-        except RecursionError:
-            raise RequestError("invalid_request", "The request is nested too deeply to read.") from None
+        request = read_request(getattr(args, "request", None))
         tasks, distribution, chosen = parse(request)
         predictor = request_predictor(args.predictor or chosen, from_request=True)
         return predictor, answer(predictor, tasks, distribution or args.distribution)
     predictor = request_predictor(args.predictor)
     # The model is loaded once. Its meta picks the AI models and effort levels, and it forecasts them.
     model = load(predictor)
-    models = list(dict.fromkeys(args.model)) or forecast_models(predictor, model.meta)
-    pairs = effort_pairs(predictor, models, args.effort, model.meta)
+    runs, too_few = {}, []
+    if rough and not args.model:
+        pairs, runs, too_few = every_pair(predictor, args.effort, model.meta)
+    else:
+        models = list(dict.fromkeys(args.model)) or forecast_models(predictor, model.meta)
+        pairs = effort_pairs(predictor, models, args.effort, model.meta)
+        pairs = for_people(pairs) if rough else pairs
+    if rough and not pairs:  # no AI model ran enough tasks to show: the table says so, with how many each ran
+        empty = {"version": 1, "predictor": predictor.name, "embedding_model": predictor.embedding_model}
+        return predictor, {**empty, "forecasts": [], "too_few": too_few}
+    result = forecast_pairs(predictor, model, prompt, pairs, args, rough, runs)
+    if rough:
+        result["too_few"] = too_few
+    return predictor, result
+
+
+def read_request(path: str | None):
+    """The JSON request: from the file `path` names, or from standard input when there's no path or it's -."""
+    from .forecast import RequestError
+
+    try:
+        if path is not None and path != "-":
+            with open(os.path.expanduser(path), encoding="utf-8") as found:
+                return json.load(found)
+        if sys.stdin.isatty():
+            raise RequestError("invalid_request", 'Give the task in quotes, like: yardstick-predict predict "Fix it"')
+        return json.load(sys.stdin)
+    except OSError as error:
+        raise RequestError(
+            "invalid_request", f"Can't read the request file {path}: {error.strerror or error}."
+        ) from None
+    except ValueError as error:
+        raise RequestError("invalid_request", f"The request isn't valid JSON: {error}") from None
+    except RecursionError:
+        raise RequestError("invalid_request", "The request is nested too deeply to read.") from None
+
+
+def forecast_pairs(predictor: Predictor, model, prompt: str, pairs: list, args, rough: bool = False, runs=None) -> dict:
+    """The answer for a prompt a person typed, on each AI model at each effort level in `pairs`. `args` holds the
+    conversation, the skills and whether to give the curves. With `rough`, as forecast_request says, each forecast
+    also says how many tasks its AI model ran at its effort level, from `runs`."""
+    from .forecast import answer, parse
+
     asked = []
     for number, (name, effort) in enumerate(pairs, start=1):
         task = {"id": "task" if len(pairs) == 1 else f"task-{number}", "prompt": prompt, "models": [name]}
@@ -1432,12 +1825,78 @@ def forecast_request(args, prompt: str | None) -> tuple[Predictor, dict]:
         if effort:
             task["effort"] = effort
         asked.append(task)
-    tasks, distribution, _ = parse({"version": 1, "distribution": args.distribution, "tasks": asked})
-    result = answer(predictor, tasks, distribution, model=model)
+    tasks, distribution, _ = parse({"version": 1, "distribution": args.distribution or rough, "tasks": asked})
+    result = answer(predictor, tasks, distribution, model=model, rough=rough)
     # One prompt is one task, whatever models and effort levels it's forecast on.
     for forecast in result["forecasts"]:
         forecast["task"] = "task"
-    return predictor, result
+        if rough:
+            # A pair asked with no effort level comes back with the level the AI model ran at most.
+            found, name = runs or {}, forecast["model"]
+            forecast["runs"] = found.get((name, forecast.get("effort")), found.get((name, None)))
+    return result
+
+
+SHOWN_FROM = 10
+"""A person's table shows an AI model at an effort level once it ran this many tasks at it."""
+FEW_RUNS = 30
+"""Below this many tasks at an effort level, the table warns that there's not enough data."""
+DEFAULT_EFFORT = "default"
+"""What the records call the effort level of a task run without one set. No one picks it, so a person's lists
+leave it out when the AI model ran at a named level too, and never show the word."""
+
+
+def for_people(pairs: list[tuple[str, str | None]]) -> list[tuple[str, str | None]]:
+    """The pairs a person's table shows: none at the default effort level when the AI model has a named one too. An
+    AI model that ran only at the default level is forecast with no level named."""
+    named = {model for model, effort in pairs if effort and effort != DEFAULT_EFFORT}
+    return [
+        (model, None if effort == DEFAULT_EFFORT else effort)
+        for model, effort in pairs
+        if not (effort == DEFAULT_EFFORT and model in named)
+    ]
+
+
+def every_pair(
+    predictor: Predictor, effort: str | None, meta: dict
+) -> tuple[list[tuple[str, str | None]], dict, list[tuple[str, int]]]:
+    """For a person's table: every AI model the predictor knows, at each named effort level it ran 10 tasks at, or
+    at its most common named level when its tasks spread over several. The default level is left out. An AI model
+    that ran only at the default level is forecast with no level named. The ones with enough data come first. Returns
+    the pairs, how many tasks each pair had, and the AI models with too few tasks to forecast at all, with how many
+    they had.
+    """
+    report = meta.get("report") or {}
+    verdicts = report.get("models") or {}
+    counts = meta.get("effort_counts")
+    if not isinstance(counts, dict):
+        counts = predictor.effort_counts()
+    known = list((meta.get("categories") or {}).get("model") or verdicts)
+
+    def total(model: str) -> int:
+        return sum(count for _, count in counts.get(model, []))
+
+    def rank(model: str) -> tuple:
+        verdict = verdicts.get(model) or {}
+        group = 0 if verdict.get("served") else 1 if verdict.get("reason") == "not_accurate_enough" else 2
+        return group, -(verdict.get("tasks_tested") or 0), -total(model)
+
+    pairs, runs, too_few = [], {}, []
+    for model in sorted(known, key=rank):
+        levels = [(level, count) for level, count in counts.get(model, []) if count]
+        if effort:
+            pairs.append((model, effort))
+            runs[(model, effort)] = dict(levels).get(effort, 0)
+            continue
+        if total(model) < SHOWN_FROM:
+            too_few.append((model, total(model)))
+            continue
+        named = [(level, count) for level, count in levels if level != DEFAULT_EFFORT]
+        often = [(level, count) for level, count in named if count >= SHOWN_FROM] or named[:1]
+        for level, count in often or [(None, total(model))]:
+            pairs.append((model, level))
+            runs[(model, level)] = count
+    return pairs, runs, too_few
 
 
 def request_predictor(chosen: str | None, from_request: bool = False) -> Predictor:
@@ -1499,12 +1958,12 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
     When none has passed yet, every AI model the predictor knows, so each comes back with the reason it has
     no forecast. `meta` is what the saved model says about itself, when it's read already.
     """
-    from .forecast import RequestError
+    from .forecast import RequestError, not_trained
     from .pipeline import model_meta
 
     meta = model_meta(predictor) if meta is None else meta
     if meta is None:
-        raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
+        raise RequestError("not_trained", not_trained(predictor.name))
     report = meta.get("report") or {}
     known = served_models(report) or tested_models(report) or list((meta.get("categories") or {}).get("model") or [])
     if not known:
@@ -1512,46 +1971,188 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
     return known
 
 
-def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None) -> None:
-    """The forecasts as a small table, for a person in a terminal."""
-    pad = max(len(forecast["model"]) for forecast in result["forecasts"])
-    rows, missing, previous = [], {}, None
+def show_title(task: str, after: str = "") -> None:
+    """A task as a title, in bold, broken to fit the terminal on 3 lines at most. A longer one is cut short on the
+    third. `after` follows it, dimmed, on its last line, or on a line of its own where there's no room."""
+    parts = ui.wrapped(ui.clean(task))
+    if len(parts) > 3:
+        parts = [*parts[:2], ui.cut(" ".join(parts[2:]), ui.columns() - 3)]
+    for part in parts[:-1]:
+        ui.line(ui.bold(part))
+    if after and ui.width(parts[-1]) + 2 + ui.width(after) <= ui.columns() - 3:
+        ui.line(f"{ui.bold(parts[-1])}  {ui.dim(after)}")
+        return
+    ui.line(ui.bold(parts[-1]))
+    if after:
+        ui.line(ui.dim(after))
+
+
+FORECAST_COLUMNS = ("", "effort", "time", "tokens", "cost")
+"""The forecast table's columns after the AI model's name. The first holds the warning mark, when there is one."""
+QUARTILES = (("25%", 0.25), ("median", 0.5), ("75%", 0.75))
+"""The lines under each forecast in a person's table, each with the share of real results that come in under it."""
+QUARTILES_NOTE = (
+    "Each forecast's first line is what to expect on average. A quarter of real results come in under its 25% "
+    "line, half under its median and three quarters under its 75% line."
+)
+"""What the lines of each forecast mean, in the note under the table."""
+WARNINGS = {
+    "not_accurate_enough": "not enough data",
+    "not_enough_data": "not enough data",
+    "unknown_model": "no data",
+}
+"""The words of a rough forecast's warning, by the reason code a program gets. Not enough data covers an AI model
+whose forecasts were often wrong on your past tasks, and one with too few of them to check."""
+
+
+def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None, screen: bool = False) -> None:
+    """The forecasts as a small table, for a person in a terminal. Each forecast's first line is what to expect on
+    average. Under it, in grey, are the values a quarter, half and three quarters of real results come in under,
+    when the forecast has a curve. A forecast with not enough data behind it is marked, and the AI models that have
+    too little are named under the table. It fits the terminal at any width.
+
+    `screen` is for the Estimate screen: the task was typed just above, so it isn't said again, and the
+    predictor is called a model there, as every screen calls it.
+    """
+    from .forecast import quantile
+
+    pad = max([len("AI model"), *(len(forecast["model"]) for forecast in result["forecasts"])])
+    rows, missing, previous, spread, blocks = [], {}, None, False, []
+    thin: dict[str, bool] = {}
+    """The AI models with not enough data, and the effort levels with too few runs, to name under the table."""
     for forecast in result["forecasts"]:
         model = forecast["model"]
         seconds, tokens, usd = forecast["seconds"], forecast["tokens"], forecast["usd"]
         if seconds is None and tokens is None and usd is None:
             reason = REASONS.get(forecast.get("reason", ""), "no forecast")
-            missing.setdefault(model, f"{ui.bold(model.ljust(pad))}   {ui.dim(reason)}")
+            missing.setdefault(model, reason)
             continue
-        # A model forecast at several effort levels is named once, on its first row.
-        name = ui.bold(model.ljust(pad)) if model != previous else " " * pad
+        # A model forecast at several effort levels is named once, on its first row. The name is fitted below.
+        name = model if model != previous else ""
         previous = model
-        rows.append(
-            (
-                name,
-                forecast.get("effort", ""),
-                duration(seconds) if seconds is not None else ui.dim("-"),
-                f"{short_tokens(tokens)} tokens" if tokens is not None else ui.dim("-"),
-                money(usd) if usd is not None else ui.dim("-"),
-            )
+        warning = rough_warning(forecast)
+        effort = shown_effort(forecast.get("effort"))
+        if warning:
+            # Too little for the whole AI model names it alone. Too few runs at one level names that level.
+            thin[model if forecast.get("reason") or not effort else f"{model} at {effort}"] = True
+        mark = ui.yellow(ui.mark("warn")) if warning else ""
+        values = (
+            duration(seconds) if seconds is not None else ui.dim("-"),
+            short_tokens(tokens) if tokens is not None else ui.dim("-"),
+            money(usd) if usd is not None else ui.dim("-"),
         )
-    shown = prompt if len(prompt) <= 72 else prompt[:71].rstrip() + ui.mark("wait")
+        rows.append((name, mark, effort, *values))
+        # The 25%, median and 75% values each go on a row of their own, named in the effort column, empty there.
+        curve = forecast.get("distribution")
+        found = [[quantile(curve, target, share) for target in ("seconds", "tokens", "usd")] for _, share in QUARTILES]
+        words = []
+        if any(value is not None for line in found for value in line):
+            spread = True
+            shows = (duration, whole_tokens, short_money)
+            for (label, _), line in zip(QUARTILES, found):
+                words.append(tuple("" if value is None else show(value) for value, show in zip(line, shows)))
+                rows.append(("", "", ui.dim(label), *(ui.dim(word) for word in words[-1])))
+        blocks.append((model, mark, effort, values, words))
+    # A table needs room for every column, its titles too. A terminal too narrow for it gets each forecast as a
+    # block of its own.
+    others = sum(max([len(FORECAST_COLUMNS[i - 1]), *(ui.width(r[i]) for r in rows)]) + 2 for i in range(1, 6))
+    stacked = 2 + pad + others >= ui.columns()
+    rows = [(ui.bold(r[0].ljust(pad)) if r[0] else " " * pad, *r[1:]) for r in rows]
+    if not screen:
+        ui.out()
+        show_title(prompt)
     ui.out()
-    ui.line(ui.bold(shown))
-    ui.out()
-    ui.table(rows, align="llrrr")
-    for text in missing.values():
-        ui.line(text)
+    if rows and not stacked:
+        header = tuple(ui.dim(title) for title in ("AI model".ljust(pad), *FORECAST_COLUMNS))
+        ui.table([header, *rows], align="lllrrr", gap=2)
+    elif rows:
+        show_blocks(blocks)
+    for model, reason in missing.items():
+        # cut colors and all, only when it can't fit with them
+        ui.line(ui.cut(f"{ui.bold(ui.cut(model, pad).ljust(pad))}   {ui.dim(reason)}", ui.columns() - 3))
+    too_few = result.get("too_few") or []
+    if too_few:
+        listed = in_words([f"{m} ({n:,} run{'' if n == 1 else 's'})" for m, n in too_few])
+        wrapped_note(f"Not enough data to forecast {listed}.")
     predictor = predictor or Predictor(result["predictor"])
-    footer = [
-        "Expected values from your own runs",
-        f"predictor {predictor.name}, updated {ago(predictor.config.get('refreshed_at'))}",
-        "add --json for details",
-    ]
     ui.out()
-    ui.line(ui.join([ui.dim(part) for part in footer]))
+    # An AI model named on its own covers its levels, so a level of it isn't named again.
+    names = [who for who in thin if " at " not in who or who.split(" at ")[0] not in thin]
+    if names:
+        mark = ui.yellow(ui.mark("warn"))
+        for number, part in enumerate(ui.wrapped(f"Not enough data: {in_words(names)}.", 5)):  # names stay whole
+            ui.line(f"{mark if number == 0 else ' '} {part}")
+        wrapped_note("Those are a rough guide. Plan with a wider margin there.")
+    if spread:
+        wrapped_note(f"{QUARTILES_NOTE} Costs are at API prices.")
+    named = f"model {predictor.name}" if screen else f"predictor {predictor.name}"
+    footer = [
+        "Learned from your own runs",
+        f"{named}, updated {ago(predictor.config.get('refreshed_at'))}",
+        *([] if screen else ["add --json for details"]),
+    ]
+    wrapped_note((f" {ui.mark('dot')} " if ui.styled() else ", ").join(footer))
     newer_settings_note(predictor)
     unknown_features_note(predictor)
+
+
+def columns() -> int:
+    """How wide the terminal is, 80 when it doesn't say."""
+    return shutil.get_terminal_size((80, 24)).columns
+
+
+def wrapped_note(text: str) -> None:
+    """A note broken to fit the terminal, so a long one never runs past its edge. It never breaks a name at a hyphen,
+    such as claude-sonnet-4-6, nor inside a command."""
+    for part in ui.wrapped(text, 3):
+        ui.note(part)
+
+
+def show_blocks(blocks: list) -> None:
+    """Each forecast as a block of its own, for a terminal too narrow for the table: the AI model with its mark and
+    effort level, then a small table of its time, tokens and cost. Its first line is what to expect on average. The
+    25%, median and 75% lines follow, each named."""
+    for number, (model, mark, effort, values, words) in enumerate(blocks):
+        if number:
+            ui.out()
+        name = ui.bold(ui.cut(model, ui.columns() - 16))
+        ui.line(f"{name}{f'  {mark}' if mark else ''}{f'  {effort}' if effort else ''}")
+        rows = [("", *(ui.dim(title) for title in ("time", "tokens", "cost"))), (ui.dim("expected"), *values)]
+        rows += [(ui.dim(label), *(ui.dim(word) for word in line)) for (label, _), line in zip(QUARTILES, words)]
+        ui.table(rows, indent=4, align="lrrr", gap=2)
+
+
+def rough_warning(forecast: dict) -> str | None:
+    """Why a forecast in a person's table is only a rough guide, in a few words, or None when there's enough data
+    behind it: for its AI model, and at its effort level."""
+    if forecast.get("reason"):
+        return WARNINGS.get(forecast["reason"], "not enough data")
+    runs = forecast.get("runs")
+    if isinstance(runs, int) and runs < FEW_RUNS:
+        return "not enough data"
+    return None
+
+
+def shown_effort(effort: str | None) -> str:
+    """An effort level as a person's table shows it. The default level isn't one a person picks, so it's left out."""
+    return "" if not effort or effort == DEFAULT_EFFORT else effort
+
+
+def short_money(usd: float) -> str:
+    """Dollars at a glance, such as the lines under a forecast: $0.0042, $0.12, $29.17, $424, $59.0k. Under a cent,
+    the two digits that matter show, so the lines of a cheap task still say something."""
+    from .spending import dollars
+
+    if usd >= 999.5:
+        return f"${usd / 1000:.1f}k"
+    if usd >= 99.5:
+        return f"${usd:.0f}"
+    return dollars(usd) if 0 < usd < 0.01 else money(usd)
+
+
+def whole_tokens(value: float) -> str:
+    """Tokens at a glance, such as the lines under a forecast, which a curve gives as fractions."""
+    return short_tokens(int(round(value)))
 
 
 def trained_facts(predictor: Predictor, meta: dict | None) -> dict:
@@ -1616,10 +2217,12 @@ def show_coverage(coverage: dict | None, problem: str | None) -> None:
             ui.note(problem)
         return
     if not coverage["tasks"]:
-        ui.line("Coverage: it has no tasks to learn from yet.")
+        for part in ui.wrapped("Coverage: it has no tasks to learn from yet."):
+            ui.line(part)
         return
     shares = [f"{use['title']} {use['coverage']:.0%}" for use in coverage["features"] if use["coverage"] is not None]
-    ui.line(f"Coverage of the {coverage['tasks']:,} tasks it can learn from: {ui.join(shares)}")
+    for part in ui.wrapped(f"Coverage of the {coverage['tasks']:,} tasks it can learn from: {', '.join(shares)}"):
+        ui.line(part)
 
 
 def cmd_status(args) -> int:
@@ -1699,8 +2302,11 @@ def cmd_status(args) -> int:
         if entry["prepared_bytes"] is not None:
             facts.append(f"prepared dataset {ui.size(entry['prepared_bytes'])}")
         predictor = predictors[entry["name"]]
-        ui.line(ui.join(facts))
-        ui.line(f"Features: {feature_summary(predictor.config)}")
+        joined = ui.join(facts)
+        for part in [joined] if ui.width(joined) < ui.columns() - 2 else ui.wrapped(", ".join(facts)):
+            ui.line(part)
+        for part in ui.wrapped(f"Features: {feature_summary(predictor.config)}"):
+            ui.line(part)
         show_coverage(entry["coverage"], problems.get(entry["name"]))
         newer_settings_note(predictor)
         if not predictor.config.get("plugins") or entry["coverage"] is not None:
@@ -1708,17 +2314,19 @@ def cmd_status(args) -> int:
             unknown_features_note(predictor)
         meta = metas.get(entry["name"])
         if meta and outdated(predictor, meta):
-            ui.note("Its model was made by an older version, and gives no forecasts until it's trained again.")
-            ui.note("Train it again with: yardstick-predict refresh")
+            ui.note("Its model was made by an older version. It gives no forecasts until it's trained again.")
+            ui.note(f"Train it again with: yardstick-predict refresh --predictor {entry['name']}")
         elif meta:
             if from_previous_version(predictor, meta):
-                ui.note("Its model was made by the previous version, and it still forecasts. Train it again to get")
-                ui.note("this version's improvements: yardstick-predict refresh")
+                ui.note(
+                    "Its model was made by the previous version. It still forecasts. Train it again to get this "
+                    f"version's improvements: yardstick-predict refresh --predictor {entry['name']}"
+                )
             try:
                 ui.line(f"Trained on {meta.get('tasks', 0):,} tasks.")
                 print_report(meta)
             except (KeyError, TypeError, ValueError, AttributeError):  # a report this version can't read
-                ui.note("Its test report can't be shown. A newer version of yardstick-predict may have saved it.")
+                ui.note("Its forecast report can't be shown. A newer version of yardstick-predict may have saved it.")
     if without and predictors:
         ui.out()
         ui.note("Coverage isn't shown: it's counted from what training reads, and training needs XGBoost.")
@@ -1785,7 +2393,20 @@ def cmd_list(args) -> int:
                 forecasts,
             )
         )
-    ui.table(rows)
+    wide = 2 + sum(max(ui.width(row[i]) for row in rows if i < len(row)) + 3 for i in range(5)) - 3
+    if wide < ui.columns():
+        ui.table(rows)
+    else:
+        # A line for each would run past the terminal's edge, so each gets a few lines of its own.
+        for row, entry in zip(rows[1:], found):
+            ui.line(row[0])
+            if "error" in entry:
+                ui.line(f"  {row[1]}")
+                continue
+            trained = f"trained {ui.plain(row[3])}" if entry["trained_at"] else "not trained yet"
+            learned = [f"learned from {row[2]}"] if entry["learned_from"] is not None else []
+            ui.line(f"  {ui.join([row[1], *learned, trained])}")
+            ui.line(f"  {ui.dim('forecasts for')} {row[4]}")
     for entry in found:
         if "error" in entry:
             ui.out()
@@ -1794,8 +2415,10 @@ def cmd_list(args) -> int:
 
 
 def in_words(names: list[str]) -> str:
-    """Names as a person lists them: a, b and c."""
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    """Names as a person lists them: a, b and c. Nothing for no names."""
+    if len(names) < 2:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def answer_error(args, code: str, message: str, exit_code: int = 1) -> int:
@@ -1867,13 +2490,20 @@ def cmd_delete(args) -> int:
 def say_what_goes(name: str, found, is_default: bool) -> None:
     """Exactly what deleting a predictor removes, and what stays."""
     ui.heading(f"Delete {name}")
+    for quiet, text in what_goes(name, found, is_default):
+        (ui.note if quiet else ui.line)(text)
+
+
+def what_goes(name: str, found, is_default: bool, called: str = "predictor") -> list[tuple[bool, str]]:
+    """Exactly what deleting a predictor removes, and what stays, as lines, each with whether it's a quiet note.
+    `called` is what a predictor is called where it's said, such as a model on a screen."""
+    default = [(True, f"It's your default {called}.")] if is_default else []
     if found.link_to is not None:
-        ui.line(f"{name} is a link to {found.link_to}, not a folder of its own.")
-        ui.line("This deletes only the link. What it links to stays, with everything in it.")
-        if is_default:
-            ui.note("It's your default predictor.")
-        return
-    ui.line(f"This deletes its folder, {found.folder}, and everything in it:")
+        return [
+            (False, f"{name} is a link to {found.link_to}, not a folder of its own."),
+            (False, "This deletes only the link. What it links to stays, with everything in it."),
+            *default,
+        ]
     goes = ["its settings"] if found.settings else []
     if found.dataset:
         tasks = "" if found.tasks is None else f" of {found.tasks:,} task{'' if found.tasks == 1 else 's'}"
@@ -1882,12 +2512,13 @@ def say_what_goes(name: str, found, is_default: bool) -> None:
         goes.append(f"its prepared dataset, what went into its last training ({ui.size(found.prepared)})")
     if found.model:
         goes.append(f"its trained model ({ui.size(found.model)})")
-    for part in goes:
-        ui.line(f"  {part}")
-    ui.line("Your records and the feature store stay, and so do your other predictors.")
-    ui.note("The embeddings and LLM answers it made stay in the feature store, for any predictor that uses them.")
-    if is_default:
-        ui.note("It's your default predictor.")
+    return [
+        (False, f"This deletes its folder, {found.folder}, and everything in it:"),
+        *((False, f"  {part}") for part in goes),
+        (False, f"Your records and the feature store stay, and so do your other {called}s."),
+        (True, f"The embeddings and LLM answers it made stay in the feature store, for any {called} that uses them."),
+        *default,
+    ]
 
 
 def say_default_after(name: str, before: str | None, after: str | None) -> None:
@@ -1952,7 +2583,7 @@ def cmd_check(args) -> int:
     if kind != "xgboost":
         return stop(
             "unsupported_model_type",
-            f"{name} uses the {kind} model type from a plugin. The check tests the built-in model only.",
+            f"{name} uses the {kind} model type from a plugin. The check works with the built-in model only.",
         )
     person = not args.json
     if person:
@@ -1984,7 +2615,7 @@ def cmd_check(args) -> int:
         ui.line("There's nothing to check: it uses only the features that are always on.")
         return 0
     if person:
-        ui.working("Testing the model with every feature, then without each one")
+        ui.working("Comparing forecasts with every feature, then without each one")
     try:
         result = check.run(given, (lambda done, total: ui.progress(done, total, "steps")) if person else None)
     except NotEnoughData as error:
@@ -2434,6 +3065,10 @@ def cmd_claude_code(args) -> int:
     # Claude Code may run the hook without your YARDSTICK_HOME, so the commands name the folder themselves.
     home = os.environ.get("YARDSTICK_HOME")
     home = os.path.abspath(os.path.expanduser(home)) if home else None
+    for used in (sys.executable, home or ""):
+        problem = claude_code.unsafe_path(used)
+        if problem:
+            raise SystemExit(f"{problem} Nothing was added.")
     ui.out(ui.bold("Forecasts in Claude Code"))
     ui.line(f"This adds a status line and two hooks to {where}.")
     ui.note(f"They go in {path}." + (" A copy of the file as it is now is kept next to it." if path.is_file() else ""))
@@ -2461,7 +3096,10 @@ def cmd_claude_code(args) -> int:
     if answer == "no_answer":
         ui.note("Your password store didn't answer in time. If it's locked, unlock it: forecasts look there.")
     elif not key and not stored:
-        ui.note("No Voyage key was found, and forecasts need one. Run yardstick-predict in a terminal to paste one.")
+        ui.note(
+            "No Voyage key was found. Forecasts need one. Set VOYAGE_API_KEY, then run this again in a terminal: it "
+            "offers to keep the key in your computer's password store."
+        )
     elif not stored:
         ui.line()
         ui.line("Your Voyage key is only in the VOYAGE_API_KEY environment variable.")
@@ -2478,9 +3116,35 @@ def cmd_claude_code(args) -> int:
             else:
                 ui.fail("It couldn't be saved. Set VOYAGE_API_KEY where Claude Code starts.")
         else:
-            ui.note("With --yes it isn't saved anywhere. To keep it in your computer's password store, run this")
-            ui.note("again in a terminal without --yes. Or set VOYAGE_API_KEY where Claude Code starts.")
+            ui.note(
+                "With --yes it isn't saved anywhere. To keep it in your computer's password store, run this again "
+                "in a terminal without --yes. Or set VOYAGE_API_KEY where Claude Code starts."
+            )
     return 0
+
+
+def cmd_rename(args) -> int:
+    """Give a predictor another name. The default stays the default."""
+    from .store import Busy, rename_predictor
+
+    names = predictor_names()
+    if args.old not in names:
+        raise SystemExit(f"There's no predictor called {args.old!r}. Your predictors: {', '.join(names) or 'none'}.")
+    was_default = default_name() == args.old
+    try:
+        rename_predictor(args.old, args.new)
+    except (ValueError, Busy) as error:
+        raise SystemExit(str(error)) from None
+    except OSError as error:
+        raise SystemExit(f"Couldn't rename {args.old}: {error.strerror or error}. Nothing changed.") from None
+    say_renamed(args.old, args.new, was_default)
+    return 0
+
+
+def say_renamed(old: str, new: str, was_default: bool) -> None:
+    ui.ok(f"Renamed {old} to {new}.")
+    if was_default:
+        ui.note(f"{new} is still the default.")
 
 
 def cmd_default(args) -> int:
@@ -2520,15 +3184,24 @@ class Parser(argparse.ArgumentParser):
 
 
 def bad_arguments(problem: BadArguments, argv: list[str]) -> int:
-    """Say what's wrong with the command line: in the answer format to a program that runs predict."""
+    """Say what's wrong with the command line: in JSON to a program that runs predict, or that asked for JSON
+    from any command."""
     command = next((word for word in argv if not word.startswith("-")), None)
-    if command == "predict" and not terminal_output():
+    forecasting = command == "predict" and not terminal_output()
+    if forecasting or "--json" in argv:
         message = f"The command line isn't right: {problem.message}."
-        print(json.dumps({"version": 1, "error": {"code": "invalid_request", "message": message}}))
+        answer = {"version": 1, "error": {"code": "invalid_request", "message": message}}
+        print(json.dumps(answer, indent=None if forecasting else 2))
         return 1
     problem.parser.print_usage(sys.stderr)
     print(f"{problem.parser.prog}: error: {problem.message}", file=sys.stderr)
     return 2
+
+
+MAX_COST_HELP = (
+    "Spend at most this many US dollars at list price, such as 1.50. It goes ahead only when the cost fits, and stops "
+    "before any step that could take it past the limit."
+)
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -2540,10 +3213,10 @@ def make_parser() -> argparse.ArgumentParser:
         description="Forecast how long a coding-agent task will take and what it will cost, before it runs.",
     )
     parser.add_argument("-v", "--version", action="version", version=f"yardstick-predict {__version__}")
-    commands = parser.add_subparsers(dest="command")
+    commands = parser.add_subparsers(dest="command", metavar="COMMAND", title="commands")
 
     create = commands.add_parser("create", help="Create a predictor from your past runs.")
-    create.add_argument("name", nargs="?", help="The predictor's name. In a terminal it asks. Otherwise: default.")
+    create.add_argument("name", nargs="?", help="The predictor's name. In a terminal it asks. Otherwise: main.")
     create.add_argument(
         "--archive",
         action="append",
@@ -2563,6 +3236,12 @@ def make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=f"Take every default and go ahead without questions: all your records, the prompt with {added}, voyage-4.",
     )
+    create.add_argument(
+        "--json",
+        action="store_true",
+        help="Answer in JSON, for programs. It asks nothing: without --yes it only says what it would do and cost.",
+    )
+    create.add_argument("--max-cost", type=float, metavar="USD", help=MAX_COST_HELP)
     create.add_argument(
         "--features",
         help="The optional features, such as conversation,context,skills:named,benchmarks,time,llm. A feature alone "
@@ -2604,6 +3283,12 @@ def make_parser() -> argparse.ArgumentParser:
     refresh.add_argument(
         "--yes", action="store_true", help="Go ahead without asking anything, even when it costs money."
     )
+    refresh.add_argument(
+        "--json",
+        action="store_true",
+        help="Answer in JSON, for programs. It asks nothing: without --yes it only says what it would do and cost.",
+    )
+    refresh.add_argument("--max-cost", type=float, metavar="USD", help=MAX_COST_HELP)
 
     predict = commands.add_parser("predict", help="Forecast a task. Give it in quotes, or send a JSON request.")
     predict.add_argument("task", nargs="?", help="The task's prompt, in quotes.")
@@ -2622,6 +3307,11 @@ def make_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="A skill the prompt invokes, or that the conversation used before it. Repeat for more.",
+    )
+    predict.add_argument(
+        "--request",
+        metavar="FILE",
+        help="Read the JSON request from this file, not from standard input. - means standard input.",
     )
     predict.add_argument("--distribution", action="store_true", help="Also give each forecast's full curve, in JSON.")
     predict.add_argument("--json", action="store_true", help="Print the JSON answer that programs get.")
@@ -2659,6 +3349,10 @@ def make_parser() -> argparse.ArgumentParser:
     default = commands.add_parser("default", help="Show or choose the predictor used when a command names none.")
     default.add_argument("name", nargs="?", help="The predictor to make the default.")
 
+    rename = commands.add_parser("rename", help="Give a predictor another name. The default stays the default.")
+    rename.add_argument("old", help="The predictor's name now.")
+    rename.add_argument("new", help="Its new name.")
+
     claude = commands.add_parser("claude-code", help="Show forecasts in Claude Code's status line, or stop.")
     claude.add_argument("action", choices=["install", "remove"], help="Add the status line, or take it out.")
     claude.add_argument("--here", action="store_true", help="Only for Claude Code sessions in this folder.")
@@ -2672,12 +3366,13 @@ look at your predictors, choose a default and take the status line out of Claude
 
 
 def needs_xgboost(args) -> bool:
-    # The bare command sets up or refreshes predictors only when a person runs it. Otherwise it lists them.
+    # In a terminal the bare command opens the home screen, where you can estimate and update. Otherwise it lists.
     return args.command in TRAINS_OR_FORECASTS or (args.command is None and interactive())
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    ui.numbered.cache_clear()  # whether numbered menus were asked for is looked up once a command
     try:
         args = make_parser().parse_args(argv)
     except BadArguments as problem:
@@ -2692,6 +3387,7 @@ def main(argv: list[str] | None = None) -> int:
         "check": cmd_check,
         "features": cmd_features,
         "default": cmd_default,
+        "rename": cmd_rename,
         "claude-code": cmd_claude_code,
     }
     if args.command in ("features", "status"):
@@ -2701,10 +3397,11 @@ def main(argv: list[str] | None = None) -> int:
     if problem:
         forecasting = args.command == "predict"
         person = forecasting and terminal_output() and bool(args.task or args.prompt)
+        answer = {"version": 1, "error": {"code": "missing_library", "message": problem}}
         if forecasting and not (person and not args.json and not args.distribution):
-            print(json.dumps({"version": 1, "error": {"code": "missing_library", "message": problem}}))
-        elif args.command == "check" and args.json:
-            print(json.dumps({"version": 1, "error": {"code": "missing_library", "message": problem}}, indent=2))
+            print(json.dumps(answer))
+        elif getattr(args, "json", False):  # any command that a program asked for JSON
+            print(json.dumps(answer, indent=2))
         else:
             ui.error(problem)
         return 1
@@ -2721,6 +3418,64 @@ def main(argv: list[str] | None = None) -> int:
             ui.error(stop.code)
             return 1
         raise
+    except BrokenPipeError:
+        # The program reading the output stopped early, as head does. Nothing more can reach it, so nothing is said.
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
+        return 141
+    except Exception as error:
+        return crashed(error, args)
+
+
+DEBUG = "YARDSTICK_DEBUG"
+"""Set to also print the details of a crash, the traceback, where it happens."""
+ISSUES = "https://github.com/yusufcemaydin/yardstick-predict/issues"
+CRASH_FILE = "last-crash.txt"
+"""The file in the yardstick folder that keeps the details of the last crash."""
+
+
+def crashed(error: Exception, args) -> int:
+    """Something went wrong that the command didn't expect. Say so in a line, with where the details are kept and
+    where to report it, rather than a page of Python. A program that asked for JSON gets it as an error in JSON."""
+    import traceback
+
+    details = "".join(traceback.format_exception(error))
+    first = (str(error).strip().splitlines() or [""])[0]
+    what = f"Something went wrong that yardstick-predict didn't expect: {type(error).__name__}: {first}".rstrip(": ")
+    kept = keep_crash(details, args.command)
+    if getattr(args, "json", False):
+        print(json.dumps({"version": 1, "error": {"code": "internal_error", "message": ui.clean(what)}}, indent=2))
+        return 1
+    if os.environ.get(DEBUG) or kept is None:
+        print(details, end="", file=sys.stderr)
+    lines = [what]
+    if kept is not None:
+        lines.append(f"The details are in {kept}. They may hold text from your work. Read them before you share them.")
+    lines.append(f"Please report it at {ISSUES}")
+    ui.error("\n".join(lines))
+    return 1
+
+
+def keep_crash(details: str, command: str | None) -> Path | None:
+    """Save the details of a crash in the yardstick folder, over the last one's, and return where. None when they
+    can't be saved. They name the command, never what it was given, such as a prompt."""
+    from . import files
+
+    lines = [
+        f"yardstick-predict {__version__}, Python {sys.version.split()[0]}, {sys.platform}",
+        f"Command: {command or 'the home screen'}",
+        time.strftime("%Y-%m-%d %H:%M:%S %z"),
+        "",
+        details,
+    ]
+    try:
+        path = private_home() / CRASH_FILE
+        files.write_text(path, "\n".join(lines))
+    except OSError:
+        return None
+    return path
 
 
 if __name__ == "__main__":

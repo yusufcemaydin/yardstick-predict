@@ -6,7 +6,7 @@ import os
 import sys
 import textwrap
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from fractions import Fraction
 
 import numpy as np
@@ -170,7 +170,7 @@ def time_zone():
 
 def utc(*when: int) -> float:
     """A moment in UTC, in seconds since 1970."""
-    return datetime(*when, tzinfo=timezone.utc).timestamp()
+    return datetime(*when, tzinfo=UTC).timestamp()
 
 
 def test_the_trend_counts_days_since_2020_the_same_in_every_time_zone(time_zone):
@@ -224,7 +224,7 @@ def test_a_model_trains_and_forecasts_with_the_time(tmp_path, capsys, voyage, mo
     history(records, tasks=180, start=START, models=("claude-opus-5-5", "claude-sonnet-5-5"), efforts=("high", "max"))
     code = main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "time", *ONE_WINDOW])
     assert code == 0, capsys.readouterr().out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "time"]
     assert predictor.config["options"] == {"time": ["trend", "clock"]}
     meta = json.loads((predictor.model_dir / "model.json").read_text())
@@ -292,7 +292,7 @@ def test_your_own_features_train_and_forecast_through_a_plugin(tmp_path, capsys,
     code = main(["create", "--yes", "--archive", f"claude-code={records}", *flags])
     out = capsys.readouterr().out
     assert code == 0, out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "words", "summary", "ticket"]
     assert predictor.config["plugins"] == [plugin]
     assert len(predictor.embedded("summary")) == 300

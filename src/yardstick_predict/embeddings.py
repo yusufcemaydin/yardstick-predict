@@ -55,7 +55,9 @@ class EmbeddingModel:
 
 MODELS = {
     "voyage-4": EmbeddingModel("voyage-4", 0.06, 320_000, "recommended"),
-    "voyage-4-lite": EmbeddingModel("voyage-4-lite", 0.02, 1_000_000, "cheaper, slightly weaker in Voyage's tests"),
+    "voyage-4-lite": EmbeddingModel(
+        "voyage-4-lite", 0.02, 1_000_000, "cheaper, a little weaker by Voyage's own measures"
+    ),
     "voyage-4-large": EmbeddingModel("voyage-4-large", 0.12, 120_000, "strongest, costs the most"),
 }
 
@@ -66,7 +68,16 @@ SETTINGS = -1
 
 class VoyageError(Exception):
     def __init__(self, status: int, detail: str, retry_after: float | None = None) -> None:
-        super().__init__(detail if status == SETTINGS else f"Voyage said {status}: {detail}")
+        from . import ui
+
+        detail = ui.clean(detail)  # Voyage's own words, shown as they are, but never codes a terminal acts on
+        if status == SETTINGS:
+            said = detail
+        elif status == 0:  # no answer came, so Voyage said nothing: the words say what happened
+            said = detail[:1].upper() + detail[1:]
+        else:
+            said = f"Voyage said {status}: {detail}"
+        super().__init__(said)
         self.status = status
         self.detail = detail
         self.retry_after = retry_after
@@ -127,10 +138,15 @@ def _load_tokenizer(model: str, revision: str):
     """Download a tokenizer from Hugging Face, or load it from the computer's copy of an earlier download."""
     from tokenizers import Tokenizer
 
+    bars_were_on = False
     try:  # the download goes through huggingface_hub, which sets up its logger as this loads
+        from huggingface_hub.utils import are_progress_bars_disabled, disable_progress_bars
         from huggingface_hub.utils import logging as _hub_logging  # noqa: F401
     except ImportError:
         pass
+    else:
+        bars_were_on = not are_progress_bars_disabled()
+        disable_progress_bars()  # its own bar would be drawn over the screen's lines
     hub = logging.getLogger("huggingface_hub")
     level = hub.level
     hub.setLevel(logging.ERROR)  # its note about each retry would fill the screen
@@ -138,6 +154,10 @@ def _load_tokenizer(model: str, revision: str):
         return Tokenizer.from_pretrained(f"voyageai/{model}", revision=revision)
     finally:
         hub.setLevel(level)
+        if bars_were_on:
+            from huggingface_hub.utils import enable_progress_bars
+
+            enable_progress_bars()
 
 
 def _tokenizer_failed_recently() -> bool:
@@ -526,14 +546,21 @@ def _send(body: dict, tokens: float, key: str, room: _Room, on_wait: Callable[[s
         return reply
 
 
-def check_key(key: str, model: str) -> None:
-    """Make one tiny request to confirm the key works. Raises VoyageError when it doesn't."""
+KEY_CHECK_TOKENS = 8
+"""The most tokens the key check sends."""
+
+
+def check_key(key: str, model: str) -> int:
+    """Make one tiny request to confirm the key works, and return the tokens it used. Raises VoyageError when the
+    key doesn't work."""
     body = {"input": ["yardstick-predict key check"], "model": model, "output_dimension": DIMENSIONS}
     try:
-        reply = _send(body, 8, key, _Room(cap=math.inf, patience=PATIENT), None)
+        reply = _send(body, KEY_CHECK_TOKENS, key, _Room(cap=math.inf, patience=PATIENT), None)
     except _TooBig as refused:
         raise refused.error from None
-    record_usage(key, model, _tokens_used(reply))
+    used = _tokens_used(reply)
+    record_usage(key, model, used)
+    return used
 
 
 def _tokens_used(reply: dict) -> int:
@@ -687,9 +714,11 @@ def _lookup(model: str, texts: list[str], with_vectors: bool) -> dict[str, list[
         column = "vector" if with_vectors else "NULL"
         for chunk in _chunks(list(hashes)):
             marks = ", ".join("?" for _ in chunk)
+            # A vector of the wrong size, as a damaged cache may hold, counts as missing, as when it's read.
             rows = db.execute(
-                f"SELECT hash, {column} FROM vectors WHERE model = ? AND dimensions = ? AND hash IN ({marks})",
-                (model, DIMENSIONS, *chunk),
+                f"SELECT hash, {column} FROM vectors WHERE model = ? AND dimensions = ? AND length(vector) = ? "
+                f"AND hash IN ({marks})",
+                (model, DIMENSIONS, 4 * DIMENSIONS, *chunk),
             )
             for digest, blob in rows:
                 if not with_vectors:
@@ -722,7 +751,7 @@ def remember(model: str, vectors: dict[str, list[float]]) -> None:
         return
     try:
         rows = [(model, DIMENSIONS, text_hash(text), array("f", vector).tobytes()) for text, vector in vectors.items()]
-        db.executemany("INSERT OR IGNORE INTO vectors VALUES (?, ?, ?, ?)", rows)
+        db.executemany("INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?)", rows)  # a damaged one gives way
         db.commit()
     except (sqlite3.Error, OverflowError, TypeError):
         pass

@@ -660,7 +660,10 @@ def _no_forecast(error: Exception, predictor) -> str:
     folder = getattr(predictor, "dir", None)
     if isinstance(folder, Path) and not (folder / "predictor.json").is_file():
         return f"{predictor.name} was deleted"
-    return (getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
+    from . import ui
+
+    # Often in another service's words, such as Voyage's. The status line shows them, but never a code that acts.
+    return ui.clean(getattr(error, "message", None) or str(error) or type(error).__name__)[:160]
 
 
 def _forget_old_forecasts(session: str) -> None:
@@ -1058,7 +1061,9 @@ def _status_line(session: str, model: str, now: float, effort: str, transcript: 
     if found.get("prompt_at") != started:
         return f"{label} {_dim('·')} took {took}" if done is not None else f"{label} {_dim('· forecasting…')}"
     if found.get("error"):
-        return f"{label} {_dim('· no forecast: ' + str(found['error']))}"
+        from . import ui
+
+        return f"{label} {_dim('· no forecast: ' + ui.clean(found['error']))}"
     effort = effort or _str(state.get("effort"))
     name = model.split("[")[0] or _str(state.get("model"))
     pick = _pick(found.get("forecasts"), name, effort)
@@ -1197,6 +1202,29 @@ def commands(python: str, home: str | None = None) -> tuple[str, str]:
     """
     run = f"{_quoted(python)} -P -m {MARK}" + (f" --home {_quoted(home)}" if home else "")
     return f"{run} hook", f"{run} status"
+
+
+WINDOWS_SHELLS_READ = '$`"%!'
+"""What cmd or Git Bash read inside double quotes, as more than text: a variable, a command, the end of the quotes."""
+
+
+def unsafe_path(path: str, windows: bool | None = None) -> str | None:
+    """Why a path can't go into Claude Code's commands, in plain words, or None when it can.
+
+    On Windows, Claude Code runs them in cmd or in Git Bash, and no one way of quoting keeps every character as
+    it is in both. Inside double quotes cmd still reads % and !, and Git Bash reads $ and `. A path with any of
+    those, or with a double quote, could become another command, so it's refused. Elsewhere every path is fine.
+    """
+    if not (os.name == "nt" if windows is None else windows):
+        return None
+    found = [char for char in WINDOWS_SHELLS_READ if char in path]
+    if not found:
+        return None
+    listed = found[0] if len(found) == 1 else ", ".join(found[:-1]) + " and " + found[-1]
+    return (
+        f"The path {path} has {listed} in it. Windows' command shells read that as more than text, so it can't go "
+        "into Claude Code's commands. Install yardstick-predict in a folder without it."
+    )
 
 
 def _quoted(text: str, windows: bool | None = None) -> str:

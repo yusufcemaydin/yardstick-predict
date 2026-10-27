@@ -9,7 +9,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from builders import history
+from builders import flat, history
 from conftest import KEY
 from test_cli import fake_analysis, quick_train
 from test_model import ONE_WINDOW, kinds, rows_for, synthetic, task
@@ -307,7 +307,7 @@ def test_an_ai_model_with_too_few_tasks_llm_analysis_read_gets_not_enough_data(c
     assert check.as_json(result, "work")["judged_on_tasks_with_it"] == ["llm"]
     cli.show_check(result)
     out = " ".join(capsys.readouterr().out.split())
-    assert "LLM analysis read only some of your tasks, so it was judged on those alone" in out
+    assert "LLM analysis read only some of your tasks. So it was judged on those alone" in " ".join(out.split())
     assert "too few to judge it for b." in out
 
 
@@ -394,7 +394,7 @@ def test_the_features_screen_shows_the_latest_verdicts_and_starts_from_a_choice(
     how = {"provider": "codex", "model": llm.DEFAULT_CODEX}
     picked = menu.ask(start=menu.Picked(["prompt", "context", "llm"], {"llm": ["kind"]}, how))
     out = capsys.readouterr().out
-    assert "    Last check: helped claude-opus-5-5; didn't help gpt-6.1-sol." in out
+    assert "    Last check: helped claude-opus-5-5. Didn't help gpt-6.1-sol." in out
     assert "    Last check: not enough data for claude-opus-5-5." in out
     assert out.index("the end of the conversation before each prompt") < out.index("Last check: helped")
     assert re.search(r" 4  Conversation +off", out) and re.search(r" 5  Context +on", out)
@@ -465,18 +465,24 @@ def test_setup_offers_the_check_and_trains_with_what_the_person_keeps(capsys, mo
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
     assert sum(QUESTION in question for question in asked) == 1
-    assert "Some features carry no signal for your kind of work, and with few tasks a feature can't show" in out
+    assert "Some features carry no signal for your kind of work. With few tasks, a feature can't show" in flat(out)
     # The question to go ahead says the check comes next, and the estimate counts it.
     assert any("Embed them, then check the features?" in question for question in asked)
     assert "feature check" in out
     assert re.search(r"Conversation +(helped|didn't help|not enough data) +(helped|didn't help|not enough data)", out)
-    assert "Tested on each AI model's newest tasks, with every feature and then without each one." in out
-    # The Features screen comes again, with the features that helped on, and the person pressed Enter to keep them.
-    assert sum("Turn on or off" in question for question in asked) == 2
+    squashed = " ".join(out.split())
+    assert "Forecasts of each AI model's newest tasks, with every feature and then without each one:" in squashed
+    # One question keeps the features that helped, and the person pressed Enter to go on. No second Features screen.
+    # Which features help these made-up records shifts a little from one computer to another, so the line said is
+    # the one that goes with what the check found.
     saved = check.latest()
     helped = [name for name in saved if any(found["verdict"] == "helped" for found in saved[name].values())]
-    assert Predictor("default").config["features"] == ["prompt", *helped]
-    assert {entry["predictor"] for by_model in saved.values() for entry in by_model.values()} == {"default"}
+    said = "The features that helped an AI model stay on." if helped else "None of the features you chose helped"
+    assert said in squashed
+    assert sum("Keep this and go on to make the predictor?" in question for question in asked) == 1
+    assert sum("Turn on or off" in question for question in asked) == 1
+    assert Predictor("main").config["features"] == ["prompt", *helped]
+    assert {entry["predictor"] for by_model in saved.values() for entry in by_model.values()} == {"main"}
     assert "Trained on" in out and "Ready" in out
 
 
@@ -484,23 +490,21 @@ def test_llm_analysis_reads_a_sample_for_the_check_and_the_rest_once_it_helps(ca
     read: list[int] = []
     monkeypatch.setattr(llm, "analyze", fake_analysis(read))
     monkeypatch.setattr(M, "compare", stand_in_check({"context", "llm"}))
-    asked = person(monkeypatch, Turn_on_or_off=["9", "", ""], How_should_it_be_paid_for="4")
+    asked = person(monkeypatch, Turn_on_or_off=["9", ""], How_should_it_be_paid_for="4")
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = ANSI.sub("", capsys.readouterr().out)
     # Before the check, LLM analysis reads only the newest 30% of the 180 tasks, with its cost shown first.
     assert read == [54, 126]
-    assert "LLM analysis: 54 tasks with Codex's own model through your chatgpt subscription" in out
+    assert "LLM analysis: 54 tasks with Codex's own model through your ChatGPT subscription" in flat(out)
     assert "For the check, it reads only your newest tasks." in out
-    # The features that helped start on, the one that didn't starts off.
-    after = out[out.index("The features that helped are on below.") :]
-    assert re.search(r" 4  Conversation +off", after) and re.search(r" 5  Context +on", after)
-    assert re.search(r" 9  LLM analysis +on", after)
-    assert "Last check: helped claude-opus-5-5, claude-sonnet-5-5." in after
+    # The features that helped stay on, the one that didn't goes off.
+    after = out[out.index("The features that helped an AI model stay on.") :]
+    assert "On: context and LLM analysis." in after and "Off: conversation." in after
     # Then the rest, with what it costs, once the person agrees.
-    assert "For the check, LLM analysis read only a sample of your tasks. To read the rest:" in after
-    assert "LLM analysis: 126 tasks with Codex's own model" in after
+    assert "For the check, LLM analysis read only a sample of your tasks. To read the rest:" in flat(after)
+    assert "LLM analysis: 126 tasks with Codex's own model" in flat(after)
     assert sum("Analyze them now?" in question for question in asked) == 1
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "context", "llm"]
     assert len(predictor.llm_labels()) == 180 and len(predictor.embedded("llm")) == 180
     assert sum("How should it be paid for?" in question for question in asked) == 1  # not asked again
@@ -514,7 +518,7 @@ def test_llm_analysis_is_left_out_when_the_person_wont_have_it_read_the_rest(cap
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
     assert read == [54] and "LLM analysis is left out of this predictor." in out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt"] and "llm" not in predictor.config
     assert "llm" not in (predictor.config.get("options") or {}) and "Trained on" in out
 
@@ -532,27 +536,31 @@ def test_when_the_check_cant_test_any_ai_model_the_features_stay_as_chosen(capsy
     asked = person(monkeypatch, Turn_on_or_off=["9", ""], How_should_it_be_paid_for="4")
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
-    assert "There aren't enough tasks to check the features yet. Each AI model needs 60 of its own." in out
+    squashed = " ".join(out.split())
+    assert "There's not enough data to check the features yet. Each AI model needs 60 tasks of its own." in squashed
     # Two answers on the first Features screen, and no second screen: there's nothing to suggest.
     assert sum("Turn on or off" in question for question in asked) == 2 and "The features that helped" not in out
     # LLM analysis read a sample for the check. It still offers to read the rest, with its cost.
-    assert read == [54, 126] and "To read the rest:" in out
-    assert Predictor("default").config["features"] == ["prompt", "conversation", "context", "llm"]
+    assert read == [54, 126] and "To read the rest:" in flat(out)
+    assert Predictor("main").config["features"] == ["prompt", "conversation", "context", "llm"]
 
 
 def test_a_feature_turned_on_after_the_check_shows_its_cost_first(capsys, monkeypatch, records, ready):
     monkeypatch.setattr(M, "compare", stand_in_check(set()))
-    # Only the conversation is checked. Then the context is turned on, and its texts were never embedded.
-    asked = person(monkeypatch, Turn_on_or_off=["5", "", "5", ""], Embed_them_and_train="n")
+    # Only the conversation is checked, and it doesn't help. The person says no to going on as it is, and turns the
+    # context on, whose texts were never embedded.
+    asked = person(monkeypatch, Turn_on_or_off=["5", "", "5", ""], Keep_this_and_go_on="n", Embed_them_and_train="n")
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
-    assert "None of them helped, so they're off below." in out
+    said = "None of the features you chose helped an AI model. The predictor learns from the three always on."
+    assert said in " ".join(out.split())
+    assert "Off: conversation." in out and "Change them below. Press Enter when they're as you want them." in out
     # Embedding the context is priced and asked first. Here the answer is no.
     assert sum("Embed them and train the predictor now?" in question for question in asked) == 1
     # Once for the check, and once for the context of the tasks that have one.
     assert re.findall(r"Embedding ([\d,]+) tasks with voyage-4 uses", out) == ["180", "144"]
-    assert "Stopped. Your choice of features is kept." in out and "refresh --predictor default" in out
-    predictor = Predictor("default")
+    assert "Stopped. Your choice of features is kept." in out and "refresh --predictor main" in out
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "context"] and not (predictor.model_dir / "model.json").exists()
 
 
@@ -594,7 +602,7 @@ def made(capsys, monkeypatch, records, ready):
     flags = ["--features", "context,time", "--test-windows", "1", "--archive", f"claude-code={records}"]
     assert main(["create", "--yes", *flags]) == 0
     capsys.readouterr()
-    return Predictor("default")
+    return Predictor("main")
 
 
 def kept(predictor: Predictor) -> dict[str, bytes]:
@@ -605,14 +613,14 @@ def kept(predictor: Predictor) -> dict[str, bytes]:
 def test_check_shows_a_table_of_verdicts_and_changes_nothing(capsys, monkeypatch, made):
     before = kept(made)
     monkeypatch.setenv("NO_COLOR", "1")
-    assert main(["check", "default"]) == 0
+    assert main(["check", "main"]) == 0
     out = capsys.readouterr().out
-    assert re.search(r"Checked 2 features on [\d,]+ test tasks\.", out)
+    assert re.search(r"Checked 2 features on your [\d,]+ newest tasks\.", out)
     header = next(line for line in out.splitlines() if "claude-opus-5-5" in line and "claude-sonnet-5-5" in line)
     assert header.strip().startswith("claude-")  # a column for each AI model tested
     verdict = r"(helped|didn't help|not enough data)"
     assert re.search(rf"  Context +{verdict} +{verdict}\n", out) and re.search(rf"  Time +{verdict} +{verdict}\n", out)
-    assert "A feature helped when an AI model's test scored more than 1% worse without it." in out
+    assert "A feature helped when an AI model's forecasts were over 1% worse without it." in " ".join(out.split())
     assert "This is advice only: nothing changed." in out
     assert kept(made) == before
     saved = check.latest()
@@ -623,7 +631,7 @@ def test_check_answers_a_program_in_json(capsys, monkeypatch, made):
     monkeypatch.setattr(M, "compare", stand_in_check({"time"}))
     assert main(["check", "--json"]) == 0  # the default predictor
     found = json.loads(capsys.readouterr().out)
-    assert found["version"] == 1 and found["predictor"] == "default" and found["features"] == ["context", "time"]
+    assert found["version"] == 1 and found["predictor"] == "main" and found["features"] == ["context", "time"]
     assert found["tested_on"] == 60 and set(found["models"]) == {"claude-opus-5-5", "claude-sonnet-5-5"}
     assert found["models"]["claude-opus-5-5"]["tasks_tested"] == 50
     assert found["verdicts"]["time"]["claude-opus-5-5"] == {
@@ -679,3 +687,16 @@ def test_check_shows_a_bar_in_a_terminal(capsys, monkeypatch, made):
     assert main(["check"]) == 0
     out = ANSI.sub("", capsys.readouterr().out)
     assert re.search(r" (\d+) / \1 steps", out)
+
+
+def test_the_check_report_fits_the_terminal_with_many_ai_models(capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "80")
+    models = [f"claude-some-model-{n}" for n in range(6)]
+    full = {"tested_on": 600, "models": {m: results(seconds=1.0) for m in models}}
+    worse = M.Compared({"models": {m: results(seconds=1.0) for m in models}},
+                       {"models": {m: results(seconds=1.2) for m in models}}, {m: 1.0 for m in models},
+                       {m: 1.0 for m in models})  # fmt: skip
+    cli.show_check(check.judge(full, {"context": worse}, ["context"]))
+    out = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", capsys.readouterr().out)
+    assert max(len(line) for line in out.split("\n")) < 80  # a column for each of 6 AI models wouldn't fit
+    assert "Context\n    Helped claude-some-model-0, claude-some-model-1," in out and "test" not in out

@@ -6,12 +6,17 @@ import json
 import math
 import os
 import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
+def flat(text: str) -> str:
+    """Output as a person reads it: the lines a long one was broken into, to fit the terminal, joined again."""
+    return " ".join(text.split())
+
+
 def iso(moment: float) -> str:
-    return datetime.fromtimestamp(moment, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(moment, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 def usage(new_input=100, write=0, read=20_000, output=200, write_1h=0, speed="standard") -> dict:
@@ -342,7 +347,7 @@ class CodexSession:
         guardian_of: str | None = None,
         depth: int = 1,
     ):
-        day = datetime.fromtimestamp(start, tz=timezone.utc)
+        day = datetime.fromtimestamp(start, tz=UTC)
         folder = root / f"{day:%Y}" / f"{day:%m}" / f"{day:%d}"
         folder.mkdir(parents=True, exist_ok=True)
         self.path = folder / f"rollout-{name or session}.jsonl"

@@ -4,7 +4,7 @@ Thanks for helping. This guide says how to report problems and how to send chang
 
 ## Set up and run the tests
 
-You need [uv](https://docs.astral.sh/uv/). It installs the right Python and every dependency.
+You need [uv](https://docs.astral.sh/uv/), version 0.11 or newer. It installs the right Python and every dependency.
 
 ```bash
 git clone https://github.com/yusufcemaydin/yardstick-predict
@@ -32,6 +32,26 @@ uv run ruff format src tests
 ```
 
 [How it works](docs/how-it-works.md) explains the data, the model and the test. A change to the model must keep passing the test on real runs, not just the unit tests. Say in your pull request how it did.
+
+## Libraries and known vulnerabilities
+
+`uv.lock` pins every library the tests and the release builds use. A new release of a library gets into it only once it has been out for 7 days, as `exclude-newer` in `pyproject.toml` says. A bad release is usually found and pulled by then. So `uv lock --upgrade` picks the newest releases that are at least 7 days old.
+
+To take a fix that is newer than that, name the library and the moment its release came out, in UTC, for example:
+
+```bash
+uv lock --upgrade-package anthropic --exclude-newer-package anthropic=2026-10-25T12:00:00Z
+```
+
+The wait covers this project's lock file, not what an install of yardstick-predict gets. To wait the same way when you install it, run `uv tool install --exclude-newer "7 days" yardstick-predict`.
+
+The automatic tests include a security scan. It checks every locked library against OSV, the public database of known vulnerabilities, on each pull request, each push to main and once a week. Run it yourself with:
+
+```bash
+uv audit --locked --preview-features audit
+```
+
+When it finds one, upgrade the library to the release that fixes it, as above.
 
 ## Keep private data out
 
@@ -72,6 +92,8 @@ Open an issue and pick a form:
 
 Search the open issues first. Someone may have reported it already.
 
+When yardstick-predict meets an error it didn't expect, it says so in one line. It keeps the details, the Python traceback, in `last-crash.txt` in the yardstick folder, usually `~/.yardstick`. They name the command, never what it was given. Still, read them before you paste them into a report: they may hold text from your work. To see the details where it happens, run the command again with `YARDSTICK_DEBUG=1`.
+
 Security problems are different. Report them privately, as the [security policy](SECURITY.md) explains.
 
 ## Send a change
@@ -93,13 +115,15 @@ These changes get a much closer review, and may be turned down:
 - new dependencies,
 - model files.
 
-Model files must use the safetensors format, which holds only numbers. Pull requests that add pickle files will be closed. These usually end in `.pkl`, `.pt` or `.pth`, and they can run code when someone opens them.
+A trained model is saved as JSON and as NumPy arrays read without pickle, which hold only numbers. Model files must keep to that. Pull requests that add pickle files will be closed. These usually end in `.pkl`, `.pt` or `.pth`. They can run code when someone opens them.
 
 Code that's minified, obfuscated or generated without its source will be closed too. Every line has to be readable.
 
 ## AI-written changes
 
 You can use AI tools to write your change. You're still responsible for it. Read it, test it, and be ready to explain it.
+
+[AGENTS.md](AGENTS.md) holds the rules for AI coding agents working here: how to check a change and how to write what people read. Claude Code reads it through `CLAUDE.md`. Codex reads it as it is.
 
 ## Releasing
 

@@ -54,8 +54,11 @@ from pathlib import Path
 
 import numpy as np
 
+from .model_types import without_scikit_learn
+
 try:
-    import xgboost as xgb
+    with without_scikit_learn():
+        import xgboost as xgb
 except Exception as error:  # On a Mac without Homebrew's OpenMP, XGBoost can't load in a running program.
     if "libomp" not in str(error):
         raise
@@ -1058,11 +1061,12 @@ class Model:
             out[target] = np.exp(np.clip(self._predict(target, spec, matrix, margin), -50, 50))
         return out
 
-    def forecast(self, rows: list[Features]) -> list[dict]:
+    def forecast(self, rows: list[Features], tested_only: bool = True) -> list[dict]:
         """Each row's forecast: for every head, the expected value and, when there is one, the curve.
 
         This is what every model type provides. A head the model doesn't have is None, and so is a head
-        the test never checked for the row's AI model.
+        the test never checked for the row's AI model, unless `tested_only` is False. A person's rough
+        forecast for an AI model the test couldn't check asks for those too.
         """
         if not rows:
             return []
@@ -1079,7 +1083,7 @@ class Model:
                 }
                 for i in range(len(rows))
             ]
-            return self._tested_only(rows, found)
+            return self._tested_only(rows, found) if tested_only else found
         curves = self.curves(rows)
         family = self.family
         found = []
@@ -1101,7 +1105,7 @@ class Model:
                     },
                 }
             found.append(row)
-        return self._tested_only(rows, found)
+        return self._tested_only(rows, found) if tested_only else found
 
     def _tested_only(self, rows: list[Features], found: list[dict]) -> list[dict]:
         """Set each head the test never checked for the row's AI model to None."""
@@ -1167,14 +1171,14 @@ class WithoutLLM:
         """Both models' similar-task pools. A forecast embeds a text only when one of them compares it."""
         return {**self.without.pools, **self.model.pools}
 
-    def forecast(self, rows: list[Features]) -> list[dict]:
+    def forecast(self, rows: list[Features], tested_only: bool = True) -> list[dict]:
         """Each row's forecast: by the model, or by the one without LLM analysis when LLM analysis couldn't read it."""
         found: list = [None] * len(rows)
         read = [_read_by_llm(r) for r in rows]
         for model, reads in ((self.model, True), (self.without, False)):
             mine = [i for i, was in enumerate(read) if was == reads]
             if mine:
-                for i, result in zip(mine, model.forecast([rows[i] for i in mine])):
+                for i, result in zip(mine, model.forecast([rows[i] for i in mine], tested_only)):
                     found[i] = result
         return found
 

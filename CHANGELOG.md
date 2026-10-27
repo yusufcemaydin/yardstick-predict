@@ -2,6 +2,74 @@
 
 Every notable change to yardstick-predict is listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.5.0] - 2026-10-27
+
+A bare `yardstick-predict` in a terminal opens a home screen with clear choices. It no longer refreshes every predictor at once behind a bar with no label.
+
+### Added
+
+- A home screen. Run `yardstick-predict` in a terminal with nothing after it. It greets you, lists your models under Your models with `(default)` after the default one and offers Estimate, Update, Models, Add New and Quit. Move with the arrow keys and press Enter. A choice's number picks it at once. Esc goes back. It reads only your models' settings. It opens at once. The box names 5 models at most, the default first, then says how many more Models lists. A terminal that can't pass single key presses gets the choices numbered, to type one in. So do a dumb terminal and an old Windows console that can't move the cursor. Keys pressed quickly each count, such as an arrow and then Enter.
+- The home screen says when a newer version of yardstick-predict is out on PyPI, with the command that updates it the way you installed it: uv, pipx or pip. It looks at most once a day, in the background. It never makes you wait. `YARDSTICK_NO_UPDATE_CHECK`, `DO_NOT_TRACK` or `"update_check": false` in the yardstick folder's `settings.json` turns it off.
+- Estimate asks for a task. With more than one model, it asks which of your models should forecast it. Each one says how accurate it is next to the default, such as 12% more accurate than main. Then it asks which AI models to forecast: the ones with enough data or any you've used, from a list. Each opens a list, 6 to a page, numbered on from page to page. Two digits typed quickly pick a number above 9. Enter forecasts the line you're on. To forecast several, tick them with space first. The left and right arrows turn the page. When no AI model has enough data yet, it says so and the full list is still there. The forecasts show 6 to a page too, under the task as a title of 3 lines at most. After them you choose what's next: another page, another task, other AI models for the same task, another of your models for it or home.
+- The forecast table in a terminal, in Estimate and in `predict`, has a heading over each column. It shows every AI model you've used, at each effort level you used it at 10 times or more. Each forecast's first line is what to expect on average. Under it are its 25%, median and 75% lines. A quarter of real results come in under the 25% line, half under the median and three quarters under the 75% line. A forecast with not enough data behind it is marked ⚠. The lines under the table name the AI models that have too little. AI models with under 10 tasks are listed by name. The default effort level, which no one picks, isn't shown. A program's JSON is as before: it never gets a forecast with not enough data behind it.
+- Update first says where the new work is and how much there is to read, from file sizes alone. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. A Voyage key is asked for first, only when texts go to Voyage. It asks once. Cancel spends nothing and saves nothing. A second Update in the same session reads nothing again. When Voyage can't be reached, Update all says so once and doesn't try again for the models after it.
+- Models shows each model with its tasks, its forecasts and what it learns from. Choose Update, Make default, Rename or Delete. Delete says what goes and what stays. Then it asks, with Keep it first. Your records and the feature store stay.
+- Numbered menus on request, for screen readers. Set `YARDSTICK_NUMBERED_MENUS=1` or add `"numbered_menus": true` to `settings.json` in the yardstick folder. Every menu then lists its choices with numbers to type in. Enter on its own goes back from a list of AI models. Nothing on screen redraws itself: there are no progress bars and no box on the home screen.
+- `create` and `refresh` answer a program in JSON with `--json`: what was found, what it costs at list price and what was done. They never ask anything then. Without `--yes` they only say what they'd do and what it costs. When they can't go on, the answer is an error with a code, such as `busy` or `embedding_failed`. `refresh` says why it trains the model, in `retrain_reason`. Every command given `--json` answers a wrong command line in JSON too. So does one that needs a library that's missing. [The format](docs/format.md#setup-and-refresh) lists every field. It now describes the JSON answers of `status`, `list`, `delete`, `features` and `check` as well.
+- A spending limit for setup and refresh: `--max-cost 1.50` keeps one to $1.50 at list price. It goes ahead only when what it would cost fits, counting every text Voyage gets at the most tokens it can take. While LLM analysis runs, no request starts unless the most it can cost fits in what's left. Every byte of its text counts as a token. Its answer counts at the longest it may be. A request that doesn't fit whole is sent with fewer tasks. Under a limit, a request the AI model declines isn't tried again on another one. Before each step that embeds, it checks again. A step that doesn't fit stops the command, with what was done kept.
+- `predict --request FILE` reads the JSON request from a file. A program needs no pipe then. It's easier to allow ahead of time, as a coding agent's settings do. `--request -` reads standard input, as before.
+- `yardstick-predict rename OLD NEW` gives a predictor another name. The default stays the default, also when it was the default only because it was called default. A predictor whose settings can't be read isn't renamed. Renaming a link to another predictor's folder leaves that folder as it was.
+- On the Features screen, type all to turn on every feature with all its options. The help under the screen says so.
+- `AGENTS.md` holds the rules for AI coding agents working on yardstick-predict: how to check a change, how to write what people read and how to keep private data out. Claude Code reads it through `CLAUDE.md`.
+
+### Changed
+
+- `yardstick-predict refresh` in a terminal shows the same summary as Update and asks once. With `--yes` it asks nothing, as before.
+- Outside a terminal, a bare `yardstick-predict` prints one line per predictor, as before.
+- Setup suggests the name main for your first predictor instead of default. So no name looks like the `(default)` mark. `create --express` with no name makes main too. On the home screen, Add New calls it a model, as every screen does.
+- Every line fits the terminal, at 80 columns and at 45. A line or a note too long for it is broken to fit. A command in it stays whole, to be copied as it is. A menu's long names and hints are cut short. So a menu redraws in place. A progress bar gets shorter, then leaves out the time left and cuts its step's words short. Questions, tables, the Features screen and the report after training break to fit too. A menu of more than 9 choices, such as Models with many models, shows 6 at a time. A terminal too narrow for the forecast table gets each forecast as a block of its own, with its time, tokens and cost under its name. `list` gets a few lines for each predictor in a terminal too narrow for its table.
+- The report after training, in setup and in `status`, says how close the forecasts came on your newest tasks, in plain words. Not enough data covers an AI model whose forecasts weren't close enough and one with too few tasks to show it. The feature check's report says the same way what helped. `status` lists a predictor's features in a sentence, with no semicolons.
+- The Anthropic and OpenAI libraries come with every install. LLM analysis with an API key needs no second install. The `llm` extra is gone. An upgrade of an install that had it may warn that there's no extra named `llm`. That's harmless. `uv tool install --force yardstick-predict` stops it.
+- An error yardstick-predict didn't expect is said in one line, with where its details are kept and where to report it. It used to print a page of Python. The details go to `last-crash.txt` in the yardstick folder. `YARDSTICK_DEBUG=1` shows them where it happens too. A program that asked for JSON gets the error as `internal_error`.
+- Output sent to a program that stops reading early, such as `head`, ends quietly.
+- A new release of a library gets into `uv.lock` only once it has been out for 7 days. The tests and the release builds use only libraries that had that time.
+- A security scan checks every locked library against OSV, the public database of known vulnerabilities. It runs on each pull request, each push to main and once a week.
+- A release runs the tests on the tagged commit and installs the built wheel to try it before anything is published. The source package holds `CHANGELOG.md` and `AGENTS.md` too.
+- On a Mac, a forecast and the status line start faster. XGBoost loads without scikit-learn, which yardstick never uses. scikit-learn stays installed there for its copy of OpenMP.
+- Costs under a cent show their first digits, such as $0.0021, instead of $0.00.
+- Every progress bar keeps its step's label. Reading your records used to show a bar like `0 KB / 6.2 GB` with no word of what it was.
+- The README is a third as long. It says what yardstick-predict does, how to install it and how to start, with a short table of commands. Everything else moved to [the guide](docs/guide.md): the home screen, the features, LLM analysis, costs, settings for experts, plugins, privacy and how to update or remove it.
+- After the feature check, setup says which features stay on and which go off, then asks once whether to go on and make the predictor. It used to open the Features screen again, which looked like starting over. Saying no still opens it, to change them first.
+
+### Fixed
+
+- What other services say is cleaned before it's shown. An error from Voyage, Anthropic, OpenAI, Claude Code, Codex, OpenRouter or PyPI used to be printed as it came, hidden codes included. Such codes could make a terminal show something else, change its title or write over a line. The words stay. The codes go.
+- The guide's steps for removing everything start by taking the forecasts out of Claude Code. Without that, Claude Code kept running a program that was gone.
+- The cost shown before an update now counts embedding the descriptions LLM analysis writes. A refresh used to embed them without having priced them.
+- A model with a file missing or damaged no longer breaks every forecast with a request for a bug report. Forecasts say the model is damaged and needs training. The next refresh trains it again, where it used to say the model was up to date.
+- One field of an unexpected type in a Codex record no longer stops the whole import. That field is skipped.
+- Pressing Ctrl+C while LLM analysis runs stops at once. It used to wait for the requests already sent, which through a subscription can take minutes.
+- A damaged entry in the cache of vectors was priced as free, then paid for anyway, every time. It now counts as missing and is replaced.
+- A program's setup without `--yes` no longer sends a key check to Voyage before it has agreement to spend. The check comes once it goes ahead. It counts toward a spending limit.
+- A refresh no longer prices or analyzes tasks it's about to take out because their records are gone.
+- Setup no longer embeds again texts another predictor has in the feature store when the cache of vectors is gone. It counts what the store holds, as a refresh does.
+- A refresh asks for a Voyage key only when texts go to Voyage. It warns about a damaged record of Voyage usage before the question, not after.
+- A task whose prompt changed is analyzed again by LLM analysis, which kept what it said of the old prompt. Answers from before this version aren't read again. So the upgrade costs nothing.
+- A mistyped feature or option with `--features` is refused before any record is read. So are LLM flags without the `llm` feature.
+- Setup and the docs said the three features always on send nothing anywhere. For them, each prompt goes to Voyage. They say so now.
+- Messages that said to run yardstick-predict to train again now name `yardstick-predict refresh`. A bare `yardstick-predict` opens the home screen now, where Update does it.
+- `predict "TASK"` in a terminal says when there's not enough data for any AI model yet, instead of an error meant for programs. An empty task is asked to have some text.
+- The first download of Voyage's tokenizer no longer draws its own progress bar over the screen.
+- When Voyage can't be reached, the message says so once. It used to show an internal status of 0 and say it twice.
+- On Windows, `claude-code install` refuses a Python or yardstick folder whose path has $, `, ", % or ! in it. cmd or Git Bash would read those as more than text when Claude Code runs the hook.
+- Two commands changing the settings at the same time no longer lose one change.
+- A note too long for one line no longer breaks an AI model's name at a hyphen, such as claude-sonnet-4-6.
+- The cost of LLM analysis through a subscription writes its name as it's spelled, such as ChatGPT. It used to say chatgpt.
+- Setup told with `--archive` to read a folder of records that isn't there says so at once. Nothing is read or spent. It used to read nothing and then say it found no finished tasks.
+- Update and `refresh` say when a model's folder of records isn't there, as when its records moved or its drive isn't plugged in. The model keeps the tasks it read from there. It reads nothing new there until the records are back. Update used to show nothing new for that folder. With `--json`, the warning is in `notes`.
+
 ## [0.4.0] - 2026-10-23
 
 Training uses exactly the features you choose, and setup can check which of them really help your forecasts. Embeddings and LLM answers are kept once, in a feature store all your predictors share, so a second predictor never pays for them again. A model trained by 0.3.0 keeps forecasting until you train it again: the next refresh does that, and brings this version's improvements. Releases now come from PyPI, so `uv tool install yardstick-predict` installs it.
@@ -231,6 +299,8 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.0...v0.2.1

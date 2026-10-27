@@ -35,7 +35,7 @@ When a new version trains the model another way, the next refresh trains it agai
 
 ## 2. Features
 
-Every feature describes what's known before a task starts. Three are always used. They cost nothing, and they send nothing anywhere:
+Every feature describes what's known before a task starts. Three are always used. For them, only each task's prompt goes anywhere: to Voyage, which works out what it means.
 
 - **The task:** the prompt's meaning and its layout (how many list items, file names, links and lines it has, and whether it ends in a question), the AI model, the agent, who started it, and the thinking level, both as a label and as a step on one scale from low to max, so a level with few tasks can learn from the levels next to it.
 - **Similar past tasks:** see below.
@@ -105,7 +105,7 @@ A model also needs 30 earlier tasks and 30 test tasks, so it needs 60 tasks of i
 
 ## 5. The feature check
 
-Some features carry no signal for your kind of work, and with few tasks a feature can't show anything. The feature check finds out which of a predictor's features help its forecasts. Setup offers it when you pick features beyond the three that are always on, and at least one AI model has the 60 tasks the test needs. `yardstick-predict check NAME` runs it on a predictor you already have. It tests the built-in model, not a model type from a plugin.
+Some features carry no signal for your kind of work. With few tasks, a feature can't show anything. The feature check finds out which of a predictor's features help its forecasts. Setup offers it when you pick features beyond the three that are always on and at least one AI model has the 60 tasks the test needs. `yardstick-predict check NAME` runs it on a predictor you already have. It tests the built-in model, not a model type from a plugin.
 
 It runs the test above once with every feature, then once without each optional feature in turn. It only tests: it fits a model for each test window, and no final model. The similar past tasks are worked out once for all the tests, since leaving a feature out only drops what that feature brings. For each feature and each AI model, it gives one of three verdicts:
 
@@ -115,7 +115,7 @@ It runs the test above once with every feature, then once without each optional 
 
 A feature that didn't help costs embedding tokens or an AI model's time for nothing, and adds noise the trees can chase. Not enough data is no verdict either way: check again once you have more tasks. The check is advice. It never changes a predictor by itself.
 
-In setup, the Features screen comes back after the check, with the features that helped at least one AI model turned on. You keep them or change them, and the model trains with what you choose. LLM analysis is tried on a sample first: before the check it reads only your newest 30% of tasks, and at most 500, with its cost shown first. If you keep it on, setup shows what reading the rest costs and asks. Turning on a feature the check didn't have shows its cost before anything is embedded.
+In setup, after the check, the features that helped at least one AI model stay on and the rest go off. One question asks whether to go on with that. Saying no opens the Features screen to change them. The model trains with what you choose. LLM analysis is tried on a sample first: before the check it reads only your newest 30% of tasks, 500 at most, with its cost shown first. If you keep it on, setup shows what reading the rest costs and asks. Turning on a feature the check didn't have shows its cost before anything is embedded.
 
 LLM analysis that read only some of your tasks, such as that sample, is judged on those tasks alone. The test runs on them twice, with LLM analysis and without it, each AI model on its own newest tasks among them. Both runs learn from and forecast the same tasks, so the comparison is fair, and the model learns from tasks LLM analysis read. Tested on all your tasks instead, the model would learn only from older tasks it never read, and LLM analysis would seem not to help. An AI model with too few of the tasks it read to test gets not enough data. The other features are judged on all your tasks.
 
@@ -134,7 +134,7 @@ XGBoost needs a library called OpenMP. On a Mac, XGBoost looks for it only where
 
 Before setup or a refresh goes ahead, it says about how long the rest will take, and how much disk space the dataset will take. It works this out from what it knows by then: how many tokens go to Voyage, how many tasks LLM analysis reads, how many tasks training learns from and, in setup, how many features the feature check tests. A few rough constants turn those into time, disk space and memory. Training's and the dataset's were measured on synthetic tasks. LLM analysis through a ChatGPT subscription was timed once on a real run. Voyage's speed and the other ways to pay for LLM analysis are worked out from how the requests go out. Voyage's assume an account with a payment method: one without gets low limits, and embedding takes much longer. The constants are in [`estimate.py`](../src/yardstick_predict/estimate.py), each with how it was found. Nothing is timed while the command runs, and the time is given as a range, from 70% to 150% of the estimate. While each long step runs, its progress bar says how long is left, from how fast it has gone lately.
 
-## 7. Where your data lives
+## 8. Where your data lives
 
 Everything stays in one folder on your computer: `~/.yardstick`, or the folder `YARDSTICK_HOME` names. Only you can read it.
 
