@@ -312,7 +312,8 @@ def test_forecasts_show_six_to_a_page(capsys, monkeypatch, quick, ready):
     out = plain(capsys.readouterr().out)
     pages = out.split("fix the parser  page ")[1:]
     assert [page[:6] for page in pages] == ["1 of 2", "2 of 2"]
-    assert len(re.findall(r"claude-model-\d\s+max", pages[0].split("Half the time")[0].split("AI model")[1])) == 6
+    table = pages[0].split("Each forecast's first line")[0].split("AI model")[1]
+    assert len(re.findall(r"claude-model-\d\s+max", table)) == 6
     assert re.search(r"1\. Next page\s+forecasts 7 on", out) and "1. Previous page" in pages[1]
     assert re.search(r"1\. AI models with enough data\s+8 AI models\n", out)  # too many to name on one line
 
@@ -629,7 +630,7 @@ def test_the_forecast_table_cuts_a_long_ai_model_name_to_fit(capsys, monkeypatch
 
 
 def test_a_narrow_terminal_gets_each_forecast_as_a_block(capsys, monkeypatch):
-    monkeypatch.setenv("COLUMNS", "60")
+    monkeypatch.setenv("COLUMNS", "45")
     made("main")
     forecasts = [
         {
@@ -645,13 +646,21 @@ def test_a_narrow_terminal_gets_each_forecast_as_a_block(capsys, monkeypatch):
     ]
     cli.show_forecasts("x", {"predictor": "main", "forecasts": forecasts}, screen=True)
     out = capsys.readouterr().out
-    assert widest(out) < 60 and "AI model" not in out  # no table: it wouldn't fit
+    assert widest(out) < 45 and "AI model" not in out  # no table: it wouldn't fit
     text = plain(out)
-    # Each value has its two ranges after it, one under the other, each named.
-    ranges = r"time\s+4 min  1 in 2: \S+ to \S+ min\n\s+9 in 10: \S+ to \S+ min\n    tokens\s+20\.6M"
-    assert re.search(r"claude-opus-5  ⚠  xhigh\n    " + ranges, text)
-    assert re.search(r"claude-opus-5-5  max\n    time\s+16 min", text)  # names are never cut
-    assert cli.RANGES_NOTE in " ".join(text.split())
+    # A small table of its own: what to expect on average, then the 25%, median and 75% lines, each named. The
+    # curve has 220 at its middle on every target, and a quarter of it under about 157.
+    lines = [
+        r"\s+time\s+tokens\s+cost",
+        r"\s+expected\s+4 min\s+20\.6M\s+\$11\.17",
+        r"\s+25%\s+3 min\s+157\s+\$157",
+        r"\s+median\s+4 min\s+220\s+\$220",
+        r"\s+75%\s+5 min\s+308\s+\$308",
+    ]
+    assert re.search(r"claude-opus-5  ⚠  xhigh\n" + r"\n".join(lines) + "\n", text)
+    # Without a curve, only what to expect. Names are never cut.
+    assert re.search(r"claude-opus-5-5  max\n\s+time\s+tokens\s+cost\n\s+expected\s+16 min\s+23\.0M\s+\$7\.42\n", text)
+    assert cli.QUARTILES_NOTE in " ".join(text.split())
 
 
 @pytest.mark.parametrize("width", [80, 45])
@@ -820,19 +829,21 @@ def test_the_default_effort_level_is_never_offered_to_a_person(capsys):
     assert "default" not in plain(capsys.readouterr().out).split("AI model")[1].split("Learned")[0]
 
 
-def test_the_range_is_where_the_curve_holds_9_results_in_10():
-    from yardstick_predict.forecast import likely_range
+def test_the_25_median_and_75_lines_are_where_the_curve_holds_that_share_of_results():
+    from yardstick_predict.forecast import quantile
 
-    low, high = likely_range(curve(math.log(600), 0.5), "seconds")
-    assert low == pytest.approx(600 * math.exp(-1.6449 * 0.5), rel=1e-3)
-    assert high == pytest.approx(600 * math.exp(1.6449 * 0.5), rel=1e-3)
-    assert likely_range(None, "seconds") is None and likely_range({"shape": "x"}, "seconds") is None
-    low, high = likely_range(curve(math.log(600), 0.5), "seconds", 0.5)  # the middle half
-    assert low == pytest.approx(600 * math.exp(-0.6745 * 0.5), rel=1e-3)
-    assert high == pytest.approx(600 * math.exp(0.6745 * 0.5), rel=1e-3)
+    bell = curve(math.log(600), 0.5)
+    assert quantile(bell, "seconds", 0.5) == pytest.approx(600, rel=1e-3)
+    assert quantile(bell, "seconds", 0.25) == pytest.approx(600 * math.exp(-0.6745 * 0.5), rel=1e-3)
+    assert quantile(bell, "seconds", 0.75) == pytest.approx(600 * math.exp(0.6745 * 0.5), rel=1e-3)
+    assert quantile(None, "seconds", 0.5) is None and quantile({"shape": "x"}, "seconds", 0.5) is None
+    # A quarter of this curve is a quick direct answer. So its median sits a third of the way into the rest.
+    parts = {"direct": {"mu": math.log(60), "sigma": 0.5}, "work": {"mu": math.log(600), "sigma": 0.5}}
+    mixed = {"shape": "two_part_lognormal", "direct_probability": 0.25, "seconds": parts}
+    assert quantile(mixed, "seconds", 0.5) == pytest.approx(600 * math.exp(-0.4307 * 0.5), rel=1e-3)
 
 
-def test_the_forecast_table_shows_ranges_and_warns_on_rough_forecasts(capsys):
+def test_the_forecast_table_shows_the_25_median_and_75_lines_and_warns_on_rough_forecasts(capsys):
     made("main")
     forecasts = [
         {
@@ -869,15 +880,15 @@ def test_the_forecast_table_shows_ranges_and_warns_on_rough_forecasts(capsys):
     out = plain(capsys.readouterr().out)
     assert re.search(r"AI model\s+effort\s+time\s+tokens\s+cost\s*\n", out)
     assert re.search(r"claude-opus-5-5\s+max\s+16 min\s+23\.0M\s+\$7\.42\s*\n", out)  # it passed on many runs
-    # Under it, its ranges: 900 seconds' curve holds half the results from about 687 to 1,179 seconds, and 9 in
-    # 10 from about 466 to 1,738 seconds.
-    assert re.search(r"\n\s+1 in 2\s+11 to 20 min\s+\d+ to [\d,.]+[kM]?\s+\$[\d.]+k? to \$[\d.]+k?\s*\n", out)
-    assert re.search(r"\n\s+9 in 10\s+8 to 29 min\s+\d+ to [\d,.]+[kM]?\s+\$[\d.]+k? to \$[\d.]+k?\s*\n", out)
+    # Under it, the lines a quarter, half and three quarters of results come in under: the curve has 900 at its
+    # middle on every target, a quarter of it under about 687 and three quarters under about 1,179.
+    assert re.search(r"\n\s+25%\s+11 min\s+687\s+\$687\s*\n\s+median\s+15 min\s+900\s+\$900\s*\n", out)
+    assert re.search(r"\n\s+75%\s+20 min\s+1k\s+\$1\.2k\s*\n", out)
     assert re.search(r"⚠\s+high\s+5 min\s+7\.7M\s+\$3\.18", out)  # marked, with why under the table
     squashed = " ".join(out.split())
     assert "⚠ Not enough data: claude-opus-5-5 at high, gpt-6.1-sol and gpt-6-astra." in squashed
     assert "Not enough data to forecast claude-haiku-5-5 (6 runs) and claude-opus-4-7 (3 runs)." in squashed
-    assert cli.RANGES_NOTE in squashed
+    assert cli.QUARTILES_NOTE in squashed
     assert "Those are a rough guide. Plan with a wider margin there." in out
     assert "Create a fun game" not in out and "model main, updated" in out and "--json" not in out
     cli.show_forecasts("Create a fun game", result)  # the predict command says the task, and names the predictor
@@ -1351,10 +1362,8 @@ def test_a_version_from_pypi_shows_only_when_it_looks_like_one(monkeypatch):
         assert (version.notice() is not None) == shown, latest
 
 
-def test_ranges_of_cheap_tasks_still_say_something():
-    assert cli.span_words((0.0042, 0.0087), cli.short_money) == "$0.0042 to $0.0087"
-    assert cli.span_words((0.0061, 0.0094), cli.short_money) == "$0.0061 to $0.0094"
-    assert cli.span_words((3.2, 3.4), cli.duration) == "3 s"  # both ends read the same: one is enough
+def test_the_lines_of_cheap_tasks_still_say_something():
+    assert [cli.short_money(usd) for usd in (0.0042, 0.0087, 0.0094)] == ["$0.0042", "$0.0087", "$0.0094"]
     assert cli.cost_lines(embeddings_cost(5_000), "voyage-4", 3)[1] == "It costs <$0.01 at Voyage's list price."
 
 

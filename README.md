@@ -12,21 +12,25 @@ $ yardstick-predict predict "Add a login page with tests"
 
   Add a login page with tests
 
-  AI model            effort             time        tokens            cost
-  claude-opus-5-5     max               4 min          1.8M           $0.92
-                      1 in 2       3 to 5 min   1.1 to 2.2M  $0.60 to $1.19
-                      9 in 10      2 to 8 min  703k to 3.6M  $0.37 to $1.93
-                   ⚠  high              3 min          1.2M           $0.61
-                      1 in 2       2 to 4 min  784k to 1.5M  $0.40 to $0.79
-                      9 in 10   72 s to 6 min  483k to 2.5M  $0.25 to $1.27
-  gpt-6.1-sol      ⚠  xhigh             5 min          950k           $0.41
-                      1 in 2       3 to 7 min  531k to 1.4M  $0.23 to $0.60
-                      9 in 10  85 s to 14 min  269k to 2.7M  $0.12 to $1.17
+  AI model            effort   time  tokens   cost
+  claude-opus-5-5     max     4 min    1.8M  $0.92
+                      25%     3 min    1.1M  $0.60
+                      median  4 min    1.6M  $0.84
+                      75%     5 min    2.2M  $1.19
+                   ⚠  high    3 min    1.2M  $0.61
+                      25%     2 min    784k  $0.40
+                      median  3 min    1.1M  $0.56
+                      75%     4 min    1.5M  $0.79
+  gpt-6.1-sol      ⚠  xhigh   5 min    950k  $0.41
+                      25%     3 min    531k  $0.23
+                      median  5 min    862k  $0.37
+                      75%     7 min    1.4M  $0.60
 
   ⚠ Not enough data: claude-opus-5-5 at high and gpt-6.1-sol.
   Those are a rough guide. Plan with a wider margin there.
-  Half the time the real result lands in the 1 in 2 range. 9 times out of 10
-  it lands in the 9 in 10 range. Costs are at API prices.
+  Each forecast's first line is what to expect on average. A quarter of real
+  results come in under its 25% line, half under its median and three quarters
+  under its 75% line. Costs are at API prices.
   Learned from your own runs · predictor main, updated 2 days ago · add
   --json for details
 ```
@@ -81,7 +85,7 @@ When you pick features beyond the three that are always on, setup offers to chec
 yardstick-predict predict "Add a login page with tests"
 ```
 
-It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. Under each forecast are two ranges. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A forecast with not enough data behind it is marked ⚠ as a rough guide. The default effort level, which no one picks, isn't shown. `--model` and `--effort` name them yourself. `--predictor` picks another predictor. `--json` prints the answer programs get. Use it to pick a model, set a time limit or see what a batch of tasks will cost before you start.
+It shows the expected time, tokens and cost on every AI model you've used, at each effort level you often use it at. Each forecast's first line is what to expect on average. Under it are its 25%, median and 75% lines. A quarter of real results come in under the 25% line, half under the median and three quarters under the 75% line. A forecast with not enough data behind it is marked ⚠ as a rough guide. The default effort level, which no one picks, isn't shown. `--model` and `--effort` name them yourself. `--predictor` picks another predictor. `--json` prints the answer programs get. Use it to pick a model, set a time limit or see what a batch of tasks will cost before you start.
 
 Every week or so, run `yardstick-predict` and choose Update. Before it reads anything, it says where your new work is and how much there is to read. It reads with a labelled bar that Esc stops. Then it shows what each model will analyze, embed and train, with every cost and time. It asks once. Cancel spends nothing and saves nothing. `yardstick-predict refresh` in a terminal shows the same summary. With `--yes` it asks nothing.
 

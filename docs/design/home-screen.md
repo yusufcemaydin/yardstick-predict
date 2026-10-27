@@ -59,7 +59,7 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 - A menu of more than 9 choices shows 6 at a time. The left and right arrows turn its page.
 - Every line fits the terminal, at 80 columns and at 45. A long line or note is broken onto more lines. A command in it always stays whole, to be copied as it is. A table too wide for the terminal breaks its last column under itself. A long name or hint in a menu is cut short, as a menu redraws in place and a line that wrapped on its own would break that.
 - A progress bar fits too. In a narrow terminal its bar gets shorter, the time left goes first and then the step's own words are cut short. The counts always show.
-- A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then its time, tokens and cost, each with its two ranges beside it, one under the other. The `list` command does the same with a few lines for each model.
+- A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then a small table of its time, tokens and cost. Its first line is what to expect on average. Its 25%, median and 75% lines follow. The `list` command does the same with a few lines for each model.
 - It's built with the standard library only: `termios` and `tty` on macOS and Linux, `msvcrt` on Windows. No new dependency.
 - When a terminal can't pass single key presses, you type the number instead. So do a dumb terminal (`TERM=dumb`) and an old Windows console where the codes that move the cursor can't be turned on.
 - Numbered menus can be asked for, as a screen reader needs: `YARDSTICK_NUMBERED_MENUS=1` or `"numbered_menus": true` in `settings.json`. Every menu is typed into. Enter on its own goes back from a list of AI models. Nothing redraws itself: no progress bar, no box on the home screen. Esc can't stop a long step then. Ctrl+C still does.
@@ -95,7 +95,7 @@ Each choice opens a list of AI models at their effort levels, 6 to a page, with 
   ↑↓ move · enter forecast this one · space tick several · ←→ page · esc go back
 ```
 
-The forecasts show 6 to a page, under the task as a title of 3 lines at most. Under each forecast are two ranges, named in the effort column. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task, Use another of your models for the same task or Back to home. Use another of your models shows only when you have more than one.
+The forecasts show 6 to a page, under the task as a title of 3 lines at most. Each forecast's first line is what to expect on average. Under it are its 25%, median and 75% lines, named in the effort column. A quarter of real results come in under the 25% line, half under the median and three quarters under the 75% line. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task, Use another of your models for the same task or Back to home. Use another of your models shows only when you have more than one.
 
 ## 4. Update
 

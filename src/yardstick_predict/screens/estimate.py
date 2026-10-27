@@ -3,8 +3,9 @@
 Describe the task. With more than one model, choose which of your models forecasts it. Each one says how
 accurate it is next to the default. Then pick the AI models: the ones with enough data behind them, or any
 you've used, from a list. Either way a list shows them 6 at a time. The forecasts show 6 at a time too, each with
-the ranges the real result lands in half the time and 9 times out of 10. After them you choose what's next:
-another page, another task, other AI models for the same task, another of your models for it or home.
+what to expect on average and, under it, the values a quarter, half and three quarters of real results come in
+under. After them you choose what's next: another page, another task, other AI models for the same task,
+another of your models for it or home.
 """
 
 from __future__ import annotations

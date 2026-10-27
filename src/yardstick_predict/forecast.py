@@ -472,9 +472,9 @@ def _forecast(model, rows: list, every_head: bool) -> list[dict]:
     return model.forecast(rows)
 
 
-def likely_range(distribution: dict | None, target: str, share: float = 0.9) -> tuple[float, float] | None:
-    """The range a result lands in `share` of the time, from a forecast's curve: the values where the chance it's
-    at most that much is 5% and 95% for the 90% range. None without a curve for the target."""
+def quantile(distribution: dict | None, target: str, share: float) -> float | None:
+    """The value a result comes in under `share` of the time, from a forecast's curve: 0.5 gives the median, 0.25
+    the value a quarter of results are under. None without a curve for the target."""
     if not isinstance(distribution, dict) or not isinstance(distribution.get(target), dict):
         return None
     parts = distribution[target]
@@ -498,16 +498,12 @@ def likely_range(distribution: dict | None, target: str, share: float = 0.9) -> 
     widest = max(parts[part]["sigma"] for part in ("direct", "work"))
     low, high = min(mus) - 12 * widest - 1, max(mus) + 12 * widest + 1
 
-    def where(goal: float) -> float:
-        """The log value where the chance reaches the goal, found by halving the gap."""
-        left, right = low, high
-        for _ in range(80):
-            middle = (left + right) / 2
-            left, right = (middle, right) if chance(middle) < goal else (left, middle)
-        return (left + right) / 2
-
-    tail = (1.0 - share) / 2
-    return math.exp(where(tail)), math.exp(where(1.0 - tail))
+    # The log value where the chance reaches the share, found by halving the gap.
+    left, right = low, high
+    for _ in range(80):
+        middle = (left + right) / 2
+        left, right = (middle, right) if chance(middle) < share else (left, middle)
+    return math.exp((left + right) / 2)
 
 
 def _llm_labels(predictor: Predictor, tasks: list[TaskRequest], chosen: list[str]) -> dict[str, dict]:

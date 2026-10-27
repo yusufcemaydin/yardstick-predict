@@ -1941,12 +1941,13 @@ def show_title(task: str, after: str = "") -> None:
 
 FORECAST_COLUMNS = ("", "effort", "time", "tokens", "cost")
 """The forecast table's columns after the AI model's name. The first holds the warning mark, when there is one."""
-RANGES = (("1 in 2", 0.5), ("9 in 10", 0.9))
-"""The ranges under each forecast in a person's table, each with the share of real results that land in it."""
-RANGES_NOTE = (
-    "Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range."
+QUARTILES = (("25%", 0.25), ("median", 0.5), ("75%", 0.75))
+"""The lines under each forecast in a person's table, each with the share of real results that come in under it."""
+QUARTILES_NOTE = (
+    "Each forecast's first line is what to expect on average. A quarter of real results come in under its 25% "
+    "line, half under its median and three quarters under its 75% line."
 )
-"""What the ranges under each forecast mean, in the note under the table."""
+"""What the lines of each forecast mean, in the note under the table."""
 WARNINGS = {
     "not_accurate_enough": "not enough data",
     "not_enough_data": "not enough data",
@@ -1957,18 +1958,18 @@ whose forecasts were often wrong on your past tasks, and one with too few of the
 
 
 def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None, screen: bool = False) -> None:
-    """The forecasts as a small table, for a person in a terminal. Under each forecast, in grey, are the ranges the
-    real result lands in half the time and 9 times out of 10, when the forecast has a curve. A forecast with not
-    enough data behind it is marked, and the AI models that have too little are named under the table. It fits the
-    terminal at any width.
+    """The forecasts as a small table, for a person in a terminal. Each forecast's first line is what to expect on
+    average. Under it, in grey, are the values a quarter, half and three quarters of real results come in under,
+    when the forecast has a curve. A forecast with not enough data behind it is marked, and the AI models that have
+    too little are named under the table. It fits the terminal at any width.
 
     `screen` is for the Estimate screen: the task was typed just above, so it isn't said again, and the
     predictor is called a model there, as every screen calls it.
     """
-    from .forecast import likely_range
+    from .forecast import quantile
 
     pad = max([len("AI model"), *(len(forecast["model"]) for forecast in result["forecasts"])])
-    rows, missing, previous, ranges, blocks = [], {}, None, False, []
+    rows, missing, previous, spread, blocks = [], {}, None, False, []
     thin: dict[str, bool] = {}
     """The AI models with not enough data, and the effort levels with too few runs, to name under the table."""
     for forecast in result["forecasts"]:
@@ -1993,15 +1994,15 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
             money(usd) if usd is not None else ui.dim("-"),
         )
         rows.append((name, mark, effort, *values))
-        # Each range goes on a row of its own, named in the effort column, which is empty there.
+        # The 25%, median and 75% values each go on a row of their own, named in the effort column, empty there.
         curve = forecast.get("distribution")
-        spans = [[likely_range(curve, target, share) for target in ("seconds", "tokens", "usd")] for _, share in RANGES]
+        found = [[quantile(curve, target, share) for target in ("seconds", "tokens", "usd")] for _, share in QUARTILES]
         words = []
-        if any(any(found) for found in spans):
-            ranges = True
-            for (label, _), found in zip(RANGES, spans):
-                shows = (duration, whole_tokens, short_money)
-                words.append(tuple(span_words(span, show) for span, show in zip(found, shows)))
+        if any(value is not None for line in found for value in line):
+            spread = True
+            shows = (duration, whole_tokens, short_money)
+            for (label, _), line in zip(QUARTILES, found):
+                words.append(tuple("" if value is None else show(value) for value, show in zip(line, shows)))
                 rows.append(("", "", ui.dim(label), *(ui.dim(word) for word in words[-1])))
         blocks.append((model, mark, effort, values, words))
     # A table needs room for every column, its titles too. A terminal too narrow for it gets each forecast as a
@@ -2034,8 +2035,8 @@ def show_forecasts(prompt: str, result: dict, predictor: Predictor | None = None
         for number, part in enumerate(textwrap.wrap(f"Not enough data: {in_words(names)}.", columns() - 6)):
             ui.line(f"{mark if number == 0 else ' '} {part}")
         wrapped_note("Those are a rough guide. Plan with a wider margin there.")
-    if ranges:
-        wrapped_note(f"{RANGES_NOTE} Costs are at API prices.")
+    if spread:
+        wrapped_note(f"{QUARTILES_NOTE} Costs are at API prices.")
     named = f"model {predictor.name}" if screen else f"predictor {predictor.name}"
     footer = [
         "Learned from your own runs",
@@ -2060,18 +2061,16 @@ def wrapped_note(text: str) -> None:
 
 def show_blocks(blocks: list) -> None:
     """Each forecast as a block of its own, for a terminal too narrow for the table: the AI model with its mark and
-    effort level, then its time, tokens and cost. After each are its ranges, each named, one under the other."""
+    effort level, then a small table of its time, tokens and cost. Its first line is what to expect on average. The
+    25%, median and 75% lines follow, each named."""
     for number, (model, mark, effort, values, words) in enumerate(blocks):
         if number:
             ui.out()
         name = ui.bold(ui.cut(model, ui.columns() - 16))
         ui.line(f"{name}{f'  {mark}' if mark else ''}{f'  {effort}' if effort else ''}")
-        rows = []
-        for place, (label, value) in enumerate(zip(("time", "tokens", "cost"), values)):
-            spans = [f"{title}: {found[place]}" for (title, _), found in zip(RANGES, words) if found[place]]
-            rows.append((ui.dim(label), value, ui.dim(spans[0]) if spans else ""))
-            rows += [("", "", ui.dim(span)) for span in spans[1:]]
-        ui.table(rows, indent=4, align="lrl", gap=2)
+        rows = [("", *(ui.dim(title) for title in ("time", "tokens", "cost"))), (ui.dim("expected"), *values)]
+        rows += [(ui.dim(label), *(ui.dim(word) for word in line)) for (label, _), line in zip(QUARTILES, words)]
+        ui.table(rows, indent=4, align="lrrr", gap=2)
 
 
 def rough_warning(forecast: dict) -> str | None:
@@ -2091,8 +2090,8 @@ def shown_effort(effort: str | None) -> str:
 
 
 def short_money(usd: float) -> str:
-    """Dollars at a glance, such as a range's ends: $0.0042, $0.12, $29.17, $424, $59.0k. Under a cent, the two
-    digits that matter show, so a range of cheap tasks still says something."""
+    """Dollars at a glance, such as the lines under a forecast: $0.0042, $0.12, $29.17, $424, $59.0k. Under a cent,
+    the two digits that matter show, so the lines of a cheap task still say something."""
     from .spending import dollars
 
     if usd >= 999.5:
@@ -2103,21 +2102,8 @@ def short_money(usd: float) -> str:
 
 
 def whole_tokens(value: float) -> str:
-    """Tokens at a glance, such as the ends of a range, which a curve gives as fractions."""
+    """Tokens at a glance, such as the lines under a forecast, which a curve gives as fractions."""
     return short_tokens(int(round(value)))
-
-
-def span_words(span: tuple[float, float] | None, show) -> str:
-    """A range in words, its unit said once when both ends share it: 9 to 31 min, $3.90 to $13.10."""
-    if span is None:
-        return ""
-    low, high = show(span[0]), show(span[1])
-    if low == high:  # both ends read the same: one is enough
-        return low
-    for unit in (" min", " s", " h", "M", "k"):
-        if low.endswith(unit) and high.endswith(unit):
-            return f"{low.removesuffix(unit)} to {high}"
-    return f"{low} to {high}"
 
 
 def trained_facts(predictor: Predictor, meta: dict | None) -> dict:
