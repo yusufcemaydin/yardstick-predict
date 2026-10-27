@@ -4,6 +4,8 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-27
+
 A bare `yardstick-predict` in a terminal opens a home screen with clear choices. It no longer refreshes every predictor at once behind a bar with no label.
 
 ### Added
@@ -297,7 +299,8 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
-[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.0...v0.2.1

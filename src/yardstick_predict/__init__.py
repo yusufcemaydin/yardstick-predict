@@ -3,7 +3,7 @@
 import os
 import sys
 
-__version__ = "0.5.0.dev0"
+__version__ = "0.5.0"
 
 
 def _keep_the_current_folder_out(argv: list[str] | None = None) -> None:
