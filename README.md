@@ -27,7 +27,7 @@ $ yardstick-predict predict "Add a login page with tests"
   Those are a rough guide. Plan with a wider margin there.
   Half the time the real result lands in the 1 in 2 range. 9 times out of 10
   it lands in the 9 in 10 range. Costs are at API prices.
-  Learned from your own runs · predictor default, updated 2 days ago · add
+  Learned from your own runs · predictor main, updated 2 days ago · add
   --json for details
 ```
 
@@ -91,7 +91,7 @@ Models lists your models with `(default)` after the default one. Choose one to u
 
 ## Features the model learns from
 
-Setup lists each feature with its options under it. Type a number to turn a feature on or off, or a number and a letter for one option. The first three are always on: they cost nothing and send nothing anywhere.
+Setup lists each feature with its options under it. Type a number to turn a feature on or off, or a number and a letter for one option. The first three are always on. For them, each prompt goes to Voyage, which works out what it means.
 
 | Feature | What it is | Default |
 |---|---|---|
@@ -133,7 +133,7 @@ It sends each task's prompt and the end of the conversation before it to the AI 
 | `claude` | Your Claude subscription, through the Claude Code command. No extra bill, but it counts toward your plan's usage limits. | Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 |
 | `codex` | Your ChatGPT subscription, through the Codex command. No extra bill, but it counts toward your plan's usage limits. | Codex's own model |
 
-With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price; with Claude Haiku 5.5, about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session, so these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in, stop asking, and train without LLM analysis for now. The next refresh asks again.
+With Claude Opus 5.5, it costs about $8 per 1,000 tasks at list price. With Claude Haiku 5.5, it's about $0.20. Each forecast reads its own task once more. A subscription runs Claude Code or Codex with no tools, none of your settings or hooks, and no saved session. So these calls never show up in the records your predictor learns from. When Claude Code or Codex isn't signed in, setup and refresh say how to sign in and stop asking. They train without LLM analysis for now. The next refresh asks again.
 
 ## Forecasts in Claude Code
 
@@ -178,8 +178,11 @@ if "error" in answer:
     raise SystemExit(answer["error"]["message"])
 
 priced = [f for f in answer["forecasts"] if f["usd"] is not None]
-cheapest = min(priced, key=lambda f: f["usd"])
-print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minutes and ${cheapest['usd']:.2f}.")
+if priced:
+    cheapest = min(priced, key=lambda f: f["usd"])
+    print(f"Run it on {cheapest['model']}: about {cheapest['seconds'] / 60:.0f} minutes and ${cheapest['usd']:.2f}.")
+else:  # no model has enough data yet, and each forecast says why
+    print("No forecast yet:", ", ".join(f["reason"] for f in answer["forecasts"]))
 ```
 
 - **`effort`** is the effort level the forecast is for: the request's, or the level the model ran at most often.
@@ -213,16 +216,20 @@ yardstick-predict refresh --yes --json
     "analysis": {"tasks": 3, "model": "claude-opus-5-5", "paid_with": "anthropic", "usd": 0.024},
     "embedding": {"texts": 6, "tokens": 462, "exact": false, "model": "voyage-4", "usd": 2.8e-05}
   },
+  "retrain_reason": "new_work",
   "analyzed": 3,
   "embedded": 6,
   "trained": true,
   "forecasts_for": ["claude-opus-5-5"],
+  "max_cost": null,
+  "spent": null,
   "notes": []
 }
 ```
 
 - **`done`** is false when it only said what it would do.
 - **`cost`** is what it costs before anything is spent, at list price, in US dollars. Voyage's free tokens aren't taken off. LLM analysis paid by a subscription counts as 0.
+- **`retrain_reason`** says why a refresh trains the model. It's `new_work` for new or changed tasks. With nothing new, it's `no_model`, `unfinished`, `outdated`, `previous` or `damaged`. It's `null` when the model is up to date.
 - **`analyzed`** and **`embedded`** say how many tasks LLM analysis read and how many texts went to Voyage.
 - **`forecasts_for`** lists the AI models that get forecasts now.
 - **`notes`** holds anything worth knowing that didn't stop it.

@@ -223,7 +223,7 @@ def explain(error: embeddings.VoyageError) -> str:
             return f"Voyage kept limiting requests. {advice}"
         return f"Voyage kept limiting requests: {reason}{'' if reason.endswith('.') else '.'}\n{advice}"
     if error.status == 0:
-        return f"Couldn't reach Voyage. Check your internet connection. ({error.detail})"
+        return f"{error}. Check your internet connection."
     return str(error)
 
 
@@ -266,8 +266,8 @@ def get_key(model: str, can_ask: bool, check: bool = True) -> str | None:
     else:
         raise CommandError(
             "no_embedding_key",
-            "No Voyage key found. Set VOYAGE_API_KEY, or run yardstick-predict in a terminal, without --yes or "
-            "--express, to paste one.",
+            "No Voyage key found. Set VOYAGE_API_KEY. Or run this command in a terminal without --yes or --express: "
+            "it asks for one.",
         )
     if check:
         verify_key(key, model)
@@ -278,8 +278,10 @@ def get_key(model: str, can_ask: bool, check: bool = True) -> str | None:
             ui.note("This computer has no password store to save it in. Set VOYAGE_API_KEY to skip pasting next time.")
     if can_ask and not embeddings.account(key).get("asked"):
         ui.line()
-        ui.note("Voyage gives every account 200 million free tokens. yardstick can't see your balance, so it keeps")
-        ui.note("its own count.")
+        ui.note(
+            "Voyage gives every account 200 million free tokens. yardstick can't see your balance. It keeps its own "
+            "count."
+        )
         ui.out(ui.prompt("Has this account used any of its free tokens before?").rstrip())
         ui.line(f"    {ui.accent('n')}   no, it's a new account")
         ui.line(f"    {ui.accent('y')}   yes, or not sure. Costs then count no free tokens.")
@@ -307,18 +309,19 @@ def verify_key(key: str, model: str) -> None:
 # Questions ---------------------------------------------------------------------------------------------
 
 
-def ask_name(existing: list[str]) -> str:
-    """A name for a new predictor. The first one is called main unless you pick another name."""
+def ask_name(existing: list[str], called: str = "predictor") -> str:
+    """A name for a new predictor. The first one is called main unless you pick another name. `called` is what
+    the question calls it: model on the home screen, as every screen calls a predictor."""
     suggestion = "" if existing else "main"
     while True:
-        reply = input(ui.prompt("Name this predictor:", f"[{suggestion}]" if suggestion else "")).strip()
+        reply = input(ui.prompt(f"Name this {called}:", f"[{suggestion}]" if suggestion else "")).strip()
         name = reply or suggestion
         if not name:
             ui.note("Type a name, such as work.")
         elif name_problem(name):
             ui.note(name_problem(name))
         elif name in existing:
-            ui.note(f"There's already a predictor called {name}. Pick another name.")
+            ui.note(f"There's already a {called} called {name}. Pick another name.")
         else:
             return name
 
@@ -393,7 +396,7 @@ def choose_features(can_ask: bool, args):
         except ValueError as error:  # it's checked before a record is read
             raise CommandError("invalid_request", f"{error} Nothing was read or spent.") from None
     try:
-        return menu.ask(custom_features())
+        return menu.ask(custom_features(), called=getattr(args, "called", "predictor"))
     except ValueError as error:
         raise CommandError("invalid_request", str(error)) from None
 
@@ -861,15 +864,16 @@ def _create(args, held, answer: dict) -> int:
     # With --yes or --express it asks nothing, even in a terminal. Every choice takes its default. Nor does a
     # program that asked for JSON.
     can_ask = interactive() and not args.yes and not getattr(args, "json", False)
+    called = getattr(args, "called", "predictor")  # the home screen calls it a model, as every screen does
     existing = predictor_names()
     if can_ask:
         ui.out()
-        ui.out(ui.bold("New predictor"))
-    name = args.name or (ask_name(existing) if can_ask else None)
-    if name is None:
-        if "default" in existing:
+        ui.out(ui.bold(f"New {called}"))
+    name = args.name or (ask_name(existing, called) if can_ask else None)
+    if name is None:  # a program that names none gets main, as a person's first one is called
+        if "main" in existing:
             raise CommandError("invalid_request", "Give the new predictor a name, like: yardstick-predict create work")
-        name = "default"
+        name = "main"
     problem = name_problem(name)
     if problem:
         raise CommandError("invalid_request", problem)
@@ -877,7 +881,7 @@ def _create(args, held, answer: dict) -> int:
         raise CommandError("predictor_exists", already_exists(name))
     first = not existing
     make_default = first or (
-        can_ask and ui.ask("Make it your default predictor? Commands use it when they name none.", False)
+        can_ask and ui.ask(f"Make it your default {called}? Commands use it when they name none.", False)
     )
     answer.update(
         predictor=name,
@@ -1002,7 +1006,7 @@ def _create(args, held, answer: dict) -> int:
             for number, option in enumerate(options, start=1)
         ]
         ui.table(rows, align="llrrl")
-        ui.note("The predictor keeps this model for good. To change it later, create a new predictor.")
+        ui.note(f"The {called} keeps this Voyage model for good. To change it later, make a new {called}.")
         while model_name is None:
             reply = input(ui.prompt("Which Voyage model should embed your tasks?", "[1]")).strip() or "1"
             if ui.number_typed(reply) and 1 <= int(reply) <= len(options):
@@ -1071,9 +1075,9 @@ def _create(args, held, answer: dict) -> int:
         )
     else:
         question = (
-            "Analyze and embed them, and train the predictor now?"
+            f"Analyze them, embed them and train the {called} now?"
             if asks
-            else "Embed them and train the predictor now?"
+            else f"Embed them and train the {called} now?"
         )
     if can_ask and not ui.ask(question, True):
         ui.note("Stopped. Nothing was created.")
@@ -1123,7 +1127,7 @@ def _create(args, held, answer: dict) -> int:
         if plan.items:
             answer["embedded"] = embed_with_progress(predictor, plan, key)
         if checking:
-            stop = check_and_choose(predictor, key)
+            stop = check_and_choose(predictor, key, called)
             if stop is not None:
                 return stop
     finally:
@@ -1131,7 +1135,7 @@ def _create(args, held, answer: dict) -> int:
             answer["spent"] = round(_limit.spent, 6)
     model = train_and_report(predictor, train)
     default_when_ready(predictor)
-    say_how_to_use(model, name)
+    say_how_to_use(model, name, called=called)
     answer.update(
         done=True, trained=True, learned_from=model.meta.get("tasks"), forecasts_for=served_models(model.meta["report"])
     )
@@ -1227,28 +1231,30 @@ def train_and_report(predictor: Predictor, train):
     return model
 
 
-def say_how_to_use(model, name: str, full: bool = True) -> None:
-    """Which AI models get forecasts, and how to ask for one, with their real names."""
+def say_how_to_use(model, name: str, full: bool = True, called: str = "predictor") -> None:
+    """Which AI models get forecasts, and how to ask for one, with their real names. `called` is model on the home
+    screen, where Update adds new tasks."""
     served = served_models(model.meta["report"])
     listed = (served[0] if len(served) == 1 else ", ".join(served[:-1]) + " and " + served[-1]) if served else ""
     if not full:
         if served:
             ui.ok(f"Forecasts are on for {listed}.")
         return
-    ui.heading("Ready")
-    if not served:
-        ui.line("No AI model has enough data yet, so forecasts come back empty, with the reason.")
-        ui.note("Run yardstick-predict again once you have more tasks. It adds them and retrains.")
-        return
     is_default = default_name() == name
     pick = "" if is_default else f" --predictor {name}"
+    again = "choose Update on the home screen" if called == "model" else f"run yardstick-predict refresh{pick}"
+    ui.heading("Ready")
+    if not served:
+        ui.line("No AI model has enough data yet. Until one has, forecasts come back empty, with the reason.")
+        ui.note(f"Once you have more tasks, {again}. It adds them and retrains.")
+        return
     ui.line(f"Forecasts are on for {listed}.")
     ui.line("Before you start a task, ask what it will take:")
     ui.line(ui.accent(f'  yardstick-predict predict{pick} "Add a login page with tests"'))
     if is_default:
-        ui.note("It's your default predictor, so commands use it when they name none.")
+        ui.note(f"It's your default {called}. Commands use it when they name none.")
     ui.note("Programs send JSON to yardstick-predict predict and read JSON back.")
-    ui.note("Run yardstick-predict every week or so to add new tasks and retrain.")
+    ui.note(f"Every week or so, {again} to add new tasks and retrain.")
 
 
 # The feature check -------------------------------------------------------------------------------------
@@ -1356,7 +1362,7 @@ def show_check(result) -> None:
         )
 
 
-def check_and_choose(predictor: Predictor, key: str) -> int | None:
+def check_and_choose(predictor: Predictor, key: str, called: str = "predictor") -> int | None:
     """In setup: run the feature check, then let the person keep the features it suggests or change them.
 
     The features that helped at least one AI model start on. When the check can't test any AI model, the features
@@ -1376,10 +1382,10 @@ def check_and_choose(predictor: Predictor, key: str) -> int | None:
         start = menu.Picked([features.REQUIRED, *helped], options, dict(config.get("llm") or {}))
         ui.line()
         if helped:
-            ui.note("The features that helped are on below. Press Enter to keep them, or change them first.")
+            ui.note("The features that helped are on below. Press Enter to keep them. Or change them first.")
         else:
-            ui.note("None of them helped, so they're off below. Press Enter to keep it that way, or turn some on.")
-        picked = menu.ask(custom_features(), start)
+            ui.note("None of them helped. They're off below. Press Enter to keep it that way. Or turn some on.")
+        picked = menu.ask(custom_features(), start, called=called)
         config.pop("llm", None)
         config.update(picked.config())
         predictor.save_config()
@@ -1901,12 +1907,12 @@ def forecast_models(predictor: Predictor, meta: dict | None = None) -> list[str]
     When none has passed yet, every AI model the predictor knows, so each comes back with the reason it has
     no forecast. `meta` is what the saved model says about itself, when it's read already.
     """
-    from .forecast import RequestError
+    from .forecast import RequestError, not_trained
     from .pipeline import model_meta
 
     meta = model_meta(predictor) if meta is None else meta
     if meta is None:
-        raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
+        raise RequestError("not_trained", not_trained(predictor.name))
     report = meta.get("report") or {}
     known = served_models(report) or tested_models(report) or list((meta.get("categories") or {}).get("model") or [])
     if not known:
@@ -2270,12 +2276,14 @@ def cmd_status(args) -> int:
             unknown_features_note(predictor)
         meta = metas.get(entry["name"])
         if meta and outdated(predictor, meta):
-            ui.note("Its model was made by an older version, and gives no forecasts until it's trained again.")
-            ui.note("Train it again with: yardstick-predict refresh")
+            ui.note("Its model was made by an older version. It gives no forecasts until it's trained again.")
+            ui.note(f"Train it again with: yardstick-predict refresh --predictor {entry['name']}")
         elif meta:
             if from_previous_version(predictor, meta):
-                ui.note("Its model was made by the previous version, and it still forecasts. Train it again to get")
-                ui.note("this version's improvements: yardstick-predict refresh")
+                ui.note(
+                    "Its model was made by the previous version. It still forecasts. Train it again to get this "
+                    f"version's improvements: yardstick-predict refresh --predictor {entry['name']}"
+                )
             try:
                 ui.line(f"Trained on {meta.get('tasks', 0):,} tasks.")
                 print_report(meta)
@@ -3046,7 +3054,10 @@ def cmd_claude_code(args) -> int:
     if answer == "no_answer":
         ui.note("Your password store didn't answer in time. If it's locked, unlock it: forecasts look there.")
     elif not key and not stored:
-        ui.note("No Voyage key was found, and forecasts need one. Run yardstick-predict in a terminal to paste one.")
+        ui.note(
+            "No Voyage key was found. Forecasts need one. Set VOYAGE_API_KEY, then run this again in a terminal: it "
+            "offers to keep the key in your computer's password store."
+        )
     elif not stored:
         ui.line()
         ui.line("Your Voyage key is only in the VOYAGE_API_KEY environment variable.")
@@ -3063,8 +3074,10 @@ def cmd_claude_code(args) -> int:
             else:
                 ui.fail("It couldn't be saved. Set VOYAGE_API_KEY where Claude Code starts.")
         else:
-            ui.note("With --yes it isn't saved anywhere. To keep it in your computer's password store, run this")
-            ui.note("again in a terminal without --yes. Or set VOYAGE_API_KEY where Claude Code starts.")
+            ui.note(
+                "With --yes it isn't saved anywhere. To keep it in your computer's password store, run this again "
+                "in a terminal without --yes. Or set VOYAGE_API_KEY where Claude Code starts."
+            )
     return 0
 
 
@@ -3158,7 +3171,7 @@ def make_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", metavar="COMMAND", title="commands")
 
     create = commands.add_parser("create", help="Create a predictor from your past runs.")
-    create.add_argument("name", nargs="?", help="The predictor's name. In a terminal it asks. Otherwise: default.")
+    create.add_argument("name", nargs="?", help="The predictor's name. In a terminal it asks. Otherwise: main.")
     create.add_argument(
         "--archive",
         action="append",

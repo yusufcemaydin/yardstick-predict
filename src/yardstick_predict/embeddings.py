@@ -55,7 +55,9 @@ class EmbeddingModel:
 
 MODELS = {
     "voyage-4": EmbeddingModel("voyage-4", 0.06, 320_000, "recommended"),
-    "voyage-4-lite": EmbeddingModel("voyage-4-lite", 0.02, 1_000_000, "cheaper, slightly weaker in Voyage's tests"),
+    "voyage-4-lite": EmbeddingModel(
+        "voyage-4-lite", 0.02, 1_000_000, "cheaper, a little weaker by Voyage's own measures"
+    ),
     "voyage-4-large": EmbeddingModel("voyage-4-large", 0.12, 120_000, "strongest, costs the most"),
 }
 
@@ -69,7 +71,13 @@ class VoyageError(Exception):
         from . import ui
 
         detail = ui.clean(detail)  # Voyage's own words, shown as they are, but never codes a terminal acts on
-        super().__init__(detail if status == SETTINGS else f"Voyage said {status}: {detail}")
+        if status == SETTINGS:
+            said = detail
+        elif status == 0:  # no answer came, so Voyage said nothing: the words say what happened
+            said = detail[:1].upper() + detail[1:]
+        else:
+            said = f"Voyage said {status}: {detail}"
+        super().__init__(said)
         self.status = status
         self.detail = detail
         self.retry_after = retry_after
@@ -130,10 +138,15 @@ def _load_tokenizer(model: str, revision: str):
     """Download a tokenizer from Hugging Face, or load it from the computer's copy of an earlier download."""
     from tokenizers import Tokenizer
 
+    bars_were_on = False
     try:  # the download goes through huggingface_hub, which sets up its logger as this loads
+        from huggingface_hub.utils import are_progress_bars_disabled, disable_progress_bars
         from huggingface_hub.utils import logging as _hub_logging  # noqa: F401
     except ImportError:
         pass
+    else:
+        bars_were_on = not are_progress_bars_disabled()
+        disable_progress_bars()  # its own bar would be drawn over the screen's lines
     hub = logging.getLogger("huggingface_hub")
     level = hub.level
     hub.setLevel(logging.ERROR)  # its note about each retry would fill the screen
@@ -141,6 +154,10 @@ def _load_tokenizer(model: str, revision: str):
         return Tokenizer.from_pretrained(f"voyageai/{model}", revision=revision)
     finally:
         hub.setLevel(level)
+        if bars_were_on:
+            from huggingface_hub.utils import enable_progress_bars
+
+            enable_progress_bars()
 
 
 def _tokenizer_failed_recently() -> bool:

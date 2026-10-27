@@ -93,7 +93,7 @@ def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, m
     assert code == 1  # a predictor it shows can't be used
     lines = {line.split()[0]: line for line in out.splitlines() if line.strip()}
     assert re.search(r"features +learned from +trained +forecasts for", out)
-    assert re.search(r"default \(default\) +Context, Time +40 tasks +just now +claude-opus-5-5$", lines["default"])
+    assert re.search(r"main \(default\) +Context, Time +40 tasks +just now +claude-opus-5-5$", lines["main"])
     assert re.search(r"work +only the ones always on +- +not yet +none yet$", lines["work"])
     assert "can't be used, see below" in lines["broken"]
     assert "Predictor 'broken' can't be used" in out and "yardstick-predict delete broken" in out
@@ -104,7 +104,7 @@ def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, m
         code, out = run(capsys, "list")
         shown = out[: out.index("Predictor 'broken'")].splitlines()
         assert max(len(line) for line in shown) < width and "learned from" not in shown[0]
-        assert "  default (default)" in shown and "  work" in shown and "  broken" in shown
+        assert "  main (default)" in shown and "  work" in shown and "  broken" in shown
         assert "Context, Time, learned from 40 tasks, trained just now" in flat(out)
         assert "    forecasts for claude-opus-5-5" in shown and "    forecasts for none yet" in shown
         assert "    only the ones always on, not trained yet" in shown
@@ -112,8 +112,8 @@ def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, m
 
     code, out = run(capsys, "list", "--json")
     listed = {entry["name"]: entry for entry in json.loads(out)["predictors"]}
-    assert listed["default"]["features"] == ["prompt", "context", "time"] and listed["default"]["default"]
-    assert listed["default"]["learned_from"] == 40 and listed["default"]["forecasts_for"] == ["claude-opus-5-5"]
+    assert listed["main"]["features"] == ["prompt", "context", "time"] and listed["main"]["default"]
+    assert listed["main"]["learned_from"] == 40 and listed["main"]["forecasts_for"] == ["claude-opus-5-5"]
     assert listed["work"] == {
         "name": "work",
         "default": False,
@@ -126,10 +126,10 @@ def test_list_shows_one_line_for_each_predictor_and_agrees_with_status(capsys, m
     # Status shows the same, in detail.
     code, out = run(capsys, "status", "--json")
     shown = {entry["name"]: entry for entry in json.loads(out)["predictors"]}
-    for name in ("default", "work"):
+    for name in ("main", "work"):
         for fact in ("learned_from", "trained_at", "forecasts_for"):
             assert shown[name][fact] == listed[name][fact], (name, fact)
-    code, out = run(capsys, "status", "--predictor", "default")
+    code, out = run(capsys, "status", "--predictor", "main")
     assert "Trained on 40 tasks." in out and re.search(r"claude-opus-5-5 +forecasts on", out)
 
 
@@ -229,7 +229,7 @@ def test_each_training_saves_what_went_into_it_without_any_text(capsys, tmp_path
     history(records, tasks=40, start=START)
     assert main(["create", "--yes", "--archive", f"claude-code={records}", *ONE_WINDOW]) == 0
     capsys.readouterr()
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     meta = json.loads((predictor.model_dir / "model.json").read_text())
     table = pq.read_table(predictor.prepared_path)
     assert table.num_rows == meta["tasks"] == 40  # one row for each task the model learned from
@@ -281,7 +281,7 @@ def test_each_training_saves_what_went_into_it_without_any_text(capsys, tmp_path
 
 def test_a_model_type_from_a_plugin_gets_a_prepared_dataset_too(capsys, quickly):
     assert main(["create", "--yes", *quickly, "--features", "time"]) == 0
-    table = pq.read_table(Predictor("default").prepared_path)
+    table = pq.read_table(Predictor("main").prepared_path)
     assert table.num_rows == 40 and {"number.days_since_2020", "number.hour_of_day"} <= set(table.column_names)
     assert json.loads(table.schema.metadata[b"yardstick"])["model_type"] == "quick"
 
@@ -488,7 +488,7 @@ def test_a_setup_of_the_same_name_as_a_predictor_being_deleted_keeps_all_it_make
     import shutil
 
     assert main(["create", "--yes", *quickly]) == 0
-    folder = store.predictor_folder("default")
+    folder = store.predictor_folder("main")
     setup: list[threading.Thread] = []
     codes: list[int] = []
     ready = threading.Event()
@@ -512,13 +512,13 @@ def test_a_setup_of_the_same_name_as_a_predictor_being_deleted_keeps_all_it_make
         return real_rmtree(path, *args, **kwargs)
 
     monkeypatch.setattr(shutil, "rmtree", rmtree)
-    assert main(["delete", "default", "--yes"]) == 0
+    assert main(["delete", "main", "--yes"]) == 0
     setup[0].join(120)
     assert not setup[0].is_alive() and codes == [0]
     assert refused[:1] == [True]  # the delete held the name's lock as the setup first asked for it
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.count_tasks() == 40 and (predictor.model_dir / "model.json").is_file()
-    assert predictor.prepared_path.is_file() and default_name() == "default"
+    assert predictor.prepared_path.is_file() and default_name() == "main"
 
 
 def test_each_name_has_a_lock_of_its_own_with_a_short_file_name():
@@ -610,7 +610,10 @@ def test_the_status_line_says_plainly_when_its_predictor_is_gone(monkeypatch):
     assert forecast("Add a login page") == "yardstick · no forecast: default was deleted"
     monkeypatch.setattr(forecasting, "load", real)
     # The one left is used without a default. It has no model yet.
-    line = "yardstick · no forecast: Predictor 'work' has no model yet. Run yardstick-predict."
+    line = (
+        "yardstick · no forecast: Predictor 'work' has no model yet. Train it with: yardstick-predict refresh "
+        "--predictor work"
+    )
     assert forecast("Fix the parser") == line
     Predictor.create("home", [], EMBEDDING)
     line = "yardstick · no forecast: no default predictor. Choose one with: yardstick-predict default NAME"
@@ -670,7 +673,7 @@ def test_a_program_deletes_a_stored_feature_with_yes_and_reads_json(capsys, monk
     answering(monkeypatch, "n")
     code, out = run(capsys, "features", "delete", answers)
     assert "LLM answers by Codex's own model, through your ChatGPT subscription" in out
-    assert "Used by default. Its next refresh makes it again, for 40 tasks." in out
+    assert "Used by main. Its next refresh makes it again, for 40 tasks." in out
     assert "LLM analysis: 40 tasks with Codex's own model through your chatgpt subscription" in flat(out)
     monkeypatch.setattr(command, "interactive", lambda: False)
 
@@ -686,10 +689,10 @@ def test_a_program_deletes_a_stored_feature_with_yes_and_reads_json(capsys, monk
     code, out = run(capsys, "features", "delete", answers, "--yes", "--json")
     assert code == 0
     found = json.loads(out)
-    assert found["deleted"]["id"] == answers and found["deleted"]["used_by"] == ["default"]
+    assert found["deleted"]["id"] == answers and found["deleted"]["used_by"] == ["main"]
     assert found["deleted"]["tasks"] == 40 and found["notes"] == []
     assert found["remake"]["tasks"] == 40 and found["remake"]["usd"] is None  # a subscription pays for it
-    assert answers not in feature_store.index() and Predictor("default").llm_labels() == {}
+    assert answers not in feature_store.index() and Predictor("main").llm_labels() == {}
     for flags, error in (((), "invalid_request"), ((answers,), "unknown_feature"), (("nope",), "unknown_feature")):
         code, out = run(capsys, "features", "delete", *flags, "--yes", "--json")
         assert code == 1 and json.loads(out)["error"]["code"] == error
@@ -758,7 +761,7 @@ def test_a_stored_feature_isnt_deleted_while_a_command_that_saves_to_the_store_r
     code, out = seen[0]
     error = json.loads(out)["error"]
     assert code == 1 and error["code"] == "busy" and "Try again when it's done." in error["message"]
-    assert answers in feature_store.index() and len(Predictor("default").llm_labels()) == 40
+    assert answers in feature_store.index() and len(Predictor("main").llm_labels()) == 40
 
 
 def test_an_older_predictor_moves_into_the_store_only_while_no_stored_feature_is_deleted(capsys):
@@ -855,8 +858,8 @@ def test_a_stored_feature_no_predictor_uses_goes_without_any_cost(capsys, monkey
 def test_the_features_listing_keeps_its_flags(capsys, quickly):
     assert main(["create", "--yes", *quickly]) == 0
     capsys.readouterr()
-    code, out = run(capsys, "features", "--predictor", "default", "--json")
-    assert code == 0 and [entry["name"] for entry in json.loads(out)["predictors"]] == ["default"]
+    code, out = run(capsys, "features", "--predictor", "main", "--json")
+    assert code == 0 and [entry["name"] for entry in json.loads(out)["predictors"]] == ["main"]
     code, out = run(capsys, "features")
     assert code == 0 and "id embedding.prompt.voyage-4.256" in out
     assert main(["features", "remove", "x"]) == 2  # only delete goes there

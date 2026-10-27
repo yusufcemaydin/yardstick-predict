@@ -548,7 +548,7 @@ def test_a_feature_turned_on_after_the_check_shows_its_cost_first(capsys, monkey
     asked = person(monkeypatch, Turn_on_or_off=["5", "", "5", ""], Embed_them_and_train="n")
     assert main(["create", "--test-windows", "1", "--archive", f"claude-code={records}"]) == 0
     out = capsys.readouterr().out
-    assert "None of them helped, so they're off below." in out
+    assert "None of them helped. They're off below." in out
     # Embedding the context is priced and asked first. Here the answer is no.
     assert sum("Embed them and train the predictor now?" in question for question in asked) == 1
     # Once for the check, and once for the context of the tasks that have one.
@@ -596,7 +596,7 @@ def made(capsys, monkeypatch, records, ready):
     flags = ["--features", "context,time", "--test-windows", "1", "--archive", f"claude-code={records}"]
     assert main(["create", "--yes", *flags]) == 0
     capsys.readouterr()
-    return Predictor("default")
+    return Predictor("main")
 
 
 def kept(predictor: Predictor) -> dict[str, bytes]:
@@ -607,7 +607,7 @@ def kept(predictor: Predictor) -> dict[str, bytes]:
 def test_check_shows_a_table_of_verdicts_and_changes_nothing(capsys, monkeypatch, made):
     before = kept(made)
     monkeypatch.setenv("NO_COLOR", "1")
-    assert main(["check", "default"]) == 0
+    assert main(["check", "main"]) == 0
     out = capsys.readouterr().out
     assert re.search(r"Checked 2 features on your [\d,]+ newest tasks\.", out)
     header = next(line for line in out.splitlines() if "claude-opus-5-5" in line and "claude-sonnet-5-5" in line)
@@ -625,7 +625,7 @@ def test_check_answers_a_program_in_json(capsys, monkeypatch, made):
     monkeypatch.setattr(M, "compare", stand_in_check({"time"}))
     assert main(["check", "--json"]) == 0  # the default predictor
     found = json.loads(capsys.readouterr().out)
-    assert found["version"] == 1 and found["predictor"] == "default" and found["features"] == ["context", "time"]
+    assert found["version"] == 1 and found["predictor"] == "main" and found["features"] == ["context", "time"]
     assert found["tested_on"] == 60 and set(found["models"]) == {"claude-opus-5-5", "claude-sonnet-5-5"}
     assert found["models"]["claude-opus-5-5"]["tasks_tested"] == 50
     assert found["verdicts"]["time"]["claude-opus-5-5"] == {

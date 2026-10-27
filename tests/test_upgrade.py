@@ -156,7 +156,10 @@ def test_status_says_a_model_saved_by_0_3_still_forecasts(saved_by_0_3, capsys):
     assert pipeline.from_previous_version(saved_by_0_3) and not pipeline.outdated(saved_by_0_3)
     assert main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "made by the previous version, and it still forecasts" in out and "yardstick-predict refresh" in out
+    assert (
+        "made by the previous version. It still forecasts." in out
+        and "yardstick-predict refresh --predictor" in flat(out)
+    )
     assert "Trained on 192 tasks." in out and re.search(r"claude-opus-5-5\s+forecasts on", out)
     assert main(["status", "--json"]) == 0
     entry = json.loads(capsys.readouterr().out)["predictors"][0]

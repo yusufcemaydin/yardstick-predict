@@ -405,7 +405,7 @@ def test_long_lines_and_questions_break_to_fit_and_a_command_stays_whole(capsys,
     monkeypatch.setenv("COLUMNS", str(width))
     monkeypatch.setenv("FORCE_COLOR", "1")
     command = "yardstick-predict refresh --predictor main"
-    ui.note(f"This model was made by the previous version, and it still forecasts. Train it again with: {command}")
+    ui.note(f"This model was made by the previous version. It still forecasts. Train it again with: {command}")
     ui.ok("Forecasts are on for claude-opus-5-5, claude-sonnet-5-5, gpt-6-astra and gpt-6-luna at every level.")
     ui.table([("1", "Claude subscription", ui.dim("through Claude Code. It counts toward your plan's usage limits."))])
     asked = ui.prompt("Use your claude-code records in their default location (~/.claude/projects)?", "[Y/n]")
@@ -939,7 +939,7 @@ def test_update_says_where_the_work_is_and_every_cost_before_spending_anything(
     new_work(records)
     capsys.readouterr()
     sent = len(ready.requests)
-    known = Predictor("default").known_files()
+    known = Predictor("main").known_files()
     calls = []
     monkeypatch.setattr(update, "apply", lambda job, key: calls.append(job) or 0)
     pressing(monkeypatch, "2", keys.DOWN, keys.ENTER, keys.ESC)  # Update, then Cancel at the question
@@ -952,11 +952,30 @@ def test_update_says_where_the_work_is_and_every_cost_before_spending_anything(
     assert "Found 3 new tasks, all in Claude Code." in out
     assert re.search(r"Embed \d texts with Voyage", out) and re.search(r"(<\$0\.01|\$\d\.\d\d), \d+ tokens", out)
     assert "Train again, under a minute" in out and "Under a minute in all. Its data grows to" in out
-    assert "1. Update default" in out and "2. Cancel" in out
+    assert "1. Update main" in out and "2. Cancel" in out
     assert "Nothing was spent or saved." in out
     # Cancel spent nothing and saved nothing.
     assert len(ready.requests) == sent and not calls
-    assert Predictor("default").count_tasks() == 40 and Predictor("default").known_files() == known
+    assert Predictor("main").count_tasks() == 40 and Predictor("main").known_files() == known
+
+
+def test_update_all_tries_voyage_once_when_it_cant_be_reached(capsys, monkeypatch, quick, ready, records):
+    from yardstick_predict import embeddings
+
+    assert main(["create", "--express", *quick]) == 0
+    assert main(["create", "other", "--express", *quick]) == 0
+    new_work(records)
+    capsys.readouterr()
+    monkeypatch.setenv("VOYAGE_API_BASE", "http://127.0.0.1:1/v1")  # nothing answers there
+    sent, real = [], embeddings._post
+    monkeypatch.setattr(embeddings, "_post", lambda *args, **kwargs: sent.append(1) or real(*args, **kwargs))
+    pressing(monkeypatch, "2", keys.ENTER, keys.ENTER, keys.ESC)  # Update, Update all, go ahead
+    assert main([]) == 0
+    out = " ".join(plain(capsys.readouterr().out).split())
+    assert "main stopped: Couldn't reach Voyage (" in out and out.count("Couldn't reach Voyage") == 1
+    assert "Voyage said 0" not in out and "Check your internet connection." in out
+    assert "other wasn't embedded: Voyage couldn't be reached a moment ago." in out
+    assert len(sent) == embeddings.PATIENT.attempts  # every try was for the first model
 
 
 def test_update_goes_ahead_after_one_question_and_reuses_what_it_read(capsys, monkeypatch, quick, ready, records):
@@ -975,8 +994,8 @@ def test_update_goes_ahead_after_one_question_and_reuses_what_it_read(capsys, mo
     out = plain(capsys.readouterr().out)
     assert "read already" in out  # the second Update read nothing again
     assert len(reads) == 1
-    assert "default updated, forecasts on for claude-opus-5-5" in out
-    assert Predictor("default").count_tasks() == 43 and len(Predictor("default").embedded("prompt")) == 43
+    assert "main updated, forecasts on for claude-opus-5-5" in out
+    assert Predictor("main").count_tasks() == 43 and len(Predictor("main").embedded("prompt")) == 43
     assert "Tested on each AI model" not in out  # no long test report
 
 
@@ -993,7 +1012,7 @@ def test_nothing_new_says_since_when_and_reads_nothing(capsys, monkeypatch, quic
 def test_esc_while_reading_stops_and_saves_nothing(capsys, monkeypatch, quick, ready, records):
     assert main(["create", "--express", *quick]) == 0
     new_work(records)
-    known = Predictor("default").known_files()
+    known = Predictor("main").known_files()
     from contextlib import contextmanager
 
     class Pressed:
@@ -1008,7 +1027,7 @@ def test_esc_while_reading_stops_and_saves_nothing(capsys, monkeypatch, quick, r
     pressing(monkeypatch, "2", keys.ESC)
     assert main([]) == 0
     assert "Stopped. Nothing was spent or saved." in plain(capsys.readouterr().out)
-    assert Predictor("default").known_files() == known and Predictor("default").count_tasks() == 40
+    assert Predictor("main").known_files() == known and Predictor("main").count_tasks() == 40
     assert not update.readings()._kept  # nothing half read is kept
 
 
@@ -1038,10 +1057,10 @@ def test_refresh_with_a_spending_limit_keeps_to_it_on_the_update_screen(capsys, 
     pressing(monkeypatch)  # no key is pressed: it stops before the question
     assert main(["refresh", "--max-cost", "0"]) == 1
     assert "more than your limit of $0. Nothing was spent or saved." in " ".join(capsys.readouterr().err.split())
-    assert Predictor("default").count_tasks() == 40
+    assert Predictor("main").count_tasks() == 40
     pressing(monkeypatch, keys.ENTER)  # Update default
     assert main(["refresh", "--max-cost", "1"]) == 0
-    assert "Found 3 new tasks" in plain(capsys.readouterr().out) and Predictor("default").count_tasks() == 43
+    assert "Found 3 new tasks" in plain(capsys.readouterr().out) and Predictor("main").count_tasks() == 43
 
 
 def test_refresh_in_a_terminal_uses_the_summary_and_yes_asks_nothing(capsys, monkeypatch, quick, ready, records):
@@ -1054,7 +1073,7 @@ def test_refresh_in_a_terminal_uses_the_summary_and_yes_asks_nothing(capsys, mon
     monkeypatch.setattr(keys, "reader", lambda: pytest.fail("It showed a menu"))
     monkeypatch.setattr("builtins.input", lambda question="": pytest.fail(f"It asked: {question}"))
     assert main(["refresh", "--yes"]) == 0
-    assert "Found 3 new tasks" in capsys.readouterr().out and Predictor("default").count_tasks() == 43
+    assert "Found 3 new tasks" in capsys.readouterr().out and Predictor("main").count_tasks() == 43
 
 
 # The progress bar ---------------------------------------------------------------------------------------------
@@ -1069,6 +1088,20 @@ def test_a_progress_bar_keeps_the_label_of_its_step(capsys, monkeypatch):
     ui.out("done")
     ui.progress(2_000_000, 6_200_000_000, "bytes")  # a bar after a line of its own has no label left
     assert "Looking" not in plain(capsys.readouterr().out).split("\r")[-1]
+
+
+def test_add_new_on_the_home_screen_calls_it_a_model(capsys, monkeypatch):
+    made("main")
+    pressing(monkeypatch, "4", keys.ESC)  # Add New, then Quit once it stops
+    asked = typing(monkeypatch, "work", "")  # its name, then not the default
+    monkeypatch.setattr(cli, "choose_archives", lambda can_ask, given: [])  # no records, so it stops there
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    assert "New model" in out and "predictor" not in out.split("New model")[1].split("No records")[0]
+    assert [flat(question) for question in asked] == [
+        "Name this model:",
+        "Make it your default model? Commands use it when they name none. [y/N]",
+    ]
 
 
 def test_setup_suggests_main_for_the_first_model(monkeypatch):

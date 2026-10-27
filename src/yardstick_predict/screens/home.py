@@ -102,7 +102,9 @@ def act(action: str, names: list[str]) -> None:
 
     try:
         if action == "add":
-            cli.cmd_create(cli.make_parser().parse_args(["create"]))
+            args = cli.make_parser().parse_args(["create"])
+            args.called = "model"  # every screen calls a predictor a model
+            cli.cmd_create(args)
         elif not names:
             ui.out()
             ui.note("There's no model yet. Choose Add New to make one.")

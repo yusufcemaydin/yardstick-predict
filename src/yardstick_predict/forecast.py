@@ -47,7 +47,7 @@ ERRORS = {
     "unknown_predictor": "The request names a predictor that doesn't exist.",
     "broken_predictor": "The predictor's settings file can't be read, or is empty or broken.",
     "plugin_failed": "A plugin the predictor uses couldn't be loaded.",
-    "not_trained": "The predictor has no model yet, or its model is from a version before the previous release.",
+    "not_trained": "The predictor has no model yet. Or its model has to be trained again.",
     "no_embedding_key": "No Voyage key was found.",
     "embedding_failed": "Voyage couldn't embed the request's text.",
     "missing_library": "A library the model needs is missing.",
@@ -270,7 +270,7 @@ def load(predictor: Predictor):
     if not ready:
         if not (predictor.dir / "predictor.json").is_file():
             raise deleted(predictor)
-        raise RequestError("not_trained", f"Predictor {predictor.name!r} has no model yet. Run yardstick-predict.")
+        raise RequestError("not_trained", not_trained(predictor.name))
     try:
         return pipeline.load_model(predictor)
     except model_types.PluginError as error:
@@ -284,6 +284,11 @@ def load(predictor: Predictor):
             raise deleted(predictor) from None
         # A file of the model is missing or can't be read. A refresh sees that, and trains the model again.
         raise RequestError("not_trained", damaged(predictor)) from None
+
+
+def not_trained(name: str) -> str:
+    """What to say about a predictor that has no model yet, as when its setup didn't finish."""
+    return f"Predictor {name!r} has no model yet. Train it with: yardstick-predict refresh --predictor {name}"
 
 
 def damaged(predictor: Predictor) -> str:

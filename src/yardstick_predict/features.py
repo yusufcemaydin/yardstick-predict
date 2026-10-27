@@ -139,7 +139,7 @@ MENU = (
     Group(
         "similar",
         "Similar past tasks",
-        "the closest matches, how much they varied, and a first guess from the prompt's meaning",
+        "the closest matches, how much they varied and a first guess from the prompt's meaning",
         always=True,
     ),
     Group("history", "Project history", "the project's recent tasks, from any conversation", always=True),

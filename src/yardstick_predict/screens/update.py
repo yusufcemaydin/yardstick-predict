@@ -167,6 +167,8 @@ def update(work: list[Work]) -> int:
         return 0
     ui.out()
     code = 0
+    global _unreachable
+    _unreachable = False
     for number, job in enumerate(work):
         # What the models after this one may cost is kept out of what this one may spend, under a limit.
         later = sum(costs[id(other)].most_usd or 0.0 for other in work[number + 1 :] if id(other) in costs)
@@ -332,13 +334,23 @@ def apply(job: Work, key: str | None, later: float = 0.0) -> int:
     return 0
 
 
+_unreachable = False
+"""Whether Voyage couldn't be reached during this update. The models after that one don't try: each would wait
+a few minutes for an answer that doesn't come."""
+
+
 def embed(predictor: Predictor, plan, key: str | None) -> bool:
     """Embed what the plan holds with a labelled bar. False when Voyage stopped it."""
+    global _unreachable
     from .. import spending
     from ..pipeline import run_embeddings
 
     if not plan.items:
         return True
+    if _unreachable:
+        ui.fail(f"{predictor.name} wasn't embedded: Voyage couldn't be reached a moment ago.")
+        ui.note("What was found is saved. Update again once Voyage can be reached.")
+        return False
     most = spending.embedding_most_usd(plan, predictor.embedding_model)
     if cli._limit is not None and not cli._limit.fits(most):
         ui.fail(f"{predictor.name} stopped at your spending limit: embedding may cost up to {spending.dollars(most)}.")
@@ -348,6 +360,7 @@ def embed(predictor: Predictor, plan, key: str | None) -> bool:
     try:
         run_embeddings(predictor, plan, key, lambda done, total: ui.progress(done, total, "texts"), ui.note)
     except embeddings.VoyageError as error:
+        _unreachable = _unreachable or error.status == 0
         ui.fail(f"{predictor.name} stopped: {cli.explain(error)}")
         ui.note("What was embedded so far is saved. Update again to finish.")
         return False

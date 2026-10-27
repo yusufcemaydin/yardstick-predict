@@ -1,45 +1,43 @@
 # Home screen and menus
 
-This is the agreed design for yardstick-predict's terminal screens. Cem approved it on 24 October 2026. It's built on this branch.
+This is the design of yardstick-predict's terminal screens. It was agreed on 24 October 2026 and built for 0.5.0.
 
 ## Why
 
-Today a bare `yardstick-predict` refreshes every predictor at once. The first thing it shows is a bar like `0 KB / 6.2 GB` with no label. That number is the size of your Claude Code and Codex records that it is about to read, but it looks like a download. It then asks "Refresh now?" once per predictor and prints a long test report for every AI model. Cem called this unacceptable. He wants a greeting and clear choices, the way the Claude Code, Codex and agy commands work: hint texts, clearly labelled options and nothing heavy before you choose.
-
-The label disappears because `ui.working` prints "Looking for new tasks" and `ui.progress` then starts its line with `\r\033[2K`, which clears it.
+Before 0.5.0, a bare `yardstick-predict` refreshed every predictor at once. The first thing it showed was a bar like `0 KB / 6.2 GB` with no label. That number was the size of your Claude Code and Codex records that it was about to read. It looked like a download. It then asked "Refresh now?" once per predictor and printed a long test report for every AI model. The screens replace that with a greeting and clear choices, the way other coding agents' commands work: hint texts, clearly labelled options and nothing heavy before you choose.
 
 ## Words
 
-- Every screen calls a predictor a **model**, as Cem does. The models a forecast is about, such as claude-opus-5-5, stay **AI models**.
+- Every screen calls a predictor a **model**, as people do. The models a forecast is about, such as claude-opus-5-5, stay **AI models**. Add New calls it a model too, from its first question to its last line.
 - Screens never talk about the test. These show **not enough data**: an AI model whose forecasts were often wrong on your past tasks, one with too few tasks to check and one that ran fewer than 30 tasks at an effort level. One never used shows **no data**. One with enough data needs no word.
 - The **default** effort level is what the records call a task run without one set. No one picks it. Lists leave it out when the AI model ran at a named level too. An AI model that ran only at the default level shows with no level.
 - A long list numbers its choices on from one page to the next. Two digits typed quickly pick a number above 9.
-- Models show the names you gave them. The default model has `(default)` after its name in every list.
-- Command names and every `--json` field stay as they are, so scripts keep working.
+- Models show the names you gave them. The default model has `(default)` after its name in every list. The first model is called `main`, from setup or from `create --express`. So no name looks like the `(default)` mark.
+- Command names and every `--json` field stay as they are. Scripts keep working.
 
 ## 1. The home screen
 
 It appears only when you run `yardstick-predict` with nothing after it and both input and output are a terminal. It runs nothing heavy. It only reads the models' settings.
 
 ```
-╭──────────────────────────────────────────────╮
-│ ◆ yardstick-predict 0.4.0                    │
-│   Forecasts a coding-agent task's time and   │
-│   cost before it runs                        │
-│                                              │
-│   Your models                                │
-│   main (default)  updated 12 hours ago       │
-│   llm             updated 12 hours ago       │
-╰──────────────────────────────────────────────╯
+╭────────────────────────────────────────────╮
+│ ◆ yardstick-predict 0.5.0                  │
+│   Forecasts a coding-agent task's time and │
+│   cost before it runs                      │
+│                                            │
+│   Your models                              │
+│   main (default)  updated 12 hours ago     │
+│   llm             updated 12 hours ago     │
+╰────────────────────────────────────────────╯
 
-  yardstick-predict 0.5.0 is out. You have 0.4.0.
+  yardstick-predict 0.6.0 is out. You have 0.5.0.
   Update with: uv tool upgrade yardstick-predict
 
   What would you like to do?
 
   › 1. Estimate  Forecast a task's time and cost
     2. Update    Learn from your newest work
-    3. Models    Update, rename or pick the default
+    3. Models    Update, rename, delete or pick the default
     4. Add New   Make another model
     5. Quit
 
@@ -49,19 +47,22 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
 
 - There is no Status choice. The `status` command stays for anyone who wants the long report.
 - When a choice finishes, you come back to this screen.
-- With no model yet, the header says No models yet and Add New comes first, with one line on what setup needs.
+- The box is as wide as its longest line. It names 5 models at most, the default first, then says how many more Models lists.
+- With no model yet, the box says No models yet and Add New comes first, with one line on what setup needs.
 - When a newer version is out on PyPI, a line under the box says so, with the command that updates it. PyPI is asked at most once a day, in the background. The screen never waits for it. Its answer is kept in `~/.yardstick/update-check.json` and shows from the next screen on. It names the update command for the way yardstick-predict was installed: uv, pipx or pip. `YARDSTICK_NO_UPDATE_CHECK`, `DO_NOT_TRACK` or `"update_check": false` in `settings.json` turns it off.
-- Draw the box with Unicode when the terminal supports it and with plain characters otherwise. Leave the box out under 50 columns.
+- The box is drawn with Unicode when the terminal can show it and with plain characters otherwise. It's left out under 50 columns.
 
 ## 2. How menus work
 
-- Arrow keys and Enter, number keys jump to a choice, and Esc goes back or quits.
+- The arrow keys move and Enter chooses. A number key jumps to a choice. Esc goes back or quits.
+- Keys pressed quickly each count, such as an arrow and then Enter.
 - A menu of more than 9 choices shows 6 at a time. The left and right arrows turn its page.
-- Every line fits the terminal at any width. A long hint or name is cut short. A long note is broken onto more lines. A line that wrapped on its own would break the redraw in place.
-- A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then its time, tokens and cost, each with its two ranges beside it, one under the other.
-- Build it with the standard library only: `termios` and `tty` on macOS and Linux, `msvcrt` on Windows. No new dependency.
-- When a terminal cannot pass single key presses, fall back to typing the number. So do a dumb terminal (`TERM=dumb`) and an old Windows console where the codes that move the cursor can't be turned on.
-- Numbered menus can be asked for, as a screen reader needs: `YARDSTICK_NUMBERED_MENUS=1` or `"numbered_menus": true` in `settings.json`. Every menu is typed into. Nothing redraws itself: no progress bar, no box on the home screen. Esc can't stop a long step then. Ctrl+C still does.
+- Every line fits the terminal, at 80 columns and at 45. A long line or note is broken onto more lines. A command in it always stays whole, to be copied as it is. A table too wide for the terminal breaks its last column under itself. A long name or hint in a menu is cut short, as a menu redraws in place and a line that wrapped on its own would break that.
+- A progress bar fits too. In a narrow terminal its bar gets shorter, the time left goes first and then the step's own words are cut short. The counts always show.
+- A terminal too narrow for the forecast table gets each forecast as a block: the AI model with its mark and effort level, then its time, tokens and cost, each with its two ranges beside it, one under the other. The `list` command does the same with a few lines for each model.
+- It's built with the standard library only: `termios` and `tty` on macOS and Linux, `msvcrt` on Windows. No new dependency.
+- When a terminal can't pass single key presses, you type the number instead. So do a dumb terminal (`TERM=dumb`) and an old Windows console where the codes that move the cursor can't be turned on.
+- Numbered menus can be asked for, as a screen reader needs: `YARDSTICK_NUMBERED_MENUS=1` or `"numbered_menus": true` in `settings.json`. Every menu is typed into. Enter on its own goes back from a list of AI models. Nothing redraws itself: no progress bar, no box on the home screen. Esc can't stop a long step then. Ctrl+C still does.
 
 ## 3. Estimate
 
@@ -73,7 +74,7 @@ It appears only when you run `yardstick-predict` with nothing after it and both 
   › _
 ```
 
-Use plain `input()`. Enter on its own goes back home. With more than one model, it asks next which of your models should forecast it. The list starts on the one used last, else on the default. With one model it asks nothing. A model that can't forecast yet says it needs training. Then the list comes back. Then, step by step:
+It uses plain `input()`. Enter on its own goes back home. With more than one model, it asks next which of your models should forecast it. The list starts on the one used last, else on the default. With one model it asks nothing. A model that can't forecast yet says it needs training. Then the list comes back. Then, step by step:
 
 ```
   Which AI models should it forecast?
@@ -83,7 +84,7 @@ Use plain `input()`. Enter on its own goes back home. With more than one model, 
     3. Back
 ```
 
-Each choice opens a list of AI models at their effort levels, 6 to a page, with nothing ticked. Enter forecasts the line you're on. A number picks its line at once, as in every menu. To forecast several, tick them with space first. Enter then forecasts the ticked ones. A number ticks too. The left and right arrows turn the page. Under the full list, it names the AI models with too few tasks to forecast. Every line fits an 80 column terminal. So the list redraws in place.
+Each choice opens a list of AI models at their effort levels, 6 to a page, with nothing ticked. Enter forecasts the line you're on. A number picks its line at once, as in every menu. To forecast several, tick them with space first. Enter then forecasts the ticked ones. A number ticks too. The left and right arrows turn the page. Under the full list, it names the AI models with too few tasks to forecast. When no AI model has enough data yet, the first choice says so and the list is still there. A model whose AI models all ran too few tasks says how many each ran.
 
 ```
   › 1. ○ claude-opus-5-5   max
@@ -94,7 +95,7 @@ Each choice opens a list of AI models at their effort levels, 6 to a page, with 
   ↑↓ move · enter forecast this one · space tick several · ←→ page · esc go back
 ```
 
-The forecasts show 6 to a page. Under each are two ranges, named in the effort column. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task, Use another of your models for the same task or Back to home. Use another of your models shows only when you have more than one.
+The forecasts show 6 to a page, under the task as a title of 3 lines at most. Under each forecast are two ranges, named in the effort column. Half the time the real result lands in the 1 in 2 range. 9 times out of 10 it lands in the 9 in 10 range. A rough one is marked ⚠. The lines under the table say why. Then it asks what's next, never going home by itself: Next page, Previous page, Estimate another task, Choose other AI models for the same task, Use another of your models for the same task or Back to home. Use another of your models shows only when you have more than one.
 
 ## 4. Update
 
@@ -111,7 +112,7 @@ Update opens its own menu. Update all comes first, then each model. With only on
 
 Then, in this order:
 
-1. **Where the new work is, at once.** From file sizes only (`record_files` and `families`, no reading), show each archive's folder, how many chats changed and how many GB that means to read, or "nothing new". When nothing changed, say "Nothing new since <time>" and go back without reading.
+1. **Where the new work is, at once.** From file sizes only, with no reading, it shows each archive's folder, how many chats changed and how much that means to read. Or it says "nothing new". When nothing changed, it says "Nothing new since <time>" and goes back without reading.
 2. **Reading, with a labelled bar.**
    ```
      New work since 12 hours ago
@@ -120,38 +121,37 @@ Then, in this order:
        Codex        ~/.codex/sessions
                     nothing new
 
-     Reading ━━━━━━━━━━────── 2.4 of 6.2 GB · 40 s left
-     Free, and your chats never leave this computer.
-     Esc stops it.
+     Free. Your chats never leave this computer. Esc stops it.
+     Reading  ━━━━━━━━━━──────  2.4 GB / 6.2 GB · about 1 min left
    ```
-3. **Every cost and time, then one question.**
+3. **Every cost and time, then one question.** A Voyage key is asked for first, only when texts go to Voyage. The costs keep to a spending limit given with `refresh --max-cost`.
    ```
      Found 44 new tasks and 28 changed ones,
      all in Claude Code
 
      main  Embed 25 texts with Voyage
            $0.00 · 10,173 tokens
-           Train again · under 1 min
+           Train again · under a minute
      llm   Analyze 21 tasks with Codex
            your ChatGPT plan · about 2 requests
            Embed 23 texts with Voyage
            $0.00 · about 1,500 tokens
-           Train again · about 1 min
+           Train again · 1 min
 
      About 3 min in all. Their data grows to 256 MB.
 
      › 1. Update all  $0.00 · about 3 min
        2. Cancel
    ```
-   The summary must count every cost before it asks. Today one is missing. After LLM analysis, `_refresh` in cli.py embeds the descriptions the analysis wrote (`rest = plan_embeddings(predictor, key)`) without having priced them. Estimate those tokens before the question.
+   The summary counts every cost before it asks, the descriptions LLM analysis writes too. Its data counts what the feature store holds for the model already. The figure never goes down from one update to the next.
 4. **The work, each step with a labelled bar.** Then one line per model and back home:
    ```
      ✓ main updated · forecasts on for claude-opus-5-5 and claude-fable-5
      ✓ llm updated · forecasts on for claude-opus-5-5 and claude-fable-5
    ```
-   Add one line for each AI model whose forecasts turned on or off, with the reason. Do not print the long test report here.
+   One line follows for each AI model whose forecasts turned on or off, with the reason. The long test report isn't printed here.
 
-Cancel or Esc spends nothing and saves nothing. A second Update in the same session reuses what the first one read.
+Cancel or Esc spends nothing and saves nothing. A second Update in the same session reuses what the first one read. When Voyage can't be reached, Update all says so once and stops embedding for the models after it.
 
 ## 5. Models
 
@@ -169,7 +169,7 @@ Choosing one opens its screen:
   llm
   5,454 tasks · updated 12 hours ago
   Forecasts on for claude-opus-5-5 and claude-fable-5
-  Learns from: conversation, prompt text, LLM analysis
+  Learns from: prompt text, conversation, LLM analysis
 
   › 1. Update        Learn from your newest work
     2. Make default  Use it when you don't pick one
@@ -180,27 +180,19 @@ Choosing one opens its screen:
 
 - **Update** is the same flow as choosing that model in the Update menu.
 - **Make default** shows only on a model that is not the default already. It confirms: "llm is now the default. Estimate and Claude Code's status line use it."
-- **Rename** asks for a new name (with the rules in `name_problem`). It renames the model's folder under `~/.yardstick/predictors` with the locks the code already uses. A default model stays the default, including when the old name was `default` and `default_name` only found it by that name.
-- Add a `rename OLD NEW` command, so scripts can do the same.
-- **Delete** says exactly what goes and what stays, as `delete NAME` does: the model's folder goes. Your records and the feature store stay. Then it asks, with Keep it first. Enter or Esc keeps the model. A model that another command is setting up or updating isn't deleted. After the default is deleted, it says which model is the default now. With several left and none the default, it says Claude Code's status line shows no forecasts until you choose one.
+- **Rename** asks for a new name, with the same rules as setup. It renames the model's folder under `~/.yardstick/predictors` with the same locks as every other change. A default model stays the default, also when the old name was `default` and it was the default only because of that name. A model whose settings can't be read isn't renamed. Renaming a link to another model's folder leaves that folder as it was.
+- The `rename OLD NEW` command does the same for scripts.
+- **Delete** says exactly what goes and what stays, as `delete NAME` does: the model's folder goes. Your records and the feature store stay. Then it asks, with Keep it first. Enter or Esc keeps the model. A model that another command is setting up or updating isn't deleted. After the default is deleted, it says which model is the default now. When that's your only model, it says so. With several left and none the default, it says Claude Code's status line shows no forecasts until you choose one.
 
 ## 6. Other changes
 
-- Setup suggests the name `main` for the first model instead of `default`, so a name never clashes with the `(default)` mark.
-- `ui.progress` keeps the current step's label everywhere, including in setup's scan.
-- Scripts keep working. A bare run outside a terminal prints one line per model as today. Every command and `--json` output stays the same. `refresh NAME` in a terminal uses the new summary and question, and `--yes` still asks nothing.
+- Setup suggests the name `main` for the first model instead of `default`. Then no name clashes with the `(default)` mark.
+- A progress bar keeps the current step's words in front of it everywhere, setup's reading too.
+- Scripts keep working. A bare run outside a terminal prints one line per model, as before. Every command and `--json` output stays the same. `refresh NAME` in a terminal uses the new summary and question. With `--yes` it asks nothing.
 
-## How to build it
+## How it's built
 
-- Move the new screens out of cli.py (about 2,700 lines) into small modules, for example `screens/home.py`, `screens/update.py`, `screens/models.py` and a key reading module. Keep each new file under about 400 lines with one clear purpose.
-- Write the tests first:
-  - the menu with an injected key reader (arrows, numbers, Enter, Esc and the typed fallback)
-  - the text of each screen
-  - the update summary appearing before any Voyage or LLM call
-  - Cancel spending nothing
-  - Rename keeping the default
-  - unchanged output outside a terminal
-  - `refresh --yes` asking nothing
-- CI runs on Linux and Windows, so guard the `termios` import.
-- Text in screens, docs, the changelog and commits uses plain words, with no dashes, no semicolons and no comma right before and, but, or, so or yet.
-- Update the start of README.md and add an Unreleased entry to CHANGELOG.md.
+- The screens live in small modules under `screens`, each with one purpose: `home.py`, `estimate.py`, `update.py`, `summary.py`, `models.py`, `listing.py`, `version.py`, `checklist.py` and `keys.py`, which reads single key presses and draws menus. How lines fit the terminal is in `ui.py`.
+- The tests cover the menus with a stand-in key reader (arrows, numbers, Enter, Esc and the typed fallback), keys read from a pseudo terminal, the text of each screen at 80 and at 45 columns, the update summary coming before any Voyage or LLM call, Cancel spending nothing, Rename keeping the default, the output outside a terminal staying the same and `refresh --yes` asking nothing.
+- CI runs on Linux and Windows. The `termios` import is guarded for Windows.
+- Text in screens, docs, the change log and commits uses plain words, with no dashes, no semicolons and no comma right before and, but, or, so or yet.

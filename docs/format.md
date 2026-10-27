@@ -54,7 +54,7 @@ When the predictor has the `time` feature, each task is forecast as if it starts
 ```json
 {
   "version": 1,
-  "predictor": "default",
+  "predictor": "main",
   "embedding_model": "voyage-4",
   "forecasts": [
     {"task": "a", "model": "claude-opus-5-5", "effort": "high", "seconds": 245.0, "tokens": 1830000, "usd": 0.92},
@@ -101,7 +101,7 @@ When the whole request can't be answered, the answer has an `error` instead of `
 | `unknown_predictor` | The request names a predictor that doesn't exist, or the predictor was deleted while the request was answered. |
 | `broken_predictor` | The predictor's settings file can't be read, or is empty or broken. The message says which file. |
 | `plugin_failed` | A plugin the predictor uses couldn't be loaded. The message says which, and why. |
-| `not_trained` | The predictor has no model yet, or its model was made by a version before the previous release and has to be trained again. `yardstick-predict refresh` trains it. |
+| `not_trained` | The predictor has no model yet. Or its model was made by a version before the previous release and has to be trained again. Or a file of its model is missing or can't be read. `yardstick-predict refresh --predictor NAME` trains it. |
 | `no_embedding_key` | No Voyage key was found. |
 | `embedding_failed` | Voyage couldn't embed the request's text. The message gives Voyage's reason. |
 | `missing_library` | A library the model needs is missing. The message says how to add it. |
@@ -163,6 +163,7 @@ Seconds, tokens and dollars are forecast as separate curves. They usually move t
 | `trained` | Whether it trained the model. |
 | `learned_from` | `create` only. How many tasks the model learned from. |
 | `forecasts_for` | The AI models that get forecasts now. |
+| `retrain_reason` | `refresh` only. Why it trains the model. `new_work` means new or changed tasks. With nothing new, it's `no_model` when there's no model yet, `unfinished` when training didn't finish last time, `outdated` when a version before the previous release made the model, `previous` when the previous release made it and `damaged` when a file of it is missing or can't be read. `null` when the model is up to date. |
 | `max_cost` | The limit `--max-cost` set, in US dollars. `null` without one. |
 | `spent` | What it spent at list price, counted only under a limit. LLM analysis counts at what each request really cost, from the tokens it used. Embedding counts at the most its texts could cost. `null` without a limit. |
 | `notes` | Plain words about anything that didn't stop it, such as model facts that didn't download or LLM analysis that stopped at the limit. |
@@ -186,5 +187,105 @@ When it can't go on, the answer has an `error` instead of these fields, with a `
 | `embedding_failed` | Voyage refused the key or stopped embedding. What was embedded is saved. The next refresh goes on from there. |
 | `over_max_cost` | It would cost more than `--max-cost` allows. When that's found before anything is spent, nothing was spent or saved. When it's found before a later step, what was done so far is saved. |
 | `cost_unknown` | The price of the AI model for LLM analysis isn't in yardstick's list. A limit can't be kept without it. |
+| `missing_library` | A library the model needs is missing, such as XGBoost's. The message says how to add it. |
 | `internal_error` | Something went wrong that the tool didn't expect. Please report it. |
 | `failed` | Anything else that stopped it. The message says what. |
+
+A flag the command doesn't know gets `invalid_request` in JSON too, for every command given `--json`. So does a flag without its value.
+
+## The other commands
+
+`status`, `list`, `delete`, `features`, `features delete` and `check` answer in JSON with `--json`, each in version 1 of an answer of its own. Each answer has `"version": 1`. When one can't go on, the answer has an `error` with a `code` and a `message`, as above. The exit code is 1 then.
+
+### status
+
+`yardstick-predict status --json` describes every predictor. With `--predictor NAME`, it describes that one.
+
+| Field | What it is |
+|---|---|
+| `predictors` | One entry for each predictor, in name order. |
+| `notes` | Plain words about anything that didn't stop it, such as a stored file that can't be read. |
+
+Each entry has these fields:
+
+| Field | What it is |
+|---|---|
+| `name`, `default` | The predictor's name and whether it's the default. |
+| `embedding_model` | The Voyage model that embeds its texts. |
+| `features`, `options` | The features it learns from, the prompt first. Then the options chosen for each, by feature. |
+| `llm` | How LLM analysis runs: its `provider` and `model`. `null` without LLM analysis. |
+| `model` | The settings of its model, such as its `type`. |
+| `archives` | The records it reads, each with its `name`, `format` and `path`. |
+| `tasks` | How many tasks its dataset holds. |
+| `refreshed_at` | When it last learned from your work, in seconds since 1970. `null` before that. |
+| `report` | What training found on each AI model's newest tasks: `trained_on` and `tested_on`, how many tasks the test needs (`min_tasks_to_test`) and the `thresholds` it uses. `models` has an entry for each AI model: whether it's `served`, the `reason` when it isn't, how many tasks it was `tasks_tested` on and, for each of `seconds`, `tokens` and `usd`, how close its forecasts came. `null` before the first training. |
+| `learned_from`, `trained_at`, `forecasts_for` | As `list` gives them. |
+| `prepared_bytes` | The size of the prepared dataset on disk. `null` before the first training. |
+| `coverage` | The share of its tasks with a value for each feature, as `features` counts it, with how many `tasks` it learns from. `null` when it can't be counted now. A note says why. |
+
+A predictor whose settings can't be read has only `name`, `default` and `error`. The exit code is 1 then.
+
+### list
+
+`yardstick-predict list --json` gives a shorter entry for each predictor, in `predictors`:
+
+| Field | What it is |
+|---|---|
+| `name`, `default` | The predictor's name and whether it's the default. |
+| `features` | The features it learns from, the prompt first. |
+| `learned_from` | How many tasks its model learned from. `null` without a model. |
+| `trained_at` | When it was last trained, in seconds since 1970. `null` without a model. |
+| `forecasts_for` | The AI models that get forecasts. A model that has to be trained again gives none. |
+
+A predictor whose settings can't be read has `error` instead of the last four fields. The exit code is 1 then.
+
+### delete
+
+`yardstick-predict delete NAME --yes --json` deletes the predictor and answers:
+
+| Field | What it is |
+|---|---|
+| `deleted.name` | The predictor's name. |
+| `deleted.folder` | Its folder, which is gone. |
+| `deleted.link_to` | When its folder was a link, where it pointed. Only the link went. `null` otherwise. |
+| `deleted.tasks`, `deleted.bytes` | How many tasks its dataset held and how much room its folder took. |
+| `default` | The default predictor now. `null` when there's none. |
+
+### features
+
+`yardstick-predict features --json` lists the feature store and each predictor's features:
+
+| Field | What it is |
+|---|---|
+| `folder` | The feature store's folder. |
+| `stored` | Each stored feature: its `id`, its `kind` (`embedding` or `llm`), what it was `made_with`, whether its files are `missing`, how many `tasks` and `rows` it holds, its size in `bytes`, when it `changed_at`, the files of it that are `unreadable` and the predictors it's `used_by`. |
+| `predictors` | Each predictor's `name`, `default`, how many `tasks` it learns from and its `features`. A feature has its `name`, `title` and what it `says`, whether it's `kept` in the store (`stored`) or worked out at `training`, the ids it's `stored` under, how many tasks have a value for it (`tasks_with_value`) and that share of the tasks (`coverage`). |
+| `notes` | Plain words about anything that didn't stop it. |
+
+`yardstick-predict features delete ID --yes --json` deletes a stored feature. It answers with `deleted`, the feature as `stored` shows it. Its `remake` says what making it again takes at the next refresh of each predictor that uses it. `remake` has how many `tasks` get it again, how many `texts` are embedded again and how many of those the cache of vectors holds (`cached`), the `tokens` that go to Voyage, whether they were counted `exact`ly and the `usd` it costs at list price. For LLM answers, `analyses` and `analyses_least` are the most and the fewest readings of the tasks, when the predictors refresh one at a time. `remake` is `null` when no predictor uses the feature.
+
+### check
+
+`yardstick-predict check NAME --json` answers with what the feature check found. It changes nothing.
+
+| Field | What it is |
+|---|---|
+| `predictor` | The predictor's name. |
+| `checked_at` | When the check ran, in seconds since 1970. |
+| `tested_on` | How many of the newest tasks it was tested on. |
+| `features` | The features it tested the model without, one at a time. |
+| `models` | For each AI model it tested: how many `tasks` it has and how many it was `tasks_tested` on. |
+| `verdicts` | By feature, then by AI model: the `verdict` (`helped`, `no_help` or `not_enough_data`), how much worse the forecasts scored without the feature (`worse_without`), the `share` of the test tasks with the feature and the share of the tasks the test learned from (`training_share`). |
+| `judged_on_tasks_with_it` | The features judged only on the tasks that have them, as LLM analysis that read a sample is. |
+| `notes` | Plain words about anything that didn't stop it. |
+
+### Their errors
+
+Besides the codes above, these commands may answer with:
+
+| Code | What it means |
+|---|---|
+| `needs_yes` | `delete` or `features delete` without `--yes`. Nothing was deleted. The exit code is 2. |
+| `delete_failed` | A file couldn't be deleted, as when another program is using it. The rest is still there. The delete can be tried again. |
+| `unknown_feature` | `features delete` names no stored feature. |
+| `unsupported_model_type` | `check` only. The predictor uses a model type from a plugin. The check works with the built-in model only. |

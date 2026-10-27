@@ -195,6 +195,23 @@ def test_embedding_without_counts_never_loads_the_tokenizer(voyage, monkeypatch)
     assert embeddings.most_tokens("a\u00f1ade") == len("a\u00f1ade".encode()) + 2  # never fewer than the real tokens
 
 
+def test_the_tokenizer_downloads_without_a_bar_of_its_own(monkeypatch):
+    import tokenizers
+    from huggingface_hub.utils import are_progress_bars_disabled
+
+    before, seen = are_progress_bars_disabled(), []
+
+    class Downloads:
+        @staticmethod
+        def from_pretrained(name, revision=None):
+            seen.append(are_progress_bars_disabled())
+            return "tokenizer"
+
+    monkeypatch.setattr(tokenizers, "Tokenizer", Downloads)
+    assert embeddings._load_tokenizer("voyage-4", "main") == "tokenizer"
+    assert seen == [True] and are_progress_bars_disabled() == before  # off only while it downloads
+
+
 class _Tokenizer:
     def encode_batch(self, texts):
         return [type("Encoding", (), {"ids": text.split()})() for text in texts]

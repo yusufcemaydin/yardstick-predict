@@ -49,8 +49,8 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     assert "180 tasks" in out
     assert re.search(r"claude-opus-5-5\s+forecasts on", out)
     assert "Forecasts are on for claude-opus-5-5" in out and 'yardstick-predict predict "Add a login page' in out
-    assert default_name() == "default"  # the first predictor is the default
-    predictor = Predictor("default")
+    assert default_name() == "main"  # the first predictor is the default
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "conversation", "context"]
     assert predictor.config["embedding"]["model"] == "voyage-4"
     assert predictor.config["model"]["type"] == "xgboost"
@@ -79,7 +79,7 @@ def test_express_takes_every_default_in_one_line(capsys, records, ready, monkeyp
     # the cache of vectors kept it, so this one sends it no more.
     texts = [text for body in ready.requests for text in body["input"]]
     assert texts.count("fix the api") == 1 and len(ready.requests) == sent
-    assert "predictor default, updated just now" in out and "{" not in out
+    assert "predictor main, updated just now" in out and "{" not in out
     monkeypatch.setattr(cli, "terminal_output", lambda: False)
 
     code, out = run(capsys, "status", "--json")
@@ -155,7 +155,7 @@ def test_a_program_must_agree_to_the_cost(capsys, records, ready):
 
     code, out = run(capsys, "create", "--archive", f"claude-code={records}", "--yes", *ONE_WINDOW)
     assert code == 0, out
-    stored = b"".join(p.read_bytes() for p in Predictor("default").dir.parent.parent.rglob("*") if p.is_file())
+    stored = b"".join(p.read_bytes() for p in Predictor("main").dir.parent.parent.rglob("*") if p.is_file())
     assert KEY.encode() not in stored
     assert sum(embeddings.account(KEY)["used"].values()) > 0
 
@@ -185,7 +185,7 @@ def test_features_and_advanced_settings_are_chosen_with_flags(capsys, records, r
         "2",
     )
     assert code == 0, out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["features"] == ["prompt", "benchmarks"]
     assert predictor.config["model"]["heads"] == ["seconds", "usd"]
     assert predictor.config["model"]["family"] == "weibull"
@@ -383,15 +383,15 @@ def test_refresh_adds_only_new_tasks(capsys, records, ready):
     assert code == 2 and "--yes" in out
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "Found 3 new tasks" in out
-    assert Predictor("default").count_tasks() == 183
-    assert len(Predictor("default").embedded("prompt")) == 183
+    assert Predictor("main").count_tasks() == 183
+    assert len(Predictor("main").embedded("prompt")) == 183
 
 
 def test_setup_and_refresh_answer_a_program_in_json(capsys, few, ready, quick):
     # Without --yes, setup says what it would do and what it costs, and does nothing.
     code, out = run(capsys, "create", "--json", "--archive", f"claude-code={few}", *quick)
     answer = json.loads(out)  # standard output holds the answer alone: what setup says on the way went elsewhere
-    assert code == 2 and answer["done"] is False and answer["predictor"] == "default" and answer["found_tasks"] == 40
+    assert code == 2 and answer["done"] is False and answer["predictor"] == "main" and answer["found_tasks"] == 40
     embedding = answer["cost"]["embedding"]
     assert embedding["texts"] > 0 and embedding["model"] == "voyage-4" and answer["cost"]["analysis"] is None
     assert answer["cost"]["usd"] == embedding["usd"] and predictor_names() == []
@@ -414,16 +414,16 @@ def test_setup_and_refresh_answer_a_program_in_json(capsys, few, ready, quick):
     answer = json.loads(out)
     assert code == 2 and not answer["done"] and answer["new_tasks"] == 3
     planned = answer["cost"]["embedding"]["texts"]  # their prompts, and the ends of the conversation before them
-    assert planned >= 3 and Predictor("default").count_tasks() == 40  # nothing saved without --yes
+    assert planned >= 3 and Predictor("main").count_tasks() == 40  # nothing saved without --yes
     code, out = run(capsys, "refresh", "--yes", "--json")
     answer = json.loads(out)
     assert code == 0 and answer["done"] and answer["trained"] and answer["new_tasks"] == 3
     assert answer["embedded"] == planned
-    assert Predictor("default").count_tasks() == 43
+    assert Predictor("main").count_tasks() == 43
 
     code, out = run(capsys, "refresh", "--json", "--predictor", "nope")
     assert code == 1 and json.loads(out)["error"]["code"] == "unknown_predictor"
-    code, out = run(capsys, "create", "default", "--json", "--yes", "--archive", f"claude-code={few}", *quick)
+    code, out = run(capsys, "create", "main", "--json", "--yes", "--archive", f"claude-code={few}", *quick)
     assert code == 1 and json.loads(out)["error"]["code"] == "predictor_exists"
     code, out = run(capsys, "create", "--json", "--yes", "--archive", f"claude-code={few}", *quick)
     assert code == 1 and json.loads(out)["error"]["code"] == "invalid_request"  # a second one needs a name
@@ -455,7 +455,7 @@ def test_a_refresh_with_nothing_for_voyage_needs_no_key(capsys, monkeypatch, few
     code, out = run(capsys, "refresh", "--yes", "--json")
     answer = json.loads(out)
     assert code == 0 and answer["trained"] and answer["cost"]["embedding"]["texts"] == 0
-    assert len(ready.requests) == sent and len(Predictor("default").embedded("prompt")) == 40  # all from the cache
+    assert len(ready.requests) == sent and len(Predictor("main").embedded("prompt")) == 40  # all from the cache
 
 
 def test_a_task_whose_text_changed_is_read_again_and_others_are_not(capsys, monkeypatch, few, ready, quick):
@@ -468,7 +468,7 @@ def test_a_task_whose_text_changed_is_read_again_and_others_are_not(capsys, monk
     monkeypatch.setattr(llm, "_anthropic", lambda model, system, text, shape, **limits: answer_for(ids_in(text)))
     flags = ["--features", "llm:kind", "--llm-provider", "anthropic", "--archive", f"claude-code={few}", *quick]
     assert main(["create", "--yes", *flags]) == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     labels = predictor.llm_labels()
     tasks = predictor.tasks()
     assert all(labels[task.id].get("read") for task in tasks)  # each answer says what it read, through the store
@@ -501,12 +501,12 @@ def test_a_spending_limit_stops_before_anything_is_spent(capsys, few, ready, qui
     sent = len(ready.requests)
     code, out = run(capsys, "refresh", "--yes", "--json", "--max-cost", "0")
     assert code == 1 and json.loads(out)["error"]["code"] == "over_max_cost"
-    assert len(ready.requests) == sent and Predictor("default").count_tasks() == 40  # nothing spent or saved
+    assert len(ready.requests) == sent and Predictor("main").count_tasks() == 40  # nothing spent or saved
     code, out = run(capsys, "refresh", "--yes", "--max-cost", "0")  # a person gets the same reason
-    assert code == 1 and Predictor("default").count_tasks() == 40
+    assert code == 1 and Predictor("main").count_tasks() == 40
     code, out = run(capsys, "refresh", "--yes", "--json", "--max-cost", "1")
     answer = json.loads(out)
-    assert code == 0 and answer["trained"] and 0 < answer["spent"] <= 1 and Predictor("default").count_tasks() == 43
+    assert code == 0 and answer["trained"] and 0 < answer["spent"] <= 1 and Predictor("main").count_tasks() == 43
 
 
 def test_llm_analysis_stops_at_the_spending_limit_and_training_goes_on(capsys, few, ready, quick, monkeypatch):
@@ -573,7 +573,7 @@ def test_a_refresh_that_stopped_during_training_trains_again_next_time(capsys, r
     stop["now"] = True
     code, out = run(capsys, "refresh", "--yes")
     assert code == 130
-    assert Predictor("default").count_tasks() == 183  # the new tasks were saved, but the model is the old one
+    assert Predictor("main").count_tasks() == 183  # the new tasks were saved, but the model is the old one
 
     stop["now"] = False
     code, out = run(capsys, "refresh", "--yes")
@@ -601,13 +601,13 @@ def test_a_task_that_finishes_after_it_was_saved_as_stopped_is_embedded(tmp_path
     session.save(mtime=START)
     code, out = run(capsys, "create", "--yes", "--archive", f"codex={runs}", "--features", "", "--model-type", "stub")
     assert code == 0, out
-    assert not Predictor("default").embedded("prompt")  # saved as stopped, so not learned from
+    assert not Predictor("main").embedded("prompt")  # saved as stopped, so not learned from
 
     session.lines.append(finished)
     session.save(mtime=START + 3600)
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0, out
-    assert Predictor("default").embedded("prompt") == {"codex:t1"}
+    assert Predictor("main").embedded("prompt") == {"codex:t1"}
 
 
 def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, ready, monkeypatch):
@@ -624,8 +624,8 @@ def test_a_failed_embedding_run_keeps_what_it_did_and_resumes(capsys, records, r
     monkeypatch.setattr(embeddings, "_post", flaky)
     assert main(["create", "--yes", "--archive", f"claude-code={records}", "--features", "", *ONE_WINDOW]) == 1
     error = capsys.readouterr().err  # a problem that stops the command goes to the error stream
-    assert "payment method" in error and "Run yardstick-predict refresh --predictor default to finish" in error
-    predictor = Predictor("default")
+    assert "payment method" in error and "Run yardstick-predict refresh --predictor main to finish" in error
+    predictor = Predictor("main")
     # The two requests that got through held 100 texts. A text several tasks share gives each its vector.
     assert 100 <= len(predictor.embedded("prompt")) < 180
     assert embeddings.account(KEY)["free_tokens"] == "used"
@@ -681,7 +681,7 @@ def test_llm_analysis_reads_each_task_once_and_its_descriptions_are_embedded(cap
         *ONE_WINDOW,
     )
     assert code == 0, out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     assert predictor.config["llm"] == {"provider": "codex", "model": llm.DEFAULT_CODEX}
     assert "LLM analysis: 180 tasks with Codex's own model through your chatgpt subscription" in flat(out)
     assert "Analyzed 180 tasks." in out
@@ -703,14 +703,14 @@ def test_llm_analysis_that_cant_run_says_why_and_training_goes_on(capsys, record
     code, out = run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "llm", *ONE_WINDOW)
     assert code == 0 and "about $1.44 at list price" in out
     assert "ANTHROPIC_API_KEY" in out and "Training goes on without LLM analysis" in out
-    assert Predictor("default").llm_labels() == {}  # nothing was noted, so a refresh tries them all again
+    assert Predictor("main").llm_labels() == {}  # nothing was noted, so a refresh tries them all again
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "LLM analysis: 180 tasks" in out
 
 
 def test_a_model_made_by_a_version_before_the_previous_release_is_trained_again_on_refresh(capsys, records, ready):
     assert run(capsys, "create", "--yes", "--archive", f"claude-code={records}", "--features", "", *ONE_WINDOW)[0] == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     path = predictor.model_dir / "model.json"
     path.write_text(json.dumps({**json.loads(path.read_text()), "format": model_types.PREVIOUS_FORMAT - 1}))
     assert pipeline.outdated(predictor) and not pipeline.from_previous_version(predictor)
@@ -725,7 +725,7 @@ def test_a_model_made_by_a_version_before_the_previous_release_is_trained_again_
 
     code, out = run(capsys, "refresh", "--yes")
     assert code == 0 and "made by an older version" in out and not pipeline.outdated(predictor)
-    assert Predictor("default").config["features"] == ["prompt", "conversation"]
+    assert Predictor("main").config["features"] == ["prompt", "conversation"]
     assert "session_tasks_before" in json.loads(path.read_text())["numbers"]  # so it still reads the conversation
 
 
@@ -831,7 +831,7 @@ def test_a_damaged_model_says_so_and_a_refresh_trains_it_again(capsys, monkeypat
     monkeypatch.setitem(model_types._TYPES, "fragile", (train, load_fragile))
     assert main(["create", "--express", "--archive", f"claude-code={few}", "--model-type", "fragile"]) == 0
     capsys.readouterr()
-    (Predictor("default").model_dir / "trees.json").unlink()
+    (Predictor("main").model_dir / "trees.json").unlink()
     code, out = run(
         capsys,
         "predict",
@@ -843,7 +843,7 @@ def test_a_damaged_model_says_so_and_a_refresh_trains_it_again(capsys, monkeypat
     code, out = run(capsys, "refresh", "--yes", "--json")
     answer = json.loads(out)
     assert code == 0 and answer["trained"] and answer["retrain_reason"] == "damaged" and answer["new_tasks"] == 0
-    assert (Predictor("default").model_dir / "trees.json").is_file()  # made again
+    assert (Predictor("main").model_dir / "trees.json").is_file()  # made again
 
 
 class Terminal(io.StringIO):
@@ -1189,7 +1189,7 @@ def test_yes_in_a_terminal_asks_nothing(capsys, monkeypatch, few, ready, quick):
     monkeypatch.setattr("builtins.input", lambda question="": pytest.fail(f"It asked: {question}"))
     monkeypatch.setattr(cli.getpass, "getpass", lambda question="": pytest.fail("It asked for a key"))
     assert main(["create", "--yes", *quick, "--archive", f"claude-code={few}"]) == 0
-    assert Predictor("default").config["features"] == ["prompt", "conversation", "context"]  # the defaults
+    assert Predictor("main").config["features"] == ["prompt", "conversation", "context"]  # the defaults
     session = ClaudeSession(few, "more", START + 90 * 86400)
     session.prompt("one more task")
     session.reply(5)
@@ -1292,7 +1292,7 @@ def test_a_plugin_in_the_current_folder_loads_from_any_folder_later(capsys, monk
         flags = ["--plugin", "my_features_for_tests", "--features", "words_for_tests"]
         assert main(["create", "--yes", *quick, *flags, "--archive", f"claude-code={few}"]) == 0
         saved = (project / "my_features_for_tests.py").resolve()
-        assert Predictor("default").config["plugins"] == [str(saved)]
+        assert Predictor("main").config["plugins"] == [str(saved)]
 
         # Later, from another folder, as the status line's forecasts run.
         monkeypatch.chdir(tmp_path)
@@ -1382,7 +1382,7 @@ def test_a_rate_limit_shows_its_reason_with_the_advice():
 
 def test_a_refresh_stops_using_the_vector_of_a_text_that_became_empty_and_pays_nothing(capsys, few, ready, quick):
     assert main(["create", "--yes", *quick, "--archive", f"claude-code={few}"]) == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     emptied = sorted(predictor.embedded("context"))[0]
     predictor.db.execute("UPDATE tasks SET context = '' WHERE id = ?", (emptied,))
     predictor.db.commit()
@@ -1394,7 +1394,7 @@ def test_a_refresh_stops_using_the_vector_of_a_text_that_became_empty_and_pays_n
     assert len(ready.requests) == sent and " uses " not in capsys.readouterr().out  # no cost line, nothing paid
     # Its vector stays in the feature store, for a predictor whose task still has that text. Training here
     # finds it made from another text, so it leaves it out.
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     task = next(task for task in predictor.tasks() if task.id == emptied)
     assert "context" not in pipeline.feature_rows(predictor, [task])[0].vectors
 
@@ -1408,14 +1408,14 @@ def test_a_refresh_takes_out_tasks_their_records_no_longer_hold(capsys, tmp_path
         session.clock += 60
     session.save(mtime=START)
     assert main(["create", "--yes", *quick, "--features", "", "--archive", f"claude-code={root}"]) == 0
-    assert Predictor("default").count_tasks() == 3
+    assert Predictor("main").count_tasks() == 3
     session.lines = session.lines[:-2]  # the last task is gone from the record
     session.save(mtime=START + 60)
     capsys.readouterr()
     assert main(["refresh", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "Nothing new" not in out and "taken out" in out
-    assert Predictor("default").count_tasks() == 2
+    assert Predictor("main").count_tasks() == 2
 
 
 def test_a_refresh_plans_nothing_for_tasks_it_takes_out(capsys, tmp_path, ready, quick):
@@ -1429,7 +1429,7 @@ def test_a_refresh_plans_nothing_for_tasks_it_takes_out(capsys, tmp_path, ready,
         session.clock += 60
     session.save(mtime=START)
     assert main(["create", "--yes", *quick, "--features", "", "--archive", f"claude-code={root}"]) == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     gone = [task.id for task in predictor.tasks() if task.prompt == "task 2"]
     session.lines = session.lines[:-2]  # the last task is gone from the record
     session.save(mtime=START + 60)
@@ -1450,14 +1450,14 @@ def test_a_predictor_read_by_an_older_reader_reads_its_records_again_once(capsys
         session.clock += 60
     session.save(mtime=START)
     assert main(["create", "--yes", *quick, "--features", "", "--archive", f"claude-code={root}"]) == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     predictor.config["reader"] = READER_VERSION - 1  # as an older version left it
     predictor.save_config()
     capsys.readouterr()
     assert main(["refresh", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "read them all again" in out and "grew" not in out
-    assert Predictor("default").config["reader"] == READER_VERSION
+    assert Predictor("main").config["reader"] == READER_VERSION
     assert main(["refresh", "--yes"]) == 0
     assert "read them all again" not in capsys.readouterr().out  # only once
 

@@ -35,7 +35,7 @@ When a new version trains the model another way, the next refresh trains it agai
 
 ## 2. Features
 
-Every feature describes what's known before a task starts. Three are always used. They cost nothing, and they send nothing anywhere:
+Every feature describes what's known before a task starts. Three are always used. For them, only each task's prompt goes anywhere: to Voyage, which works out what it means.
 
 - **The task:** the prompt's meaning and its layout (how many list items, file names, links and lines it has, and whether it ends in a question), the AI model, the agent, who started it, and the thinking level, both as a label and as a step on one scale from low to max, so a level with few tasks can learn from the levels next to it.
 - **Similar past tasks:** see below.
@@ -134,7 +134,7 @@ XGBoost needs a library called OpenMP. On a Mac, XGBoost looks for it only where
 
 Before setup or a refresh goes ahead, it says about how long the rest will take, and how much disk space the dataset will take. It works this out from what it knows by then: how many tokens go to Voyage, how many tasks LLM analysis reads, how many tasks training learns from and, in setup, how many features the feature check tests. A few rough constants turn those into time, disk space and memory. Training's and the dataset's were measured on synthetic tasks. LLM analysis through a ChatGPT subscription was timed once on a real run. Voyage's speed and the other ways to pay for LLM analysis are worked out from how the requests go out. Voyage's assume an account with a payment method: one without gets low limits, and embedding takes much longer. The constants are in [`estimate.py`](../src/yardstick_predict/estimate.py), each with how it was found. Nothing is timed while the command runs, and the time is given as a range, from 70% to 150% of the estimate. While each long step runs, its progress bar says how long is left, from how fast it has gone lately.
 
-## 7. Where your data lives
+## 8. Where your data lives
 
 Everything stays in one folder on your computer: `~/.yardstick`, or the folder `YARDSTICK_HOME` names. Only you can read it.
 

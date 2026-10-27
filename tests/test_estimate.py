@@ -170,7 +170,7 @@ def test_the_room_the_data_takes_never_goes_down_from_one_refresh_to_the_next(ca
     from yardstick_predict.store import Predictor
 
     assert main(["create", "--yes", "--features", "", "--archive", f"claude-code={records}"]) == 0
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     predictor.config["features"] = ["prompt", "context"]  # the next refresh embeds every task's context
     predictor.save_config()
     sizes = []

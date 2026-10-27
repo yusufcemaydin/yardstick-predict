@@ -651,7 +651,7 @@ def test_a_second_predictor_over_the_same_records_pays_for_nothing(capsys, quick
     out = capsys.readouterr().out
     assert len(embedded_texts(voyage)) == sent and seen == asked  # no text went to Voyage, no task to the AI model
     assert "LLM analysis:" not in out
-    first, second = Predictor("default"), Predictor("work")
+    first, second = Predictor("main"), Predictor("work")
     assert second.llm_labels() == first.llm_labels() and len(second.llm_labels()) == 40
     for name in ("prompt", "context", "llm"):
         assert second.embedded(name) == first.embedded(name) and second.embedded(name)
@@ -670,17 +670,17 @@ def test_predictors_asking_one_ai_model_for_other_fields_share_its_answers(capsy
     assert main(["create", "words", "--yes", *flags, "--features", "llm:description"]) == 0
     assert seen == [40, 40]  # the second asked for the descriptions
     capsys.readouterr()
-    for name in ("default", "words"):
+    for name in ("main", "words"):
         assert main(["refresh", "--yes", "--predictor", name]) == 0
     assert seen == [40, 40] and capsys.readouterr().out.count("Nothing new") == 2
     # Each reads only the fields it asked for, though the store keeps both.
-    kind_only, described = Predictor("default").llm_labels(), Predictor("words").llm_labels()
+    kind_only, described = Predictor("main").llm_labels(), Predictor("words").llm_labels()
     one = next(iter(kind_only))
     assert "kind" in kind_only[one] and "description" not in kind_only[one]
     assert "description" in described[one] and "kind" not in described[one]
-    assert {"kind", "description"} <= set(Predictor("default").llm_labels(every_field=True)[one])
+    assert {"kind", "description"} <= set(Predictor("main").llm_labels(every_field=True)[one])
     # The descriptions' vectors are in the store, for the predictor that asked for them. The other never reads one.
-    kind_rows = pipeline.feature_rows(Predictor("default"), Predictor("default").tasks())
+    kind_rows = pipeline.feature_rows(Predictor("main"), Predictor("main").tasks())
     words_rows = pipeline.feature_rows(Predictor("words"), Predictor("words").tasks())
     assert not any("llm" in row.vectors for row in kind_rows) and all("llm" in row.vectors for row in words_rows)
     assert any("llm_kind_feature" in row.numbers for row in kind_rows)
@@ -794,9 +794,9 @@ def test_the_listing_shows_each_feature_with_its_coverage(capsys, quickly, wide)
     code, out = listing(capsys)
     assert code == 0, out
     assert "Stored features" in out and str(feature_store.folder()) in out
-    assert "prompt embeddings by voyage-4, 256 numbers" in out and "40 tasks" in out and "used by default" in out
+    assert "prompt embeddings by voyage-4, 256 numbers" in out and "40 tasks" in out and "used by main" in out
     assert "context embeddings by voyage-4, 256 numbers" in out
-    predictor = Predictor("default")
+    predictor = Predictor("main")
     tasks = pipeline.learnable(predictor.tasks())
     with_context = sum(1 for task in tasks if task.context[-features.CONTEXT_CHARS :].strip())
     assert 0 < with_context < 40  # the first task of each conversation has none
@@ -823,9 +823,9 @@ def test_the_listing_in_json(capsys, quickly):
         "dimensions": 256,
     }
     assert prompts["tasks"] == 40 and prompts["rows"] == 40 and prompts["bytes"] > 0 and prompts["changed_at"] > 0
-    assert prompts["used_by"] == ["default"] and not prompts["missing"] and prompts["unreadable"] == []
+    assert prompts["used_by"] == ["main"] and not prompts["missing"] and prompts["unreadable"] == []
     [predictor] = found["predictors"]
-    assert predictor["name"] == "default" and predictor["default"] and predictor["tasks"] == 40
+    assert predictor["name"] == "main" and predictor["default"] and predictor["tasks"] == 40
     by_name = {feature["name"]: feature for feature in predictor["features"]}
     assert list(by_name) == ["prompt", "task", "similar", "history", "context"]
     assert by_name["prompt"] == {
@@ -848,7 +848,7 @@ def test_the_listing_shows_what_no_predictor_uses_and_what_cant_be_read(capsys, 
     broken = store.predictor_folder("broken")
     broken.mkdir(parents=True)
     (broken / "predictor.json").write_text("{")
-    unknown = Predictor("default")
+    unknown = Predictor("main")
     unknown.config["features"] = ["prompt", "weather"]
     unknown.save_config()
     (feature_store.folder() / "index.json").write_text("{")
@@ -861,9 +861,9 @@ def test_the_listing_shows_what_no_predictor_uses_and_what_cant_be_read(capsys, 
     assert "Predictor 'broken' can't be used" in out
     assert "weather" in out and "this version doesn't know it" in out
     assert "was broken, so it was rebuilt from the files" in out
-    code, out = listing(capsys, "--json", "--predictor", "default")
+    code, out = listing(capsys, "--json", "--predictor", "main")
     found = json.loads(out)
-    assert code == 0 and [entry["name"] for entry in found["predictors"]] == ["default"]
+    assert code == 0 and [entry["name"] for entry in found["predictors"]] == ["main"]
     assert found["predictors"][0]["features"][-1] == {
         "name": "weather",
         "title": "weather",
