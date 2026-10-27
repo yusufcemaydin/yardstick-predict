@@ -19,6 +19,7 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - A spending limit for setup and refresh: `--max-cost 1.50` keeps one to $1.50 at list price. It goes ahead only when what it would cost fits, counting every text Voyage gets at the most tokens it can take. While LLM analysis runs, no request starts unless the most it can cost fits in what's left. Every byte of its text counts as a token. Its answer counts at the longest it may be. A request that doesn't fit whole is sent with fewer tasks. Under a limit, a request the AI model declines isn't tried again on another one. Before each step that embeds, it checks again. A step that doesn't fit stops the command, with what was done kept.
 - `predict --request FILE` reads the JSON request from a file. A program needs no pipe then. It's easier to allow ahead of time, as a coding agent's settings do. `--request -` reads standard input, as before.
 - `yardstick-predict rename OLD NEW` gives a predictor another name. The default stays the default, also when it was the default only because it was called default. A predictor whose settings can't be read isn't renamed. Renaming a link to another predictor's folder leaves that folder as it was.
+- On the Features screen, type all to turn on every feature with all its options. The help under the screen says so.
 - `AGENTS.md` holds the rules for AI coding agents working on yardstick-predict: how to check a change, how to write what people read and how to keep private data out. Claude Code reads it through `CLAUDE.md`.
 
 ### Changed

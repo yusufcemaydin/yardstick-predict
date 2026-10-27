@@ -56,6 +56,19 @@ def test_a_person_turns_features_and_options_on_and_off(monkeypatch, capsys):
     assert "Task is always on" in out and "How should it be paid for?" not in out  # the prompt shows on input
 
 
+def test_all_turns_on_every_feature_with_all_its_options(monkeypatch, capsys):
+    every = [group for group in features.MENU if not group.always]
+    answers(monkeypatch, "all", "", "4")  # every feature, then pay for LLM analysis with Codex
+    picked = menu.ask()
+    assert picked.features == ["prompt", *(group.key for group in every)]
+    assert picked.options == {group.key: [o.key for o in group.options] for group in every if len(group.options) > 1}
+    assert picked.llm == {"provider": "codex", "model": "codex-default"}
+    assert "Type all to turn on every feature with all its options." in " ".join(capsys.readouterr().out.split())
+    # Typed with others, each goes in turn: here every feature, then model facts off again.
+    answers(monkeypatch, "all 7", "", "4")
+    assert "benchmarks" not in menu.ask().features
+
+
 def test_the_features_screen_shows_the_time_with_its_two_options(monkeypatch, capsys):
     monkeypatch.setenv("NO_COLOR", "1")
     answers(monkeypatch, "8b", "")  # only the clock

@@ -95,7 +95,7 @@ Models lists your models with `(default)` after the default one. Choose one to u
 
 ## Features the model learns from
 
-Setup lists each feature with its options under it. Type a number to turn a feature on or off. Type a number and a letter for one option. The first three are always on. For them, each prompt goes to Voyage, which works out what it means.
+Setup lists each feature with its options under it. Type a number to turn a feature on or off. Type a number and a letter for one option. Type all to turn on every feature with all its options. The first three are always on. For them, each prompt goes to Voyage, which works out what it means.
 
 | Feature | What it is | Default |
 |---|---|---|
