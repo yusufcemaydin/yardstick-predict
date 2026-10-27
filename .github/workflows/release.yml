@@ -3,6 +3,8 @@ name: Release
 # Pushing a version tag, such as v0.4.0, builds the package and publishes it on PyPI. Nothing else starts this
 # workflow: not pull requests, and not pushes to a branch. CONTRIBUTING.md says how to release, and what to set up
 # on PyPI once. It publishes only when the tests pass on the tagged commit and the built wheel installs and runs.
+# No job uses uv's cache. A cache carries files from one run to the next. One that another run saved could slip
+# something into the package.
 
 on:
   push:
@@ -16,10 +18,12 @@ jobs:
     name: Build the package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false  # the build needs no access to GitHub
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: false  # build from fresh downloads only
       - name: Check that the tag matches the version
         run: |
           version="$(uv version --short)"
@@ -43,12 +47,13 @@ jobs:
     name: Tests on the tagged commit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false  # the tests need no access to GitHub
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           python-version: "3.12"
+          enable-cache: false  # test with fresh downloads only
       - name: Install
         run: uv sync --locked
       - name: Style
@@ -67,7 +72,9 @@ jobs:
         with:
           name: package
           path: dist/
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: false  # install from fresh downloads only
       - name: Install it the way a user would, with nothing else installed
         run: |
           uv tool install dist/*.whl
