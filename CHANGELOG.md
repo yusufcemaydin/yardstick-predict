@@ -4,6 +4,10 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-27
+
+A fix release. The forecast table names each line of a forecast in a column of its own.
+
 ### Fixed
 
 - The forecast table names each line of a forecast in a column of its own, after the effort level: expected, then 25%, median and 75%. The effort level shows once, on the expected line. The 25%, median and 75% lines used to be named in the effort column, where they looked like effort levels.
@@ -303,7 +307,8 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
-[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.2.1...v0.3.0

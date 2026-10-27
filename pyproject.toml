@@ -1,6 +1,6 @@
 [project]
 name = "yardstick-predict"
-version = "0.5.0"
+version = "0.5.1"
 description = "Forecast how long a coding-agent task will take and what it will cost, before it runs."
 readme = "README.md"
 license = "Apache-2.0"
