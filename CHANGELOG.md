@@ -60,6 +60,8 @@ A bare `yardstick-predict` in a terminal opens a home screen with clear choices.
 - When Voyage can't be reached, the message says so once. It used to show an internal status of 0 and say it twice.
 - On Windows, `claude-code install` refuses a Python or yardstick folder whose path has $, `, ", % or ! in it. cmd or Git Bash would read those as more than text when Claude Code runs the hook.
 - Two commands changing the settings at the same time no longer lose one change.
+- Setup told with `--archive` to read a folder of records that isn't there says so at once. Nothing is read or spent. It used to read nothing and then say it found no finished tasks.
+- Update and `refresh` say when a model's folder of records isn't there, as when its records moved or its drive isn't plugged in. The model keeps the tasks it read from there. It reads nothing new there until the records are back. Update used to show nothing new for that folder. With `--json`, the warning is in `notes`.
 
 ## [0.4.0] - 2026-10-23
 

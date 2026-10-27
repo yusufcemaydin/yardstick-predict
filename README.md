@@ -300,8 +300,8 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | Command | What it does |
 |---|---|
 | `yardstick-predict` | In a terminal, the home screen: Estimate, Update, Models and Add New. A program gets one line per predictor. |
-| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express` or `--yes` takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. `--json` answers a program in JSON. `--max-cost USD` keeps it to a spending limit. |
-| `yardstick-predict refresh` | Adds new runs, embeds them and retrains. `--yes` for programs, with `--json` for an answer in JSON. `--max-cost USD` keeps it to a spending limit. |
+| `yardstick-predict create [NAME]` | Creates a predictor. In a terminal it asks for a name first. `--express` or `--yes` takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. A folder that isn't there stops it before anything is read. `--json` answers a program in JSON. `--max-cost USD` keeps it to a spending limit. |
+| `yardstick-predict refresh` | Adds new runs, embeds them and retrains. It says when a folder of records isn't there. The predictor keeps the tasks it read from there. `--yes` for programs, with `--json` for an answer in JSON. `--max-cost USD` keeps it to a spending limit. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each predictor, its features with their coverage, the size of its prepared dataset and how close its forecasts came on your newest tasks. `--json` for programs. |
 | `yardstick-predict list` | Lists your predictors, one line each: features, how many tasks each learned from, when it was last trained and which AI models get forecasts. `--json` for programs. |

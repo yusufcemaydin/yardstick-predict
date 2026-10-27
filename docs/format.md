@@ -166,13 +166,13 @@ Seconds, tokens and dollars are forecast as separate curves. They usually move t
 | `retrain_reason` | `refresh` only. Why it trains the model. `new_work` means new or changed tasks. With nothing new, it's `no_model` when there's no model yet, `unfinished` when training didn't finish last time, `outdated` when a version before the previous release made the model, `previous` when the previous release made it and `damaged` when a file of it is missing or can't be read. `null` when the model is up to date. |
 | `max_cost` | The limit `--max-cost` set, in US dollars. `null` without one. |
 | `spent` | What it spent at list price, counted only under a limit. LLM analysis counts at what each request really cost, from the tokens it used. Embedding counts at the most its texts could cost. `null` without a limit. |
-| `notes` | Plain words about anything that didn't stop it, such as model facts that didn't download or LLM analysis that stopped at the limit. |
+| `notes` | Plain words about anything that didn't stop it, such as model facts that didn't download, LLM analysis that stopped at the limit or a folder of records that isn't there. |
 
 When it can't go on, the answer has an `error` instead of these fields, with a `code` and a `message`. The exit code is 1:
 
 | Code | What it means |
 |---|---|
-| `invalid_request` | A flag or a name can't be used. The message says which. |
+| `invalid_request` | A flag, a name or a folder can't be used, such as a folder `--archive` names that isn't there. The message says which. |
 | `no_predictor` | No predictor exists yet. |
 | `no_default_predictor` | There are several predictors and none is the default. Name one with `--predictor`. |
 | `unknown_predictor` | There's no predictor with that name. Or it was deleted meanwhile. |

@@ -321,6 +321,11 @@ def fail(text: str) -> None:
     _marked(red(mark("fail")), clean(text))
 
 
+def warn(text: str) -> None:
+    """What needs a look, though it stopped nothing, with its mark."""
+    _marked(yellow(mark("warn")), text)
+
+
 def _marked(sign: str, text: str) -> None:
     """Lines with a mark in front, in a styled terminal, broken to fit. The lines after the first line up after it."""
     lead = width(sign) + 1 if styled() else 0

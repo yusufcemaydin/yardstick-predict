@@ -1083,6 +1083,29 @@ def test_update_all_tries_voyage_once_when_it_cant_be_reached(capsys, monkeypatc
     assert len(sent) == embeddings.PATIENT.attempts  # every try was for the first model
 
 
+@pytest.mark.parametrize("width", [80, 45])
+def test_update_says_when_a_folder_of_records_isnt_there(capsys, monkeypatch, quick, ready, records, tmp_path, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    codex = tmp_path / ".codex" / "sessions"
+    codex.mkdir(parents=True)  # a folder of Codex records, read along with Claude Code's
+    assert main(["create", "--express", *quick]) == 0
+    codex.rmdir()  # gone, as when its records move or its drive isn't plugged in
+    warning = cli.no_folder(update.short_path({"path": "~/.codex/sessions"}), ["main"])
+    capsys.readouterr()
+    pressing(monkeypatch, "2", keys.ESC)  # Update with nothing new anywhere, then quit
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert warning in " ".join(plain(out).split()) and "Nothing new since" in out and widest(out) < width
+    # With new work in the other folder, the list of folders says this one isn't there.
+    new_work(records)
+    pressing(monkeypatch, "2", keys.DOWN, keys.ENTER, keys.ESC)  # Update, then Cancel at the question
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert re.search(r"Codex\s+~[/\\]\.codex[/\\]sessions\s*\n\s+the folder isn't there\n", plain(out))
+    assert warning in " ".join(plain(out).split()) and widest(out) < width
+    assert Predictor("main").count_tasks() == 40  # every task read from there stays
+
+
 def test_update_goes_ahead_after_one_question_and_reuses_what_it_read(capsys, monkeypatch, quick, ready, records):
     assert main(["create", "--express", *quick]) == 0
     new_work(records)

@@ -387,6 +387,37 @@ def test_refresh_adds_only_new_tasks(capsys, records, ready):
     assert len(Predictor("main").embedded("prompt")) == 183
 
 
+def test_setup_stops_at_a_folder_of_records_that_isnt_there(capsys, monkeypatch, ready, quick, tmp_path):
+    sent = len(ready.requests)
+    nowhere = tmp_path / "nowhere"
+    code, out = run(capsys, "create", "--yes", "--json", "--archive", f"codex={nowhere}", *quick)
+    message = f"There's no folder at {nowhere}. Nothing was read or spent."
+    assert code == 1 and json.loads(out)["error"] == {"code": "invalid_request", "message": message}
+    assert len(ready.requests) == sent and predictor_names() == []
+    # A person in a terminal is told the same before anything is asked, with every folder that isn't there named.
+    monkeypatch.setattr(cli, "interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("It asked a question first"))
+    assert main(["create", "other", "--archive", f"codex={nowhere}", "--archive", f"codex={tmp_path / 'gone'}"]) == 1
+    said = " ".join(capsys.readouterr().err.split())
+    assert f"There are no folders at {nowhere} and {tmp_path / 'gone'}. Nothing was read or spent." in said
+
+
+def test_a_refresh_says_when_a_folder_of_records_isnt_there_and_keeps_its_tasks(
+    capsys, few, ready, quick, tmp_path, wide
+):
+    from yardstick_predict.screens.update import short_path
+
+    assert run(capsys, "create", "--express", "--archive", f"claude-code={few}", *quick)[0] == 0
+    few.rename(tmp_path / "moved")  # as when the records move, or their drive isn't plugged in
+    warning = cli.no_folder(short_path(Predictor("main").config["archives"][0]), ["main"])
+    code, out = run(capsys, "refresh", "--yes", "--json")
+    answer = json.loads(out)
+    assert code == 0 and warning in answer["notes"] and answer["removed_tasks"] == 0
+    assert Predictor("main").count_tasks() == 40  # every task read from there stays
+    code, out = run(capsys, "refresh", "--yes")
+    assert code == 0 and warning in " ".join(out.split())
+
+
 def test_setup_and_refresh_answer_a_program_in_json(capsys, few, ready, quick):
     # Without --yes, setup says what it would do and what it costs, and does nothing.
     code, out = run(capsys, "create", "--json", "--archive", f"claude-code={few}", *quick)
@@ -1159,12 +1190,12 @@ def test_on_windows_the_folder_is_made_private_once_and_never_stops_a_command(tm
     assert not store.private_on_windows(other, run=missing) and not (other / ".private").exists()
 
 
-def test_predictor_names_that_cant_be_folders_are_refused(capsys):
+def test_predictor_names_that_cant_be_folders_are_refused(capsys, tmp_path):
     from yardstick_predict.store import name_problem
 
     assert name_problem("work") is None
     assert name_problem("work\n") and name_problem("con") and name_problem("lpt1")
-    assert main(["create", "nul", "--yes", "--archive", "codex=/nowhere"]) == 1
+    assert main(["create", "nul", "--yes", "--archive", f"codex={tmp_path}"]) == 1
     assert "Windows keeps the name nul" in capsys.readouterr().err
     with pytest.raises(ValueError):
         Predictor.create("work\n", [], {"model": "voyage-4", "dimensions": 256})
@@ -1174,14 +1205,14 @@ def test_predictor_names_that_cant_be_folders_are_refused(capsys):
 # Setup and refresh -----------------------------------------------------------------------------------------
 
 
-def test_bad_numbers_are_refused_before_anything_is_read(capsys, ready):
+def test_bad_numbers_are_refused_before_anything_is_read(capsys, ready, tmp_path):
     for flags, words in (
         (["--half-life", "-5"], "--half-life is a number of days: 0 or more"),
         (["--half-life", "nan"], "--half-life must be a number"),
         (["--half-life", "inf"], "--half-life must be a number"),
         (["--dropout", "nan"], "--dropout must be a number"),
     ):
-        assert main(["create", "--yes", *flags, "--archive", "codex=/nowhere"]) == 1
+        assert main(["create", "--yes", *flags, "--archive", f"codex={tmp_path}"]) == 1
         assert words in capsys.readouterr().err
     assert ready.requests == [] and predictor_names() == []
 

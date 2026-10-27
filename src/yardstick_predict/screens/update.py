@@ -1,7 +1,8 @@
 """Update: learn from your newest work.
 
-First it says where the new work is and how much there is to read, from file sizes alone. Then it reads
-with a labelled bar, shows every cost and time for each model, and asks once. Cancel or Esc spends nothing
+First it says where the new work is and how much there is to read, from file sizes alone. It says so when a
+folder of records isn't there. Then it reads with a labelled bar, shows every cost and time for each model, and
+asks once. Cancel or Esc spends nothing
 and saves nothing. What it read is kept for the rest of the session, so a second Update reads none of it
 again. `yardstick-predict refresh` in a terminal uses the same summary and question.
 """
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import cli, embeddings, locks, ui
+from ..archives import archive_path
 from ..store import BrokenPredictor, Predictor, predictor_names
 from . import keys, listing, summary
 
@@ -117,7 +119,8 @@ def update(work: list[Work]) -> int:
     from ..pipeline import plan_refresh, scan
 
     since = when(work)
-    # With nothing changed in any archive, nothing is read or listed. The models may still have work to do.
+    # With nothing changed in any archive, nothing is read or listed. The models may still have work to do. A folder
+    # of records that isn't there is said either way: read, it would look like one with nothing new.
     if any(found.files for job in work for found in job.reads):
         unread = where(work, since)
         try:
@@ -127,6 +130,8 @@ def update(work: list[Work]) -> int:
             ui.out()
             ui.note("Stopped. Nothing was spent or saved.")
             return 0
+    else:
+        missing(work)
     key, _ = embeddings.find_key()
     for job in work:
         found = scan(job.predictor, reads=job.reads, readings=readings())
@@ -213,7 +218,9 @@ def where(work: list[Work], since: str) -> list[tuple[dict, dict]]:
     rows, unread = [], []
     for group in groups.values():
         archive, files, chats = group["archive"], group["files"], group["chats"]
-        if not files:
+        if not files and not archive_path(archive).is_dir():
+            facts = "the folder isn't there"
+        elif not files:
             facts = "nothing new"
         else:
             count = len(chats) or len(files)
@@ -234,7 +241,22 @@ def where(work: list[Work], since: str) -> list[tuple[dict, dict]]:
             facts = ui.mark("wait") + facts[-max(room - 1, 1) :]
         fitted.append((title, ui.dim(facts) if title else facts))
     ui.table(fitted, indent=4)
+    missing(work)
     return unread
+
+
+def missing(work: list[Work]) -> None:
+    """Say which folders of records aren't there, each with the models that read from it. Those keep the tasks they
+    read from there, and read nothing new there until the records are back."""
+    gone: dict[str, list[str]] = {}
+    for job in work:
+        for found in job.reads:
+            if not archive_path(found.archive).is_dir():
+                gone.setdefault(short_path(found.archive), []).append(job.predictor.name)
+    if gone:
+        ui.out()
+    for path, names in gone.items():
+        ui.warn(cli.no_folder(path, names))
 
 
 def read(unread: list[tuple[dict, dict]]) -> None:

@@ -354,9 +354,31 @@ def unique_names(archives: list[dict]) -> list[dict]:
     return archives
 
 
+def no_folder(path: str, names: list[str]) -> str:
+    """What to say of a folder of records that isn't there, as when its records moved or its drive isn't plugged
+    in. `names` are the predictors that read from it."""
+    one = len(names) == 1
+    return (
+        f"There's no folder at {path}. {in_words(names)} {'keeps' if one else 'keep'} the tasks "
+        f"{'it' if one else 'they'} read from there. {'It reads' if one else 'They read'} nothing new there until "
+        "the records are back."
+    )
+
+
+def given_archives(given: list[str]) -> list[dict]:
+    """The folders of records named with --archive. One that isn't there stops the command: read, it would look like
+    a folder with no tasks in it."""
+    archives = [parse_archive(spec) for spec in given]
+    missing = list(dict.fromkeys(a["path"] for a in archives if not archive_path(a).is_dir()))
+    if missing:
+        there = "There's no folder at" if len(missing) == 1 else "There are no folders at"
+        raise CommandError("invalid_request", f"{there} {in_words(missing)}. Nothing was read or spent.")
+    return archives
+
+
 def choose_archives(can_ask: bool, given: list[str]) -> list[dict]:
     if given:
-        return [parse_archive(spec) for spec in given]
+        return given_archives(given)
     found = [dict(a) for a in DEFAULT_ARCHIVES if archive_path(a).is_dir()]
     if not can_ask:
         return found
@@ -868,6 +890,7 @@ def _create(args, held, answer: dict) -> int:
     # program that asked for JSON.
     can_ask = interactive() and not args.yes and not getattr(args, "json", False)
     called = getattr(args, "called", "predictor")  # the home screen calls it a model, as every screen does
+    given_archives(args.archive)  # a folder named that isn't there is said before anything is asked
     existing = predictor_names()
     if can_ask:
         ui.out()
@@ -1576,6 +1599,13 @@ def _refresh(args, predictor: Predictor, answer: dict) -> int:
     found = scan(predictor, on_progress=lambda done, total: ui.progress(done, total, "bytes"))
     counts = [f"{source} {count:,}" for source, count in found.per_archive.items() if count]
     ui.ok(f"Found {len(found.new_tasks):,} new tasks" + (f": {ui.join(counts)}" if counts else "."))
+    from .screens.update import short_path
+
+    for archive in predictor.config["archives"]:
+        if not archive_path(archive).is_dir():  # read, it would look like a folder with nothing new
+            text = no_folder(short_path(archive), [predictor.name])
+            ui.warn(text)
+            answer["notes"].append(text)
     if getattr(found, "reader", None) is not None and predictor.config.get("reader") != found.reader:
         # A newer version reads records more accurately. It read them all again, once.
         ui.note(

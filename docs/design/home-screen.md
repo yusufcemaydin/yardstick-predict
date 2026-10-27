@@ -112,7 +112,7 @@ Update opens its own menu. Update all comes first, then each model. With only on
 
 Then, in this order:
 
-1. **Where the new work is, at once.** From file sizes only, with no reading, it shows each archive's folder, how many chats changed and how much that means to read. Or it says "nothing new". When nothing changed, it says "Nothing new since <time>" and goes back without reading.
+1. **Where the new work is, at once.** From file sizes only, with no reading, it shows each archive's folder, how many chats changed and how much that means to read. Or it says "nothing new". When nothing changed, it says "Nothing new since <time>" and goes back without reading. A folder that isn't there says so, as when its records moved or its drive isn't plugged in. A warning names the models that read from it. They keep the tasks they read from there and read nothing new there until the records are back. The warning shows when nothing changed elsewhere too.
 2. **Reading, with a labelled bar.**
    ```
      New work since 12 hours ago
