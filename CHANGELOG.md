@@ -4,6 +4,10 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-28
+
+A fix release. Every message, the help and the docs call a predictor a model, as the home screen does.
+
 ### Added
 
 - The PyPI page links to the guide and the change log.
@@ -315,7 +319,8 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
-[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.3.0...v0.4.0
