@@ -37,6 +37,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/yusufcemaydin/yardstick-predict"
+Documentation = "https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/guide.md"
+Changelog = "https://github.com/yusufcemaydin/yardstick-predict/blob/main/CHANGELOG.md"
 Issues = "https://github.com/yusufcemaydin/yardstick-predict/issues"
 
 [project.scripts]
