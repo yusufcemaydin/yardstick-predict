@@ -45,6 +45,8 @@ uv lock --upgrade-package anthropic --exclude-newer-package anthropic=2026-10-25
 
 The wait covers this project's lock file, not what an install of yardstick-predict gets. To wait the same way when you install it, run `uv tool install --exclude-newer "7 days" yardstick-predict`.
 
+Once a week, Dependabot opens a pull request that moves the libraries named in `pyproject.toml` to their newest releases that are at least 7 days old. It changes only `uv.lock`. It opens another for the steps the workflows use. `.github/dependabot.yml` sets this up.
+
 The automatic tests include a security scan. It checks every locked library against OSV, the public database of known vulnerabilities, on each pull request, each push to main and once a week. Run it yourself with:
 
 ```bash
