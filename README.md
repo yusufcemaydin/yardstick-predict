@@ -77,6 +77,12 @@ Claude Code's status line then shows a forecast for each prompt you send. It cou
 yardstick · 1:12 of ~4 min · ~$1.23
 ```
 
+On a Claude subscription, it shows shares of your weekly limit in place of dollars. First comes what the task has used so far. Then the brackets hold the forecast's time and its share of the week:
+
+```text
+yardstick · 1:12 · 0.0236% (~4 min · ~0.0789%)
+```
+
 Each prompt goes to Voyage to be embedded, with the end of the conversation before it when Context is on. That costs a tiny fraction of a cent each time. `yardstick-predict claude-code remove` turns it off.
 
 ## Use it from a program

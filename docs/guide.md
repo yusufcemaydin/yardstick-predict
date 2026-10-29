@@ -98,6 +98,18 @@ yardstick · 1:12 of ~4 min · ~$1.23
 
 "Took" is the agent's working time, as training counts it: waits for your answers and approvals are left out. When another hook keeps the agent working after it stops, the clock runs on. A background job reporting back continues its task. Scheduled tasks and messages from other sessions are forecast as a program's prompts, as training counts them. Scripted runs, such as `claude -p`, get no forecast, since they show no status line.
 
+### Your weekly limit on a Claude subscription
+
+On a Claude subscription, the line shows shares of your weekly limit in place of dollars. First comes what the task has used so far, with four decimals. Then the brackets hold the forecast: its time and its share of the week.
+
+```text
+yardstick · 1:12 · 0.0236% (~4 min · ~0.0789%)
+```
+
+Claude Code tells the status line how much of the week's limit you've used. It doesn't say what each task used. So yardstick works out how much of the limit a dollar of work uses. It divides the share you've used by what all your Claude Code sessions on this computer spent since the week began, at list prices. A task's share is what it has spent so far times that. The task's spend counts its helper agents too. Nothing is sent anywhere for this. It all comes from Claude Code's records on your computer.
+
+The shares start once a forecast has worked this out. That waits until at least 1% of the week is used. Until then, the brackets show the forecast's time alone. Chats on claude.ai count toward your limit too. They leave no record here. While you use them, the shares come out a little high. With an API key, Claude Code sends no weekly limit. The line then shows dollars.
+
 While it's on, every new prompt you send in Claude Code goes to Voyage to be embedded. So does the end of the conversation before it when Context is on. Each costs a tiny fraction of a cent. Add `--here` to turn it on only for sessions in the current folder. `yardstick-predict claude-code remove` turns it off and puts back the status line it replaced. Both keep a copy of Claude Code's settings file next to it, as it was before.
 
 If your Voyage key is only in the `VOYAGE_API_KEY` environment variable, Claude Code may not see it. Install says so and offers to keep the key in your computer's password store.
