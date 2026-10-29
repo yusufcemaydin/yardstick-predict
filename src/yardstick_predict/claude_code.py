@@ -526,6 +526,21 @@ def _take(session: str, prompt_at: float, path: Path, older: list[Path]) -> None
     words = _clean(verdict.get("prompt")) or prompt
     line = {"until": _str(verdict.get("uuid")) or None, "start": verdict.get("start"), "cwd": _str(sent.get("cwd"))}
     _forecast(session, prompt_at, words, verdict["origin"], transcript=transcript, **line)
+    _calibrate(transcript)
+
+
+def _calibrate(transcript: str | None) -> None:
+    """Work out again how much of the weekly limit a dollar uses, once the forecast is saved, so it never waits.
+
+    The session's record sits in the folder of each project's records, which holds every session's.
+    """
+    try:
+        from . import weekly
+
+        records = Path(transcript).parent.parent if transcript else Path("~/.claude/projects").expanduser()
+        weekly.calibrate(records)
+    except Exception:
+        pass  # until a later prompt works it out, the brackets show the forecast's time alone
 
 
 def _verdict(prompt: str, prompt_id: str | None, transcript: str | None, sent_at: float, offset, give_up):
@@ -979,7 +994,10 @@ def status() -> int:
         event = _event()
         event = event if isinstance(event, dict) else {}
         model, effort = _named(event.get("model"), "id"), _named(event.get("effort"), "level")
-        line = status_line(_clean(event.get("session_id")), model, time.time(), effort, _record(event))
+        from . import weekly
+
+        week = weekly.note(event)
+        line = status_line(_clean(event.get("session_id")), model, time.time(), effort, _record(event), week)
     except Exception:
         pass
     if old_command():
@@ -1026,18 +1044,23 @@ def _record(event: dict) -> str | None:
     return path if isinstance(path, str) and path else None
 
 
-def status_line(session: str, model: str, now: float, effort: str = "", transcript: str | None = None) -> str:
+def status_line(
+    session: str, model: str, now: float, effort: str = "", transcript: str | None = None, week: dict | None = None
+) -> str:
     """One short line: the forecast for the model you're on, and how long the task has taken so far.
+
+    `week` is the weekly limit's reading, which Claude Code sends on a Claude subscription. With it, the line
+    shows the task's share of the weekly limit and the forecast's share in place of dollars.
 
     Anything it can't make sense of, such as a damaged file, gives the plain label rather than an error.
     """
     try:
-        return _status_line(session, model, now, effort, transcript)
+        return _status_line(session, model, now, effort, transcript, week)
     except Exception:
         return _dim("yardstick")
 
 
-def _status_line(session: str, model: str, now: float, effort: str, transcript: str | None) -> str:
+def _status_line(session: str, model: str, now: float, effort: str, transcript: str | None, week: dict | None) -> str:
     label = _dim("yardstick")
     if not session:
         return label
@@ -1057,9 +1080,18 @@ def _status_line(session: str, model: str, now: float, effort: str, transcript: 
     else:
         seconds = (now if done is None else done) - started - waited
     took = _clock(seconds)
+    spent = ""  # on a Claude subscription, the task's share of the weekly limit so far
+    per_usd = None
+    if week is not None:
+        from . import weekly
+
+        per_usd = weekly.rate()
+        so_far = weekly.task_spent(session, state, record) if per_usd is not None else None
+        if so_far is not None and per_usd is not None:
+            spent = f" {_dim('·')} {weekly.share(so_far, per_usd)}"
     found = _read(_forecast_path(session, started))
     if found.get("prompt_at") != started:
-        return f"{label} {_dim('·')} took {took}" if done is not None else f"{label} {_dim('· forecasting…')}"
+        return f"{label} {_dim('·')} took {took}{spent}" if done is not None else f"{label} {_dim('· forecasting…')}"
     if found.get("error"):
         from . import ui
 
@@ -1070,8 +1102,13 @@ def _status_line(session: str, model: str, now: float, effort: str, transcript: 
     expected = _number(pick.get("seconds")) if pick else None
     if expected is None:
         missing = _dim(f"· no forecast for {(name or 'this AI model').strip()} yet")
-        return f"{label} {_dim('·')} took {took} {missing}" if done is not None else f"{label} {missing}"
+        return f"{label} {_dim('·')} took {took}{spent} {missing}" if done is not None else f"{label} {missing}"
     usd = _number(pick.get("usd")) if pick else None
+    if week is not None:
+        # On a subscription, the forecast in brackets is its time and its share of the weekly limit.
+        part = f" {_dim('·')} ~{weekly.share(usd, per_usd)}" if usd is not None and per_usd is not None else ""
+        forecast = f" {_dim('(')}~{_minutes(expected)}{part}{_dim(')')}"
+        return f"{label} {_dim('·')} {'took ' if done is not None else ''}{took}{spent}{forecast}"
     cost = f" {_dim('·')} ~${usd:.2f}" if usd is not None else ""
     if done is not None:
         return f"{label} {_dim('·')} took {took} {_dim('· forecast')} ~{_minutes(expected)}{cost}"

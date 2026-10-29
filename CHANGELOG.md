@@ -13,6 +13,14 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 - LLM analysis reads each different text once. Tasks with the same prompt and the same conversation before it share the answer. You pay once for it.
 
+## [0.6.0] - 2026-10-29
+
+On a Claude subscription, the Claude Code status line shows each task's share of your weekly limit, in place of dollars.
+
+### Added
+
+- On a Claude subscription, the Claude Code status line shows shares of your weekly limit in place of dollars. First comes what the task has used so far, with four decimals. Then the brackets hold the forecast's time and its share of the week: `yardstick · 1:12 · 0.0236% (~4 min · ~0.0789%)`. Claude Code reports how much of the week you've used. yardstick divides that by what your Claude Code sessions on this computer spent this week at list prices. That says how much of the limit a dollar of work uses. Nothing is sent anywhere for it. Chats on claude.ai count toward the limit too. They leave no record here. While you use them, the shares come out a little high. With an API key, the line shows dollars as before.
+
 ## [0.5.2] - 2026-10-28
 
 A fix release. Every message, the help and the docs call a predictor a model, as the home screen does.
@@ -328,7 +336,8 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
-[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.4.0...v0.5.0

@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -969,3 +970,255 @@ def test_a_forecast_error_in_the_status_line_never_holds_a_code_that_acts():
 
     error = RequestError("embedding_failed", "Voyage said 500: \x1b]0;a title\x07down for now")
     assert cc._no_forecast(error, None) == "Voyage said 500: down for now"
+
+
+# The weekly limit ---------------------------------------------------------------------------------------
+
+NOW = 1_780_000_000.0  # in the past, so tidying never takes the files it just saved for a week old
+RESETS = NOW + 2 * 86400  # the week began five days ago
+
+
+def week_reading(percent: float = 30.0, resets: float = RESETS) -> dict:
+    """What Claude Code sends the status line on a Claude subscription."""
+    return {"rate_limits": {"seven_day": {"used_percentage": percent, "resets_at": resets}}}
+
+
+BIG = usage(new_input=100_000, read=0, output=20_000)
+"""A reply's tokens: enough that a week of a few replies is worth dividing by."""
+
+
+def one_call() -> float:
+    """What one reply with BIG tokens costs on claude-opus-5-5, at list prices."""
+    from yardstick_predict import prices
+
+    return prices.call_cost("claude-opus-5-5", 100_000, 0, 0, 0, 20_000)
+
+
+def a_week_of_work(root: Path, monkeypatch) -> tuple[Path, float]:
+    """Another session's work this week and last, then a task in session s1. Returns s1's record and its prompt time.
+
+    This week holds six replies: three in the other session, one before the task and two in it. One of the
+    task's replies is written over two lines, as Claude Code does, and counts once.
+    """
+    other = ClaudeSession(root, "e1", NOW - 6 * 86400, project="other")
+    other.prompt("Last week's work")
+    other.reply(5, calls_usage=BIG)  # before the week began
+    other.clock = NOW - 86400
+    other.prompt("This week's work")
+    for _ in range(3):
+        other.reply(5, calls_usage=BIG)
+    other.save(mtime=NOW)
+    session = ClaudeSession(root, "s1", NOW - 3600)
+    session.prompt("Earlier")
+    session.reply(5, calls_usage=BIG)
+    record = session.save(mtime=NOW)
+    monkeypatch.setattr(cc, "time", Clock(NOW - 600))
+    monkeypatch.setattr(cc, "_start_worker", lambda session: None)
+    send(monkeypatch, prompt_event("Add a login page", transcript_path=str(record)))
+    session.clock = NOW - 600
+    session.prompt("Add a login page")
+    session.reply(10, calls_usage=BIG, repeat=2)
+    session.reply(10, calls_usage=BIG)
+    session.save(mtime=NOW)
+    return record, state()["prompt_at"]
+
+
+def test_on_a_subscription_the_status_line_shows_shares_of_the_weekly_limit_in_place_of_dollars(tmp_path, monkeypatch):
+    from yardstick_predict import weekly
+
+    record, started = a_week_of_work(tmp_path, monkeypatch)
+    forecast = {"model": "claude-opus-5-5", "effort": "high", "seconds": 240.0, "tokens": 9, "usd": one_call()}
+    cc._forecast_path("s1", started).write_text(json.dumps({"prompt_at": started, "forecasts": [forecast]}))
+    week = weekly.note(week_reading())
+    weekly.calibrate(tmp_path, now=NOW)
+    # 30% of the week went on six replies, so each reply is 5% of it. The task's two replies are 10%.
+    assert weekly.rate() == pytest.approx(5 / one_call())
+    line = plain(cc.status_line("s1", "claude-opus-5-5", started + 72, "high", str(record), week))
+    assert line == "yardstick · 1:12 · 10.0000% (~4 min · ~5.0000%)"
+
+    cc.time.now = started + 30  # the agent stops after its last reply
+    send(monkeypatch, {"session_id": "s1", "hook_event_name": "Stop"})
+    done = plain(cc.status_line("s1", "claude-opus-5-5", started + 999, "high", str(record), week))
+    assert done == "yardstick · took 0:30 · 10.0000% (~4 min · ~5.0000%)"
+
+    # With an API key, Claude Code sends no reading, and the line shows dollars as before.
+    no_week = plain(cc.status_line("s1", "claude-opus-5-5", started + 999, "high", str(record)))
+    assert no_week.endswith(f"· forecast ~4 min · ~${one_call():.2f}")
+
+
+def test_before_the_share_of_a_dollar_is_known_the_brackets_show_the_time_alone(tmp_path, monkeypatch):
+    from yardstick_predict import weekly
+
+    record, started = a_week_of_work(tmp_path, monkeypatch)
+    forecast = {"model": "claude-opus-5-5", "effort": "high", "seconds": 240.0, "tokens": 9, "usd": 1.5}
+    cc._forecast_path("s1", started).write_text(json.dumps({"prompt_at": started, "forecasts": [forecast]}))
+    week = weekly.note(week_reading())
+    line = plain(cc.status_line("s1", "claude-opus-5-5", started + 72, "high", str(record), week))
+    assert line == "yardstick · 1:12 (~4 min)"  # no dollars on a subscription
+
+
+def test_the_status_line_keeps_the_weekly_reading_claude_code_sends(monkeypatch, capsys):
+    from yardstick_predict import weekly
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "s1", **week_reading(12.5)})))
+    assert cc.status() == 0
+    assert json.loads((cc.folder() / weekly.READING).read_text()) == {"percent": 12.5, "resets_at": RESETS}
+    for odd in ({}, {"rate_limits": None}, {"rate_limits": {"seven_day": {"used_percentage": "a lot"}}}):
+        assert weekly.note(odd) is None
+
+
+def test_a_task_share_counts_its_helpers_work(tmp_path, monkeypatch):
+    from yardstick_predict import prices, weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 600)
+    record = session.save(mtime=NOW)
+    monkeypatch.setattr(cc, "time", Clock(NOW - 600))
+    monkeypatch.setattr(cc, "_start_worker", lambda session: None)
+    send(monkeypatch, prompt_event("Look into it", transcript_path=str(record)))
+    line = session.prompt("Look into it")
+    session.reply(10, tool="Agent", calls_usage=BIG)
+    session.helper(line["promptId"], calls=2)
+    session.save(mtime=NOW)
+    helper = prices.call_cost("claude-haiku-5-5", 10, 0, 0, 5_000, 50)
+    assert weekly.task_spent("s1", state()) == pytest.approx(one_call() + 2 * helper)
+
+
+def test_a_task_share_follows_its_record_when_claude_code_moves_it(tmp_path, monkeypatch):
+    from yardstick_predict import weekly
+
+    record, _ = a_week_of_work(tmp_path, monkeypatch)
+    # The session moved into a worktree. Claude Code moved its record and its helpers to that folder's records.
+    moved = tmp_path / "-work-demo-worktree" / record.name
+    moved.parent.mkdir()
+    record.rename(moved)
+    assert weekly.task_spent("s1", state()) == 0.0  # where the record was at the prompt, there's nothing now
+    assert weekly.task_spent("s1", state(), str(moved)) == pytest.approx(2 * one_call())
+    assert weekly.task_spent("s1", state(), str(moved)) == pytest.approx(2 * one_call())  # each reply counts once
+
+
+def test_a_helper_an_earlier_task_started_counts_toward_that_task_as_in_training(tmp_path, monkeypatch):
+    from yardstick_predict import prices, weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 1200)
+    first = session.prompt("Look into the logs")
+    session.reply(10, tool="Agent", calls_usage=BIG)
+    old_helper = session.helper(first["promptId"], calls=1)
+    session.reply(10, text="It's looking.", calls_usage=BIG)
+    record = session.save(mtime=NOW)
+    monkeypatch.setattr(cc, "time", Clock(NOW - 600))
+    monkeypatch.setattr(cc, "_start_worker", lambda session: None)
+    send(monkeypatch, prompt_event("Add a login page", transcript_path=str(record)))
+    session.clock = NOW - 600
+    second = session.prompt("Add a login page")
+    session.reply(10, tool="Agent", calls_usage=BIG)
+    session.helper_more(old_helper, None, calls=2)  # the first task's helper is still at work
+    session.helper(second["promptId"], calls=1)  # this task's own helper
+    session.reply(10, text="Done.", calls_usage=BIG)
+    session.save(mtime=NOW)
+    helper = prices.call_cost("claude-haiku-5-5", 10, 0, 0, 5_000, 50)
+    assert weekly.task_spent("s1", state()) == pytest.approx(2 * one_call() + helper)
+    archive = {"name": "c", "format": "claude-code", "path": str(tmp_path)}
+    trained = sorted(read_archive(archive, now=2e9), key=lambda task: task.started_at)
+    assert trained[-1].usd == pytest.approx(2 * one_call() + helper)  # training counts it the same way
+
+
+def test_moving_a_sessions_records_never_counts_its_replies_twice(tmp_path):
+    from yardstick_predict import weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 3600)
+    first = session.prompt("Fix it")
+    for _ in range(2500):  # many replies: none of them may count again
+        session.reply(1)
+    session.helper(first["promptId"], calls=3)
+    record = session.save(mtime=NOW)
+    total = weekly.spent_since(tmp_path, NOW - 86400, NOW)
+    assert total > 0
+    # The session moved into a worktree. Claude Code moved its record and its helpers to that folder's records.
+    moved = tmp_path / "-work-demo-worktree"
+    moved.mkdir()
+    record.rename(moved / record.name)
+    record.with_suffix("").rename(moved / "s1")
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(total)
+    shutil.copy(moved / record.name, record)  # a copy left in both folders counts once too
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(total)
+
+
+def test_a_resumed_sessions_copy_of_the_conversation_counts_once(tmp_path):
+    from yardstick_predict import weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 3600)
+    session.prompt("Fix it")
+    for _ in range(2):
+        session.reply(5, calls_usage=BIG)
+    session.save(mtime=NOW)
+    # Resuming it starts a new session, whose record begins with a copy of the conversation so far.
+    resumed = ClaudeSession(tmp_path, "s2", session.clock)
+    resumed.lines = [{**line, "sessionId": "s2"} for line in session.lines]
+    resumed.prompt("And test it")
+    resumed.reply(5, calls_usage=BIG)
+    resumed.save(mtime=NOW)
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(3 * one_call())
+
+
+def test_a_record_written_again_from_the_start_is_counted_afresh(tmp_path):
+    from yardstick_predict import weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 3600)
+    session.prompt("Fix it")
+    for _ in range(3):
+        session.reply(5, calls_usage=BIG)
+    session.save(mtime=NOW)
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(3 * one_call())
+    session.lines = session.lines[:-1]
+    session.save(mtime=NOW)
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(2 * one_call())
+
+
+def test_the_week_spend_reads_only_what_was_added_and_counts_each_reply_once(tmp_path):
+    from yardstick_predict import weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 3600)
+    session.prompt("Fix it")
+    session.reply(5, calls_usage=BIG)
+    session.save(mtime=NOW)
+    since = NOW - 86400
+    assert weekly.spent_since(tmp_path, since, NOW) == pytest.approx(one_call())
+    session.reply(5, calls_usage=BIG, repeat=2)
+    lines = session.lines
+    session.lines = lines[:-1]  # Claude Code has written the reply's first line only
+    session.save(mtime=NOW)
+    assert weekly.spent_since(tmp_path, since, NOW) == pytest.approx(2 * one_call())
+    session.lines = lines
+    session.save(mtime=NOW)
+    assert weekly.spent_since(tmp_path, since, NOW) == pytest.approx(2 * one_call())  # its second line adds nothing
+    assert weekly.spent_since(tmp_path, NOW - 60, NOW) == 0.0
+
+
+def test_the_share_of_a_dollar_waits_for_a_reading_it_can_divide(tmp_path, monkeypatch):
+    from yardstick_predict import weekly
+
+    a_week_of_work(tmp_path, monkeypatch)
+    weekly.note(week_reading(0.5))  # too little of the week used: the reading has one decimal
+    weekly.calibrate(tmp_path, now=NOW)
+    assert weekly.rate() is None
+    weekly.note(week_reading(30.0, resets=NOW - 1))  # the week is over
+    weekly.calibrate(tmp_path, now=NOW)
+    assert weekly.rate() is None
+    weekly.note(week_reading(30.0))
+    weekly.calibrate(tmp_path, now=NOW)
+    first = weekly.rate()
+    weekly.note(week_reading(60.0))
+    weekly.calibrate(tmp_path, now=NOW + 60)  # worked out a minute ago
+    assert weekly.rate() == first
+    weekly.calibrate(tmp_path, now=NOW + weekly.CALIBRATE_SECONDS)
+    assert weekly.rate() == pytest.approx(2 * first)
+
+
+def test_the_background_job_works_out_the_share_of_a_dollar_after_the_forecast(tmp_path, monkeypatch):
+    from yardstick_predict import weekly
+
+    record, _ = a_week_of_work(tmp_path, monkeypatch)
+    worked: list[Path] = []
+    monkeypatch.setattr(weekly, "calibrate", lambda records: worked.append(records))
+    cc._calibrate(str(record))
+    assert worked == [tmp_path]
