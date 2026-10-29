@@ -256,19 +256,20 @@ def text(name: str, info: TaskInfo) -> str:
     """The text a text feature embeds. Empty when the task has none.
 
     The prompt is cut the way the records are read, without spaces at its ends. So a prompt sent for a
-    forecast is the same text as the task it becomes in training, and the cache knows its vector.
+    forecast is the same text as the task it becomes in training. The cache knows its vector. Keys and
+    passwords are hidden before each cut. A key cut in two would no longer look like one.
     """
+    hide = privacy.hide_secrets
     if name == "prompt":
-        return info.prompt.strip()[:TEXT_CHARS].strip()
+        return hide(info.prompt.strip())[:TEXT_CHARS].strip()
     if name == "context":
-        # Keys are hidden before the cut. A key cut in two at its start would no longer look like one.
-        return privacy.hide_secrets(info.context)[-CONTEXT_CHARS:]
+        return hide(info.context)[-CONTEXT_CHARS:]
     if name == "skills":
         return skills_text(info.skills)
     if name == "llm":
-        return str(info.llm.get("description") or "")[:TEXT_CHARS]
+        return hide(str(info.llm.get("description") or ""))[:TEXT_CHARS]
     value = _CUSTOM[name][1](info)
-    return str(value)[:TEXT_CHARS] if value else ""
+    return hide(str(value))[:TEXT_CHARS] if value else ""
 
 
 def number(value: object) -> float | None:

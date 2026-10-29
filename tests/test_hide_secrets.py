@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from builders import ClaudeSession
 from conftest import KEY
+from test_archives import START, read_claude
 
-from yardstick_predict import embeddings, features, llm
+from yardstick_predict import embeddings, features, forecast, llm
+from yardstick_predict.archives import TEXT_CHARS
 from yardstick_predict.features import TaskInfo
 from yardstick_predict.privacy import HIDDEN, hide_secrets
 
@@ -48,6 +51,24 @@ def test_a_password_given_to_a_name_or_in_a_web_address_is_hidden(text, hidden):
 
 
 @pytest.mark.parametrize(
+    ("text", "hidden"),
+    [
+        ('{"password": "correct horse battery staple"}', f'{{"password": "{HIDDEN}"}}'),
+        ('password="abc def ghi"', f'password="{HIDDEN}"'),
+        ("token: 'a b'", f"token: '{HIDDEN}'"),
+    ],
+)
+def test_a_password_in_quotes_is_hidden_whole(text, hidden):
+    assert hide_secrets(text) == hidden
+    assert hide_secrets(hidden) == hidden
+
+
+@pytest.mark.parametrize("secret", [GOOGLE, AWS, VOYAGE, GITHUB])
+def test_the_start_of_a_key_at_the_very_end_of_a_text_is_hidden(secret):
+    assert hide_secrets("Use " + secret[:-3]) == "Use " + HIDDEN  # as when a cut to length fell inside the key
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "Add a login page with tests",
@@ -75,6 +96,28 @@ def test_voyage_gets_the_text_with_its_keys_hidden_and_the_cache_knows_the_text(
     assert len(list(embeddings.embed([text], "voyage-4", KEY))) == 1
     assert [sent for body in voyage.requests for sent in body["input"]] == [f"Deploy with {HIDDEN} today"]
     assert list(embeddings.cached("voyage-4", [text])) == [text]  # so it's never sent or paid for again
+
+
+LONG_PROMPT = "a " * ((TEXT_CHARS - 20) // 2) + GOOGLE + " and more"
+"""A prompt whose cut to TEXT_CHARS falls inside a key. The cut alone would keep most of the key."""
+
+
+def test_a_key_cut_by_the_prompt_limit_is_hidden_when_records_are_read(tmp_path):
+    assert GOOGLE[:20] in LONG_PROMPT[:TEXT_CHARS] and GOOGLE not in LONG_PROMPT[:TEXT_CHARS]
+    session = ClaudeSession(tmp_path, "s1", START)
+    session.prompt(LONG_PROMPT)
+    session.reply(5)
+    session.save(mtime=START)
+    [task] = read_claude(tmp_path).values()
+    assert "AIza" not in task.prompt and task.prompt.endswith(f"{HIDDEN} and more")
+
+
+def test_a_key_cut_by_the_prompt_limit_is_hidden_in_a_forecast_request_and_its_text():
+    request = {"version": 1, "tasks": [{"id": "t1", "prompt": LONG_PROMPT, "models": ["claude-opus-5-5"]}]}
+    [task], _, _ = forecast.parse(request)
+    assert "AIza" not in task.prompt and task.prompt.endswith(f"{HIDDEN} and more")
+    text = features.text("prompt", TaskInfo(prompt=LONG_PROMPT, model="claude-opus-5-5"))
+    assert text == task.prompt  # the same text training keeps. So the cache knows its vector.
 
 
 def test_a_key_cut_in_two_by_the_context_limit_is_still_hidden():

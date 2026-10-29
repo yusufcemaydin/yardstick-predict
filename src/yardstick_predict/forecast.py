@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import embeddings, features, model_types, pipeline, prices
+from . import embeddings, features, model_types, pipeline, prices, privacy
 from .archives import TEXT_CHARS, Task
 from .history import Past
 from .store import Predictor
@@ -89,8 +89,9 @@ def parse(data: object) -> tuple[list[TaskRequest], bool, str | None]:
     """Check a request and read its tasks. Raises RequestError with a plain message when it's wrong.
 
     It checks what the request schema checks. A field that may be left out may also be null, which means
-    the same. Each prompt and context is prepared as training prepares a task's: the prompt without the
-    spaces at its ends, cut to its first TEXT_CHARS characters, and the context's last TEXT_CHARS.
+    the same. Each prompt and context is prepared as training prepares a task's. The prompt has its keys and
+    passwords hidden and loses the spaces at its ends. Then it's cut to its first TEXT_CHARS characters. The
+    context keeps its last TEXT_CHARS.
     """
 
     def bad(message: str) -> RequestError:
@@ -146,7 +147,7 @@ def parse(data: object) -> tuple[list[TaskRequest], bool, str | None]:
         found.append(
             TaskRequest(
                 id=task_id,
-                prompt=prompt.strip()[:TEXT_CHARS],
+                prompt=privacy.hide_secrets(prompt.strip())[:TEXT_CHARS],
                 models=list(dict.fromkeys(models)),  # a model named twice is forecast once
                 context=(task.get("context") or "")[-TEXT_CHARS:].strip(),
                 skills=list(skills),

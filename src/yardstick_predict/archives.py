@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from . import prices
+from . import prices, privacy
 
 FORMATS = ("claude-code", "codex")
 DEFAULT_ARCHIVES = (
@@ -1024,7 +1024,7 @@ def _read_claude_family(
                 started_at=own.start,
                 model=own.model,
                 effort=own.effort or "default",
-                prompt=(line.start or "").strip()[:TEXT_CHARS],
+                prompt=privacy.hide_secrets((line.start or "").strip())[:TEXT_CHARS],
                 context=contexts[turn.index],
                 context_tokens=own.first_input or 0,
                 seconds=max(sum(seconds for seconds, _ in worked), 0.5),
@@ -1347,7 +1347,7 @@ def _codex_task(turn: _CodexTurn, payload: dict, event: str, meta: dict, path: P
         started_at=turn.started_at,
         model=turn.model,
         effort=str(turn.effort or "default"),
-        prompt="\n\n".join(turn.prompt).strip()[:TEXT_CHARS],
+        prompt=privacy.hide_secrets("\n\n".join(turn.prompt).strip())[:TEXT_CHARS],
         context=turn.context,
         context_tokens=turn.first_input or 0,
         seconds=max(seconds, 0.5),

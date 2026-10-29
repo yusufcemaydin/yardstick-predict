@@ -33,6 +33,8 @@ _SHAPES = re.compile(
             _START + r"xox[abposr]-[A-Za-z0-9-]{10,}",  # Slack
             _START + r"[rsp]k_(?:live|test)_[A-Za-z0-9]{16,}",  # Stripe
             _START + r"eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}",  # a signed web token
+            # The start of a key at the very end of a text, as when a cut to length fell inside it
+            _START + r"(?:sk-|pa-|gh[pousr]_|github_pat_|xox[abposr]-|[rsp]k_(?:live|test)_|AIza|AKIA|ASIA)[\w-]{4,}\Z",
         ]
     ),
     re.DOTALL,
@@ -46,10 +48,20 @@ _BEARER = re.compile(r"(?i)\b(bearer\s+)[\w.~+/-]{16,}=*")
 
 _NAMED = re.compile(
     r"(?i)(\b[\w-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)[\w-]*"
-    r"[\"']?\s*[:=]\s*[\"']?)(?!\[hidden\])([^\s\"'`,;)\]}]{6,})"
+    r"[\"']?\s*[:=]\s*)"
+    r"(?:\"(?!\[hidden\]\")[^\"\n]+\"|'(?!\[hidden\]')[^'\n]+'|(?!\[hidden\])[^\s\"'`,;)\]}]{6,})"
 )
-"""A value of six characters or more given to a name that says it's secret, such as DB_PASSWORD=... or "api_key":
-"...". The name stays. So the text still reads the same way."""
+"""A value given to a name that says it's secret, such as DB_PASSWORD=... or "api_key": "...". A value in quotes is
+hidden whole, spaces and all. One without quotes is hidden up to its first space, when it has six characters or
+more. The name stays. So the text still reads the same way."""
+
+
+def _hide_value(found: re.Match) -> str:
+    """The name and what comes before the value as they were, then the value hidden, in its quotes if it had any."""
+    name = found.group(1)
+    value = found.group(0)[len(name) :]
+    quote = value[0] if value[0] in "\"'" else ""
+    return name + quote + HIDDEN + quote
 
 
 def hide_secrets(text: str) -> str:
@@ -62,4 +74,4 @@ def hide_secrets(text: str) -> str:
     text = _SHAPES.sub(HIDDEN, text)
     text = _IN_ADDRESS.sub(HIDDEN, text)
     text = _BEARER.sub(lambda found: found.group(1) + HIDDEN, text)
-    return _NAMED.sub(lambda found: found.group(1) + HIDDEN, text)
+    return _NAMED.sub(_hide_value, text)

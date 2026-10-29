@@ -10,7 +10,7 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ### Security
 
-- Keys and passwords in your prompts are hidden before they're sent. Each part of a text shaped like a key, token or password becomes `[hidden]`. That holds for the prompt and for the end of the conversation before it. It holds for Voyage and, with LLM analysis on, for the AI model that reads them. It covers keys from AI and cloud services, tokens from GitHub, Slack and Stripe, private keys, web tokens, passwords in web addresses and a value given to a name such as `password` or `api_key`. Texts embedded before keep their vectors. Nothing is paid for again.
+- Keys and passwords in your prompts are hidden before they're sent. Each part of a text shaped like a key, token or password becomes `[hidden]`. That holds for the prompt and for the end of the conversation before it. It holds for Voyage and, with LLM analysis on, for the AI model that reads them. It covers keys from AI and cloud services, tokens from GitHub, Slack and Stripe, private keys, web tokens, passwords in web addresses and a value given to a name such as `password` or `api_key`. A value in quotes is hidden whole. Keys are hidden before a text is cut to length. So a key the cut splits in two is hidden too. Tasks read from your records from now on keep their prompts with keys hidden. Texts embedded before keep their vectors. Nothing is paid for again.
 
 ## [0.6.0] - 2026-10-29
 
