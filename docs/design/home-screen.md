@@ -121,7 +121,7 @@ Then, in this order:
        Codex        ~/.codex/sessions
                     nothing new
 
-     Free. Your chats never leave this computer. Esc stops it.
+     Reading is free and happens on this computer. Esc stops it.
      Reading  ━━━━━━━━━━──────  2.4 GB / 6.2 GB · about 1 min left
    ```
 3. **Every cost and time, then one question.** A Voyage key is asked for first, only when texts go to Voyage. The costs keep to a spending limit given with `refresh --max-cost`.

@@ -35,7 +35,7 @@ The numbers above are an example. Yours come from your own history.
 
 - **Nothing to label.** Claude Code and Codex already keep a record of every run. yardstick-predict learns from those.
 - **It checks itself first.** It replays your newest tasks as if they hadn't happened yet. Programs get forecasts only for the AI models it forecast well.
-- **It runs on your computer.** Only the text you choose leaves it. Your prompts go to Voyage. So does the end of the conversation before each one, as the Context feature is on by default. With LLM analysis on, both also go to the AI model you pick.
+- **Your prompts go to Voyage.** So does the end of the conversation before each one, as the Context feature is on by default. Voyage turns them into numbers that capture what they mean. With LLM analysis on, both also go to the AI model you pick. Before anything is sent, text shaped like a key, token or password is replaced with `[hidden]`. Training and forecasts run on your computer.
 - **It shows the cost before it spends anything.**
 - **Programs get JSON** in a fixed, versioned format.
 

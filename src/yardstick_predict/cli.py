@@ -832,8 +832,8 @@ def cmd_home(args) -> int:
     if not names:
         ui.out(ui.bold("yardstick-predict"))
         ui.out("Forecast how long a coding-agent task will take and what it will cost.")
-        ui.out(ui.dim("It learns from your own past Claude Code and Codex runs. Nothing leaves your computer except"))
-        ui.out(ui.dim("the text you choose to embed, such as your prompts, and that goes only to Voyage."))
+        ui.out(ui.dim("It learns from your own past Claude Code and Codex runs. It sends your prompts to"))
+        ui.out(ui.dim("Voyage, which turns them into numbers. Keys and passwords in them are hidden first."))
         ui.out()
         ui.out("No model yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express")
         return 1

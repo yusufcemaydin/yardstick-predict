@@ -4,6 +4,14 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+### Fixed
+
+- The front page, the guide, the Update screen and what the command says when run on its own no longer say that only the text you choose leaves your computer. The Update screen no longer says your chats never do. They all say plainly that your prompts go to Voyage.
+
+### Security
+
+- Keys and passwords in your prompts are hidden before they're sent. Each part of a text shaped like a key, token or password becomes `[hidden]`. That holds for the prompt and for the end of the conversation before it. It holds for Voyage and, with LLM analysis on, for the AI model that reads them. It covers keys from AI and cloud services, tokens from GitHub, Slack and Stripe, private keys, web tokens, passwords in web addresses and a value given to a name such as `password` or `api_key`. Texts embedded before keep their vectors. Nothing is paid for again.
+
 ## [0.6.0] - 2026-10-29
 
 On a Claude subscription, the Claude Code status line shows each task's share of your weekly limit, in place of dollars.

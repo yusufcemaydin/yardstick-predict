@@ -27,7 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import prices
+from . import prices, privacy
 
 KINDS = (
     "question",
@@ -329,11 +329,13 @@ def schema(fields: list[str]) -> dict:
 
 
 def _message(asks: list[Ask]) -> str:
+    """What the AI model reads of each task. Keys and passwords are hidden before the text is cut to length."""
     blocks = []
     for ask in asks:
-        block = [f"Task {ask.id}", "Prompt:", "<<<", ask.prompt[:PROMPT_CHARS], ">>>"]
-        if ask.context.strip():
-            block += ["The end of the conversation before it:", "<<<", ask.context[-CONTEXT_CHARS:], ">>>"]
+        prompt, context = privacy.hide_secrets(ask.prompt), privacy.hide_secrets(ask.context)
+        block = [f"Task {ask.id}", "Prompt:", "<<<", prompt[:PROMPT_CHARS], ">>>"]
+        if context.strip():
+            block += ["The end of the conversation before it:", "<<<", context[-CONTEXT_CHARS:], ">>>"]
         blocks.append("\n".join(block))
     return "\n\n".join(blocks)
 

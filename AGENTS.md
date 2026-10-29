@@ -39,6 +39,7 @@ These rules cover everything a person reads: screens, messages, docs, the change
 
 - Never put an email address, a person's name or anything from someone's own records in the repository. That includes numbers worked out from their records. `tests/test_privacy.py` checks for some of this.
 - Never write a real key or token into a file. Voyage's key lives in `VOYAGE_API_KEY` or the computer's password store.
+- Text from someone's records goes to Voyage or an AI model only through `privacy.hide_secrets`. Hide it before you cut it to length.
 
 ## Commits and pull requests
 

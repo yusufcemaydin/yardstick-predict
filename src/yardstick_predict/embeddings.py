@@ -5,6 +5,8 @@ An embedding is a list of numbers that captures what a text means. Similar texts
 Your Voyage key stays on your computer. It is read from the VOYAGE_API_KEY environment variable or
 from your computer's password store, and it is sent only to Voyage.
 
+Before a text is sent, each part of it shaped like a key, token or password is replaced with [hidden].
+
 Every vector Voyage sends is kept in a private cache, by a one-way hash of its text and never the text
 itself. A text embedded once, for training or for a forecast, is never paid for again.
 """
@@ -31,7 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from . import files, locks, store
+from . import files, locks, privacy, store
 
 DIMENSIONS = 256
 """Voyage can return shorter vectors. 256 numbers keep the dataset small and lose little."""
@@ -654,8 +656,13 @@ def _embed_batch(
     room: _Room,
     on_wait: Callable[[str], None] | None,
 ) -> list[list[float]]:
-    """Embed one request's texts, keep their vectors in the cache, and count what they cost."""
-    body = {"input": batch, "model": model, "output_dimension": DIMENSIONS, "truncation": True}
+    """Embed one request's texts, keep their vectors in the cache and count what they cost.
+
+    Each text goes with its keys and passwords hidden. The cache keeps its vector under the text itself. So a later
+    lookup of the same text finds it.
+    """
+    sent = [privacy.hide_secrets(text) for text in batch]
+    body = {"input": sent, "model": model, "output_dimension": DIMENSIONS, "truncation": True}
     reply = _send(body, size, key, room, on_wait)
     try:
         vectors = _vectors(reply, len(batch))

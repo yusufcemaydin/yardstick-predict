@@ -265,7 +265,7 @@ def read(unread: list[tuple[dict, dict]]) -> None:
 
     total = sum(size for _, files in unread for size, _ in files.values())
     ui.out()
-    ui.note("Free. Your chats never leave this computer. Esc stops it.")
+    ui.note("Reading is free and happens on this computer. Esc stops it.")
     now = time.time()
     done = 0
     with keys.watching() as watch:

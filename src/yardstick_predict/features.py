@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
-from . import benchmarks
+from . import benchmarks, privacy
 from .archives import TEXT_CHARS, Task, prompt_skills
 
 REQUIRED = "prompt"
@@ -261,7 +261,8 @@ def text(name: str, info: TaskInfo) -> str:
     if name == "prompt":
         return info.prompt.strip()[:TEXT_CHARS].strip()
     if name == "context":
-        return info.context[-CONTEXT_CHARS:]
+        # Keys are hidden before the cut. A key cut in two at its start would no longer look like one.
+        return privacy.hide_secrets(info.context)[-CONTEXT_CHARS:]
     if name == "skills":
         return skills_text(info.skills)
     if name == "llm":

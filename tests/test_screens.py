@@ -201,7 +201,9 @@ def test_a_bare_run_outside_a_terminal_with_no_model_says_how_to_make_one(capsys
     assert main([]) == 1
     out = flat(capsys.readouterr().out)
     assert "No model yet. Set VOYAGE_API_KEY, then create one with: yardstick-predict create --express" in out
-    assert "predictor" not in out
+    assert "It sends your prompts to Voyage, which turns them into numbers." in out
+    assert "Keys and passwords in them are hidden first." in out
+    assert "predictor" not in out and "Nothing leaves your computer" not in out
 
 
 def trained(name: str, verdicts: dict[str, bool]) -> Predictor:
@@ -1082,7 +1084,8 @@ def test_update_says_where_the_work_is_and_every_cost_before_spending_anything(
     assert "New work since a moment ago" in out
     assert re.search(r"Claude Code\s+~[/\\]\.claude[/\\]projects", out)
     assert re.search(r"1 chat changed(,| ·) \d+ KB to read", out) and "Codex" not in out
-    assert "Free. Your chats never leave this computer. Esc stops it." in out
+    assert "Reading is free and happens on this computer. Esc stops it." in out
+    assert "never leave" not in out
     assert "Found 3 new tasks, all in Claude Code." in out
     assert re.search(r"Embed \d texts with Voyage", out) and re.search(r"(<\$0\.01|\$\d\.\d\d), \d+ tokens", out)
     assert "Train again, under a minute" in out and "Under a minute in all. Its data grows to" in out
