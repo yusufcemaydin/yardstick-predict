@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -1093,6 +1094,84 @@ def test_a_task_share_follows_its_record_when_claude_code_moves_it(tmp_path, mon
     assert weekly.task_spent("s1", state()) == 0.0  # where the record was at the prompt, there's nothing now
     assert weekly.task_spent("s1", state(), str(moved)) == pytest.approx(2 * one_call())
     assert weekly.task_spent("s1", state(), str(moved)) == pytest.approx(2 * one_call())  # each reply counts once
+
+
+def test_a_helper_an_earlier_task_started_counts_toward_that_task_as_in_training(tmp_path, monkeypatch):
+    from yardstick_predict import prices, weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 1200)
+    first = session.prompt("Look into the logs")
+    session.reply(10, tool="Agent", calls_usage=BIG)
+    old_helper = session.helper(first["promptId"], calls=1)
+    session.reply(10, text="It's looking.", calls_usage=BIG)
+    record = session.save(mtime=NOW)
+    monkeypatch.setattr(cc, "time", Clock(NOW - 600))
+    monkeypatch.setattr(cc, "_start_worker", lambda session: None)
+    send(monkeypatch, prompt_event("Add a login page", transcript_path=str(record)))
+    session.clock = NOW - 600
+    second = session.prompt("Add a login page")
+    session.reply(10, tool="Agent", calls_usage=BIG)
+    session.helper_more(old_helper, None, calls=2)  # the first task's helper is still at work
+    session.helper(second["promptId"], calls=1)  # this task's own helper
+    session.reply(10, text="Done.", calls_usage=BIG)
+    session.save(mtime=NOW)
+    helper = prices.call_cost("claude-haiku-5-5", 10, 0, 0, 5_000, 50)
+    assert weekly.task_spent("s1", state()) == pytest.approx(2 * one_call() + helper)
+    archive = {"name": "c", "format": "claude-code", "path": str(tmp_path)}
+    trained = sorted(read_archive(archive, now=2e9), key=lambda task: task.started_at)
+    assert trained[-1].usd == pytest.approx(2 * one_call() + helper)  # training counts it the same way
+
+
+def test_moving_a_sessions_records_never_counts_its_replies_twice(tmp_path):
+    from yardstick_predict import weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 3600)
+    first = session.prompt("Fix it")
+    for _ in range(2500):  # many replies: none of them may count again
+        session.reply(1)
+    session.helper(first["promptId"], calls=3)
+    record = session.save(mtime=NOW)
+    total = weekly.spent_since(tmp_path, NOW - 86400, NOW)
+    assert total > 0
+    # The session moved into a worktree. Claude Code moved its record and its helpers to that folder's records.
+    moved = tmp_path / "-work-demo-worktree"
+    moved.mkdir()
+    record.rename(moved / record.name)
+    record.with_suffix("").rename(moved / "s1")
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(total)
+    shutil.copy(moved / record.name, record)  # a copy left in both folders counts once too
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(total)
+
+
+def test_a_resumed_sessions_copy_of_the_conversation_counts_once(tmp_path):
+    from yardstick_predict import weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 3600)
+    session.prompt("Fix it")
+    for _ in range(2):
+        session.reply(5, calls_usage=BIG)
+    session.save(mtime=NOW)
+    # Resuming it starts a new session, whose record begins with a copy of the conversation so far.
+    resumed = ClaudeSession(tmp_path, "s2", session.clock)
+    resumed.lines = [{**line, "sessionId": "s2"} for line in session.lines]
+    resumed.prompt("And test it")
+    resumed.reply(5, calls_usage=BIG)
+    resumed.save(mtime=NOW)
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(3 * one_call())
+
+
+def test_a_record_written_again_from_the_start_is_counted_afresh(tmp_path):
+    from yardstick_predict import weekly
+
+    session = ClaudeSession(tmp_path, "s1", NOW - 3600)
+    session.prompt("Fix it")
+    for _ in range(3):
+        session.reply(5, calls_usage=BIG)
+    session.save(mtime=NOW)
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(3 * one_call())
+    session.lines = session.lines[:-1]
+    session.save(mtime=NOW)
+    assert weekly.spent_since(tmp_path, NOW - 86400, NOW) == pytest.approx(2 * one_call())
 
 
 def test_the_week_spend_reads_only_what_was_added_and_counts_each_reply_once(tmp_path):
