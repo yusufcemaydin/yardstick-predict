@@ -2,7 +2,9 @@
 
 ## 1. The data: your past runs
 
-Claude Code and Codex keep a record of every run on your computer. Claude Code keeps them in `~/.claude/projects`, and Codex keeps them in `~/.codex/sessions`. yardstick-predict reads those records and turns each task into one row of a dataset. You can add folders of records in either format, copied from another computer or a server.
+Claude Code and Codex keep a record of every run on your computer. Claude Code keeps them in `~/.claude/projects`, and Codex keeps them in `~/.codex/sessions`. yardstick-predict reads those records and turns each task into one row of a dataset. You can add folders of records in either format, copied from another computer or a server. Any other program can write its runs in the [runs format](guide.md#runs-from-any-tool), one JSON line per finished task.
+
+[Open Runs](open-runs.md) adds public runs that come with the tool, in the runs format. A model can learn from them alone or from them and your own runs. They hold no project or conversation. So the project history and the conversation features stay empty for them.
 
 A **task** is one turn that a person or a program started. It runs from the prompt until the agent stops and hands control back. A person started it when they typed it, including a `!` shell command the agent then works on. A program started it when it came from a script or headless run, a scheduled task or another session. Turns started by an automatic event, such as a background job finishing, are not tasks of their own.
 
@@ -70,7 +72,7 @@ By default each part is a log-normal curve: a bell curve on a log scale. It fits
 Three choices keep the model honest when there's little data:
 
 1. **The trees start from each AI model's own curve.** That's the simple rule: the spread of the AI model's past tasks. An AI model with few tasks has its starting curve pulled toward the curve of all AI models, as if it had 10 more tasks that looked like the average. Each effort level the AI model ran at gets its own starting curve, pulled toward the AI model's in the same way. Old tasks count less here too, so an AI model with many old tasks and few new ones is pulled as hard as one with few tasks.
-2. **Trees are added only while they help.** The newest 15% of training tasks are held back. Trees are added only while they beat the starting curves on those tasks, and those starting curves are fitted without them. With little data, the model stays close to the simple rule. With a lot of data, it gets sharper.
+2. **Trees are added only while they help.** The newest 15% of training tasks are held back. With your own tasks among them, it's the newest 15% of your own, never public runs. Trees are added only while they beat the starting curves on those tasks, and those starting curves are fitted without them. With little data, the model stays close to the simple rule. With a lot of data, it gets sharper.
 3. **Newer tasks count more.** How people use agents changes over time. A task 30 days older than the newest one counts half as much.
 
 A last step widens or narrows each AI model's curves by one factor, picked on the held-back tasks before the trees have seen them, by the same score the trees learn by. Then the starting curves are fitted again and every part is trained again, on all the tasks.
@@ -93,7 +95,7 @@ Experts can change the model with flags on `create`:
 
 Before it gives any forecast, the model tests itself on tasks it hasn't seen.
 
-It replays each AI model's own newest 30% of tasks, and at least 30 of them, in three windows, oldest first. Each window is forecast after training only on the tasks, on every AI model, that had finished before it opened, waits for you and helpers included. Testing each AI model on its own newest tasks means a burst of tasks on one AI model can't push another AI model's tasks out of the test. Using three windows means one unusual week can't decide the verdict alone.
+It replays each AI model's own newest 30% of tasks, and at least 30 of them, in three windows, oldest first. When a model learns from Open Runs and your own runs, only your own tasks are replayed. Open Runs only adds to what each window learns from. Each window is forecast after training only on the tasks, on every AI model, that had finished before it opened, waits for you and helpers included. Testing each AI model on its own newest tasks means a burst of tasks on one AI model can't push another AI model's tasks out of the test. Using three windows means one unusual week can't decide the verdict alone.
 
 Each AI model's forecasts are then scored against **the simple rule**: the same forecast for every task on that AI model, the spread of its past tasks. To be given, an AI model's forecasts must pass every check, for every head:
 

@@ -69,7 +69,7 @@ except Exception as error:  # On a Mac without Homebrew's OpenMP, XGBoost can't 
     ) from None
 
 from . import benchmarks, features
-from .archives import Task
+from .archives import OPEN_RUNS, Task
 from .model_types import BUILT_IN_FORMAT, PREVIOUS_FORMAT
 
 TARGETS = ("seconds", "tokens", "usd")
@@ -1471,9 +1471,13 @@ def fit(
         model.guess = (weights, constants)
     matrix = model.matrix(rows, similar, guesses)
     models, efforts = [t.model for t in tasks], [t.effort for t in tasks]
-    held = max(int(len(tasks) * settings["validation_share"]), 10)
-    fit_rows = np.arange(len(tasks) - held)
-    valid_rows = np.arange(len(tasks) - held, len(tasks))
+    # Trees stop growing when they no longer help on the newest tasks. With your own tasks among them, those are
+    # your own newest, never public runs. Public runs only add to what the trees learn from.
+    own = _own_positions(tasks)
+    pool = own if len(own) >= 2 * 10 else np.arange(len(tasks))
+    held = max(int(len(pool) * settings["validation_share"]), 10)
+    valid_rows = pool[-held:]
+    fit_rows = np.setdiff1d(np.arange(len(tasks)), valid_rows)
     values = {target: _known_values(tasks, target) for target in settings["heads"]}
     heads = [target for target in settings["heads"] if (~np.isnan(values[target])).sum() >= MIN_TASKS]
     if settings["head"] == "expected":
@@ -1785,17 +1789,24 @@ def min_tasks_to_test(settings: dict | None = None) -> int:
     return 2 * MIN_TEST_TASKS
 
 
+def _own_positions(tasks: list[Task]) -> np.ndarray:
+    """The positions of your own tasks: every task that isn't a public run. When all are public runs, all of them."""
+    own = np.flatnonzero([t.archive != OPEN_RUNS["name"] for t in tasks])
+    return own if len(own) else np.arange(len(tasks))
+
+
 def _test_windows(tasks: list[Task], settings: dict) -> list[tuple[str, list[int]]]:
     """Each AI model's test windows, as the positions of its tasks, the windows opening earliest first.
 
     An AI model is tested on its own newest tasks: the test share of them, and at least MIN_TEST_TASKS, as
     long as at least MIN_TEST_TASKS of its tasks stay before them. So a model used mostly long ago is still
     tested on its newest tasks, however many tasks on other models came after. They're split into windows,
-    oldest first, and the last window also takes any left over.
+    oldest first, and the last window also takes any left over. With your own tasks among them, only those are
+    tested. Public runs only add to what each window learns from.
     """
     by_model: dict[str, list[int]] = {}
-    for i, t in enumerate(tasks):
-        by_model.setdefault(t.model, []).append(i)
+    for i in _own_positions(tasks):
+        by_model.setdefault(tasks[i].model, []).append(int(i))
     found = []
     for model, positions in by_model.items():
         size = min(max(int(len(positions) * settings["test_share"]), MIN_TEST_TASKS), len(positions) - MIN_TEST_TASKS)

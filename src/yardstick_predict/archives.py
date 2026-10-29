@@ -8,7 +8,10 @@ counts toward the task that started the job. So does the work of the helper agen
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
+import lzma
 import math
 import os
 import re
@@ -17,15 +20,21 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
+from importlib import resources
 from pathlib import Path
 
 from . import prices
 
-FORMATS = ("claude-code", "codex")
+FORMATS = ("claude-code", "codex", "runs")
 DEFAULT_ARCHIVES = (
     {"name": "claude-code", "format": "claude-code", "path": "~/.claude/projects"},
     {"name": "codex", "format": "codex", "path": "~/.codex/sessions"},
 )
+
+BUNDLED = "bundled:"
+"""A path that starts with this names a folder shipped inside the package. It's found again after an upgrade."""
+OPEN_RUNS = {"name": "open-runs", "format": "runs", "path": "bundled:open-runs"}
+"""Open Runs: public coding-agent runs shipped with the tool, in the runs format."""
 
 READER_VERSION = 2
 """The version of the rules that read records into tasks. A predictor read with other rules reads every record again."""
@@ -161,8 +170,16 @@ def _skill_set(skills: set[str]) -> frozenset[str]:
     return frozenset(skills) if skills else _NO_SKILLS
 
 
+def _open_text(path: Path):
+    if path.name.endswith(".xz"):
+        return lzma.open(path, "rt", encoding="utf-8", errors="replace")
+    if path.name.endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return open(path, encoding="utf-8", errors="replace")
+
+
 def _lines(path: Path) -> Iterator[dict]:
-    with open(path, encoding="utf-8", errors="replace") as handle:
+    with _open_text(path) as handle:
         for raw in handle:
             try:
                 value = json.loads(raw)
@@ -192,7 +209,10 @@ _KEEP_CHARS = 2 * TEXT_CHARS + 1024
 
 
 def archive_path(archive: dict) -> Path:
-    return Path(os.path.expanduser(archive["path"]))
+    path = str(archive["path"])
+    if path.startswith(BUNDLED):
+        return Path(str(resources.files("yardstick_predict").joinpath(path[len(BUNDLED) :].replace("-", "_"))))
+    return Path(os.path.expanduser(path))
 
 
 def record_files(archive: dict) -> dict[str, tuple[int, float]]:
@@ -201,7 +221,8 @@ def record_files(archive: dict) -> dict[str, tuple[int, float]]:
     if not root.is_dir():
         return {}
     files = {}
-    for path in root.rglob("*.jsonl"):
+    patterns = ("*.jsonl", "*.jsonl.gz", "*.jsonl.xz") if archive["format"] == "runs" else ("*.jsonl",)
+    for path in (found for pattern in patterns for found in root.rglob(pattern)):
         try:
             stat = path.stat()
         except OSError:
@@ -247,6 +268,8 @@ def read_records(
         return _read_claude_code(archive, files, now, on_read)
     if archive["format"] == "codex":
         return _read_codex(archive, files, now, on_read)
+    if archive["format"] == "runs":
+        return _read_runs(archive, files, on_read)
     raise ValueError(f"Unknown archive format {archive['format']!r}. Use one of: {', '.join(FORMATS)}.")
 
 
@@ -254,7 +277,80 @@ def families(archive: dict, paths: Iterable[str]) -> dict[str, str]:
     """Each record file's family. A family is read together, because its files add to the same tasks."""
     if archive["format"] == "codex":
         return codex_families(paths)
+    if archive["format"] == "runs":
+        return {path: path for path in paths}
     return claude_families(paths)
+
+
+def _seconds(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0:
+        return float(value)
+    return None
+
+
+def _run_task(line: dict, path: Path, archive_name: str, file_time: float) -> Task | None:
+    """One line of the runs format: a finished task that any program reported. None when a required field is
+    missing: the prompt, the AI model, the seconds or the tokens."""
+    prompt = line.get("prompt")
+    model = _shared(line.get("model"))
+    seconds = _seconds(line.get("seconds"))
+    if not isinstance(prompt, str) or not prompt.strip() or not model or seconds is None:
+        return None
+    new_input = _number(line.get("input_tokens"))
+    cache_write = _number(line.get("cache_write_tokens"))
+    cache_read = _number(line.get("cache_read_tokens"))
+    output = _number(line.get("output_tokens"))
+    if not new_input + cache_write + cache_read + output:
+        new_input = _number(line.get("tokens"))
+    if not new_input + cache_write + cache_read + output:
+        return None
+    usd = line.get("usd")
+    if isinstance(usd, bool) or not isinstance(usd, (int, float)) or not math.isfinite(usd) or usd < 0:
+        usd = prices.call_cost(model, new_input, cache_write, 0, cache_read, output) if output else None
+    started = _timestamp(line.get("started_at")) or file_time
+    run = _name(line.get("id")) or hashlib.sha256(json.dumps(line, sort_keys=True).encode()).hexdigest()[:24]
+    origin = line.get("origin") if line.get("origin") in ("person", "program") else "program"
+    context = line.get("context") if isinstance(line.get("context"), str) else ""
+    return Task(
+        id=f"{archive_name}:{run}",
+        archive=archive_name,
+        agent=_shared(line.get("agent")) or "other",
+        agent_version="",
+        session=_name(line.get("session")) or "",
+        project=_name(line.get("project")) or "",
+        origin=origin,
+        started_at=started,
+        model=model,
+        effort=_shared(line.get("effort")) or "default",
+        prompt=prompt.strip()[:TEXT_CHARS],
+        context=context.strip()[-TEXT_CHARS:],
+        context_tokens=_number(line.get("context_tokens")),
+        seconds=seconds,
+        input_tokens=new_input,
+        cache_write_tokens=cache_write,
+        cache_read_tokens=cache_read,
+        output_tokens=output,
+        usd=float(usd) if usd is not None else None,
+        calls=max(_number(line.get("calls")), 1),
+        direct=line.get("direct") is True,
+        stopped=line.get("stopped") is True,
+        idle=False,
+        finished_at=started + seconds,
+        source=str(path),
+    )
+
+
+def _read_runs(archive: dict, files: dict[str, tuple[int, float]], on_read: Callable[[int], None] | None) -> Reading:
+    tasks = []
+    for name, (size, modified) in files.items():
+        path = Path(name)
+        for line in _lines(path):
+            task = _run_task(line, path, archive["name"], modified)
+            if task is not None:
+                tasks.append(task)
+        if on_read:
+            on_read(size)
+    return Reading(tasks)
 
 
 def completeness(task: Task) -> tuple[int, bool]:

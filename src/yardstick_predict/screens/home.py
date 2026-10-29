@@ -81,7 +81,11 @@ def greet(names: list[str]) -> None:
             ui.line(ui.accent(part))
     if not names:
         ui.out()
-        for part in ui.wrapped("Add New reads your Claude Code and Codex chats. It needs a Voyage API key."):
+        intro = (
+            "Add New reads your Claude Code and Codex chats. It can also start from Open Runs: public runs that come "
+            "with the tool. It needs a Voyage API key."
+        )
+        for part in ui.wrapped(intro):
             ui.line(part)
 
 

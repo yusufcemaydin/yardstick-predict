@@ -12,6 +12,7 @@ they never show up in the records the predictor learns from.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import itertools
 import json
@@ -25,6 +26,7 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 from . import prices
@@ -179,6 +181,8 @@ class Ask:
     conversation: str = ""
     """The conversation the task is in. Two tasks of one conversation never share a request: the later one's
     context would show the AI model how the earlier one ended."""
+    also: tuple[str, ...] = ()
+    """Other tasks with the very same text to read. They get the same answer, so the text is paid for once."""
 
 
 @dataclass
@@ -413,7 +417,7 @@ def analyze(
         except LLMError as error:
             if not error.lasting:
                 raise
-            return {ask.id: unanswered(ask) for ask in batch}, str(error), None
+            return _spread({ask.id: unanswered(ask) for ask in batch}, batch), str(error), None
         usd = spent(answer, how["model"])
         wanted, found = {ask.id: ask for ask in batch}, {}
         for entry in answer.get("tasks") or [] if isinstance(answer, dict) else []:
@@ -424,7 +428,7 @@ def analyze(
                     found[entry["id"]] = {**clean, "by": by, "fields": fields, "read": read_of(ask.prompt, ask.context)}
         for ask in batch:
             found.setdefault(ask.id, unanswered(ask))  # skipped, or answered with something that makes no sense
-        return found, None, usd
+        return _spread(found, batch), None, usd
 
     def most(batch: list[Ask]) -> float | None:
         """The most a request for these tasks can cost. None when the AI model's price isn't known."""
@@ -509,6 +513,41 @@ def analyze(
             f"{left:,} task{' is' if left == 1 else 's are'} left for a later run."
         )
     return Analysis(answers, (stopped or problems or [None])[0])
+
+
+def _spread(found: dict[str, dict], batch: list[Ask]) -> dict[str, dict]:
+    """The answers about each task asked, given to the other tasks with the same text too."""
+    for ask in batch:
+        for other in ask.also:
+            if ask.id in found:
+                found[other] = dict(found[ask.id])
+    return found
+
+
+@functools.cache
+def _shipped_file() -> dict:
+    try:
+        text = resources.files("yardstick_predict").joinpath("open_runs", "answers.json").read_text("utf-8")
+        found = json.loads(text)
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def shipped(how: dict, fields: list[str]) -> dict[str, dict]:
+    """The answers that come with the tool about the texts of Open Runs, by what they read, as read_of gives it.
+    Empty unless some are by the same AI model, paid the same way, and hold every field asked for."""
+    by = f"{how.get('provider')}:{how.get('model')}"
+    sets = _shipped_file().get("sets")
+    found = next((s for s in sets if isinstance(s, dict) and s.get("by") == by), {}) if isinstance(sets, list) else {}
+    made = found.get("fields") or []
+    if not set(fields) <= set(made) or not isinstance(found.get("answers"), dict):
+        return {}
+    return {
+        read: {**_clean(answer, made), "by": by, "fields": list(made), "read": read}
+        for read, answer in found["answers"].items()
+        if isinstance(answer, dict) and _clean(answer, made) is not None
+    }
 
 
 def read_of(prompt: str, context: str) -> str:

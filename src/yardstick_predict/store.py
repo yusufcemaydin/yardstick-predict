@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from . import files, locks
-from .archives import Task
+from .archives import OPEN_RUNS, Task
 
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 """A predictor's name. Check it with fullmatch: match and $ would let a name with a newline at its end through."""
@@ -672,7 +672,8 @@ class Predictor:
         predictor may have asked the same AI model for more about the same task.
         """
         self.move_in()
-        return llm_answers(self.config, every_field)
+        public = any(archive.get("path") == OPEN_RUNS["path"] for archive in self.config.get("archives") or [])
+        return llm_answers(self.config, every_field, self.tasks() if public else None)
 
     def put_llm_labels(self, labels: dict[str, dict]) -> None:
         """Save what LLM analysis said about tasks, in the feature store, each merged with what the same AI model
@@ -826,12 +827,14 @@ def _llm_feature(config: dict):
     return feature_store.answers(how["provider"], how["model"])
 
 
-def llm_answers(config: dict, every_field: bool = False) -> dict[str, dict]:
+def llm_answers(config: dict, every_field: bool = False, tasks: list[Task] | None = None) -> dict[str, dict]:
     """What LLM analysis said about each task, as the feature store keeps it, by the LLM provider and model a
     predictor's settings name. Empty for settings without LLM analysis.
 
     Each answer keeps only the fields the settings' options ask for, unless `every_field`. So a predictor that
-    didn't ask for the description never reads one that another predictor asked the same AI model for.
+    didn't ask for the description never reads one that another predictor asked the same AI model for. Of
+    `tasks`, the public runs of Open Runs that the store holds no answer for get the answer that comes with the
+    tool, when it's by the same AI model. It costs nothing.
     """
     from . import feature_store, features, llm
 
@@ -839,9 +842,15 @@ def llm_answers(config: dict, every_field: bool = False) -> dict[str, dict]:
     if feature is None:
         return {}
     found = feature_store.answers_of(feature)
+    fields = llm.parts(features.options(config, "llm"))
+    public = [task for task in tasks or [] if task.archive == OPEN_RUNS["name"] and task.id not in found]
+    shipped = llm.shipped(config["llm"], fields) if public else {}
+    for task in public:
+        answer = shipped.get(llm.read_of(task.prompt, task.context))
+        if answer is not None:
+            found[task.id] = answer
     if every_field:
         return found
-    fields = llm.parts(features.options(config, "llm"))
     return {task_id: llm.only(labels, fields) for task_id, labels in found.items()}
 
 

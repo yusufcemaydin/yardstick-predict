@@ -180,6 +180,16 @@ def test_with_no_model_the_home_screen_says_so_and_add_new_comes_first(capsys, m
     assert re.search(r"1\. Add New\s+Make your first model", out) and "5. Quit" in out
 
 
+@pytest.mark.parametrize("width", [80, 45])
+def test_with_no_model_the_home_screen_offers_open_runs(capsys, monkeypatch, width):
+    monkeypatch.setenv("COLUMNS", str(width))
+    pressing(monkeypatch, "5")
+    assert main([]) == 0
+    out = plain(capsys.readouterr().out)
+    assert "start from Open Runs: public runs that come with the tool" in flat(out)
+    assert all(len(line) <= width for line in out.splitlines())
+
+
 def test_a_narrow_terminal_gets_the_home_screen_without_a_box(capsys, monkeypatch):
     made("main")
     monkeypatch.setattr(home.shutil, "get_terminal_size", lambda fallback=None: os.terminal_size((40, 24)))
@@ -1251,7 +1261,9 @@ def test_add_new_on_the_home_screen_calls_it_a_model(capsys, monkeypatch):
     made("main")
     pressing(monkeypatch, "4", keys.ESC)  # Add New, then Quit once it stops
     asked = typing(monkeypatch, "work", "")  # its name, then not the default
-    monkeypatch.setattr(cli, "choose_archives", lambda can_ask, given: [])  # no records, so it stops there
+    monkeypatch.setattr(
+        cli, "choose_archives", lambda can_ask, given, open_runs=True: []
+    )  # no records, so it stops there
     assert main([]) == 0
     out = plain(capsys.readouterr().out)
     assert "New model" in out and "predictor" not in out.split("New model")[1].split("No records")[0]

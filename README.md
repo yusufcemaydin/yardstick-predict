@@ -65,6 +65,8 @@ You need [uv](https://docs.astral.sh/uv/), a tool that installs Python programs.
 
 4. Every week or so, run `yardstick-predict` and choose Update. It reads your new runs and trains again.
 
+No runs of your own yet? Add New can start from [Open Runs](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/open-runs.md): public runs of coding tasks that come with the tool, with their embeddings already made. Models made from your own runs learn from them too, unless you leave them out.
+
 ## See forecasts in Claude Code
 
 ```bash
@@ -115,6 +117,7 @@ Most commands take `--json` for programs. `yardstick-predict COMMAND --help` lis
 - [The guide](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/guide.md): the home screen, the features a model learns from, LLM analysis, costs, settings for experts, plugins, privacy and how to update or remove it.
 - [How it works](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/how-it-works.md): the data, the model and how it tests itself.
 - [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md): every field programs send and get back.
+- [Open Runs](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/open-runs.md): the public runs that come with the tool. It says how well a model made from them forecasts.
 - [What's next](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/features.md): what's planned.
 
 ## Contributing

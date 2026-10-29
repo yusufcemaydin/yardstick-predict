@@ -30,6 +30,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from importlib import resources
+from pathlib import Path
 
 from . import files, locks, store
 
@@ -702,33 +704,47 @@ def _chunks(values: list, size: int = 500) -> Iterator[list]:
         yield values[start : start + size]
 
 
+def _shipped_cache() -> sqlite3.Connection | None:
+    """The vectors that come with the tool, for the texts of Open Runs. It's only read. None when there are none."""
+    path = Path(str(resources.files("yardstick_predict").joinpath("open_runs", "vectors.sqlite")))
+    if not path.is_file():
+        return None
+    try:
+        return sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
+    except sqlite3.Error:
+        return None
+
+
 def _lookup(model: str, texts: list[str], with_vectors: bool) -> dict[str, list[float] | None]:
+    """The vectors held for these texts: first in your own cache, then among those that come with the tool."""
     hashes = {text_hash(text): text for text in texts}
     found: dict[str, list[float] | None] = {}
-    if not hashes:
-        return found
-    db = _open_cache()
-    if db is None:
-        return found
-    try:
-        column = "vector" if with_vectors else "NULL"
-        for chunk in _chunks(list(hashes)):
-            marks = ", ".join("?" for _ in chunk)
-            # A vector of the wrong size, as a damaged cache may hold, counts as missing, as when it's read.
-            rows = db.execute(
-                f"SELECT hash, {column} FROM vectors WHERE model = ? AND dimensions = ? AND length(vector) = ? "
-                f"AND hash IN ({marks})",
-                (model, DIMENSIONS, 4 * DIMENSIONS, *chunk),
-            )
-            for digest, blob in rows:
-                if not with_vectors:
-                    found[hashes[digest]] = None
-                elif isinstance(blob, bytes) and len(blob) == 4 * DIMENSIONS:
-                    found[hashes[digest]] = array("f", blob).tolist()
-    except sqlite3.Error:
-        pass  # what was found so far still holds
-    finally:
-        db.close()
+    for opener in (_open_cache, _shipped_cache):
+        missing = [digest for digest, text in hashes.items() if text not in found]
+        if not missing:
+            break
+        db = opener()
+        if db is None:
+            continue
+        try:
+            column = "vector" if with_vectors else "NULL"
+            for chunk in _chunks(missing):
+                marks = ", ".join("?" for _ in chunk)
+                # A vector of the wrong size, as a damaged cache may hold, counts as missing, as when it's read.
+                rows = db.execute(
+                    f"SELECT hash, {column} FROM vectors WHERE model = ? AND dimensions = ? AND length(vector) = ? "
+                    f"AND hash IN ({marks})",
+                    (model, DIMENSIONS, 4 * DIMENSIONS, *chunk),
+                )
+                for digest, blob in rows:
+                    if not with_vectors:
+                        found[hashes[digest]] = None
+                    elif isinstance(blob, bytes) and len(blob) == 4 * DIMENSIONS:
+                        found[hashes[digest]] = array("f", blob).tolist()
+        except sqlite3.Error:
+            pass  # what was found so far still holds
+        finally:
+            db.close()
     return found
 
 

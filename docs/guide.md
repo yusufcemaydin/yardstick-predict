@@ -16,7 +16,7 @@ Estimate asks for a task. With more than one model, it asks which of your models
 
 ### Add New
 
-Choose Add New and answer a few questions. Setup finds your past runs, asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
+Choose Add New and answer a few questions. Setup finds your past runs and asks whether to also learn from [Open Runs](open-runs.md), public runs of coding tasks that come with the tool. With no runs of your own, it offers to start from Open Runs alone. Then it asks which features to use, shows the exact cost of each Voyage 4 model, checks your key and keeps it in your computer's password store. Before it goes ahead, it says about how long the rest will take and how much disk space your tasks will need. Then it trains and shows how well it forecast your newest tasks. Each long step shows a progress bar with the time left.
 
 When you pick features beyond the three that are always on, setup offers to check which of them actually help. Some features carry no signal for your kind of work. With few tasks, a feature can't show anything. The check compares forecasts with each feature and without it. It shows what helped for each AI model and keeps on only the features that helped. Then it asks once whether to go on with them. Saying no opens the Features screen, to change them before it trains. LLM analysis first reads only a sample of your newest tasks. If you keep it after the check, setup shows what reading the rest costs and asks. The check is advice. When you say no, setup trains with the features you picked.
 
@@ -189,6 +189,30 @@ yardstick-predict refresh --yes --json
 
 When it can't go on, the answer is an `error` with a `code` and a `message`. The exit code is 1 then. [The format](format.md#setup-and-refresh) lists every field and code. It also says what `create --json` adds.
 
+### Runs from any tool
+
+A program that runs coding agents can write down each finished task itself, one JSON line per task, in the runs format. A model then learns from them as it does from Claude Code and Codex records. Put the files, named `.jsonl`, in a folder. `.jsonl.gz` and `.jsonl.xz` files are read too. Add the folder with `--archive runs=PATH` or paste its path in Add New.
+
+[`templates/runs.jsonl`](templates/runs.jsonl) has three made-up lines to copy. Each line needs:
+
+- **`prompt`**: the task's prompt.
+- **`model`**: the AI model, such as `claude-opus-5-5`.
+- **`seconds`**: how long the task took.
+- **tokens**: `input_tokens`, `cache_write_tokens`, `cache_read_tokens` and `output_tokens`. When the split isn't known, `tokens` alone gives the total.
+
+These are optional:
+
+- **`id`**: the task's own id. Without one, the line's contents make one. A line read again with the same id replaces the task.
+- **`started_at`**: when it started: ISO 8601 text such as `2026-10-20T09:15:00Z` or seconds since 1970. Without it, the file's time stands in.
+- **`usd`**: what it cost. Without it, the AI model's list price works it out, when the split of the tokens is known.
+- **`agent`**, **`effort`**: the agent and the thinking level. They default to `other` and `default`.
+- **`origin`**: `person` or `program`, who started it. It defaults to `program`.
+- **`project`**, **`session`**, **`context`**: the project, the conversation and the end of the conversation before the prompt.
+- **`direct`**: true when the agent answered without tools.
+- **`stopped`**: true when the task was stopped before it finished. A stopped task is kept but not learned from.
+
+Any other field is left alone.
+
 ## Cost
 
 Voyage gives every account 200 million free tokens. yardstick-predict can't see your balance. So it keeps its own count and asks once whether your account is new.
@@ -255,7 +279,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | Command | What it does |
 |---|---|
 | `yardstick-predict` | In a terminal, the home screen: Estimate, Update, Models and Add New. A program gets one line per model. |
-| `yardstick-predict create [NAME]` | Creates a model. In a terminal it asks for a name first. `--express` or `--yes` takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. A folder that isn't there stops it before anything is read. `--json` answers a program in JSON. `--max-cost USD` keeps it to a spending limit. |
+| `yardstick-predict create [NAME]` | Creates a model. In a terminal it asks for a name first. `--express` or `--yes` takes every default, asks nothing and agrees to the cost. `--archive codex=PATH` adds a folder of records. `--archive runs=PATH` adds a folder in the [runs format](#runs-from-any-tool). `--no-open-runs` leaves out [Open Runs](open-runs.md). A folder that isn't there stops it before anything is read. `--json` answers a program in JSON. `--max-cost USD` keeps it to a spending limit. |
 | `yardstick-predict refresh` | Adds new runs, embeds them and retrains. It says when a folder of records isn't there. The model keeps the tasks it read from there. `--yes` for programs, with `--json` for an answer in JSON. `--max-cost USD` keeps it to a spending limit. |
 | `yardstick-predict predict "TASK"` | Forecasts a task: a table in a terminal, JSON for programs. |
 | `yardstick-predict status` | Shows each model, its features with their coverage, the size of its prepared dataset and how close its forecasts came on your newest tasks. `--json` for programs. |

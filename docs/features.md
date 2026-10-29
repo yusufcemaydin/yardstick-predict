@@ -13,7 +13,7 @@ These build on the first version. Each one goes in only if it passes the same te
 ## Data
 
 - **More agents.** Read the records of other coding agents, such as Gemini CLI, OpenCode and Cursor.
-- **A simple record format.** Let any program report what a task took, one JSON line per task, so tools that don't use Claude Code or Codex can train a model too.
+- **More prompts in Open Runs.** Open Runs has 119 different prompts. The prompt explains most of the spread in time, but 119 are too few to learn which new prompts take longer. Add public runs of many more prompts, with their real time and tokens.
 - **Codex approval waits.** Take time spent waiting for a person out of Codex tasks, as for Claude Code.
 - **Prices kept current.** Update the price list automatically when providers change their prices.
 

@@ -4,6 +4,15 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+### Added
+
+- Open Runs: public runs of coding tasks that come with the tool. Each has its prompt, AI model, agent, time, tokens and cost. With no runs of your own, Add New offers to start from Open Runs. You get forecasts on day one. With runs of your own, a new model also learns from Open Runs unless you say no. A program with 1,000 or more runs of its own leaves it out unless it asks for it. `--no-open-runs` leaves it out. `--archive open-runs` asks for it. Its embeddings come with it. It costs no Voyage tokens. [Open Runs](docs/open-runs.md) says where the runs come from and how well a model made from them forecasts prompts it never saw.
+- The runs format: one JSON line per finished task, for any program that runs coding agents. Add a folder of them with `--archive runs=PATH` or in Add New. The guide lists the fields. A template shows three made-up lines.
+
+### Changed
+
+- LLM analysis reads each different text once. Tasks with the same prompt and the same conversation before it share the answer. You pay once for it.
+
 ## [0.5.2] - 2026-10-28
 
 A fix release. Every message, the help and the docs call a predictor a model, as the home screen does.

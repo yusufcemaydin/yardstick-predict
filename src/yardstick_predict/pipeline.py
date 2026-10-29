@@ -447,17 +447,23 @@ def embedding_items(
 
 
 def analysis_plan(tasks: list[Task], config: dict, labels: dict, limit: int | None = None) -> list:
-    """The tasks LLM analysis still has to read, newest first: the ones it never read, or read with another model."""
+    """The tasks LLM analysis still has to read, newest first: the ones it never read, or read with another model.
+    Tasks with the same text to read come as one, with the others in its `also`."""
     from . import llm
 
     how = config.get("llm") or {}
     if "llm" not in (config.get("features") or []) or how.get("provider") not in llm.PROVIDERS:
         return []
     fields = llm.parts(features.options(config, "llm"))
+    # Tasks with the very same text to read are read once, as when a program sends one prompt many times.
+    same: dict[str, list[Task]] = {}
+    for task in learnable(tasks, limit):
+        read = llm.read_of(task.prompt, task.context)
+        if llm.needs(labels.get(task.id), how, fields, read):
+            same.setdefault(read, []).append(task)
     return [
-        llm.Ask(task.id, task.prompt, task.context, task.session)
-        for task in learnable(tasks, limit)
-        if llm.needs(labels.get(task.id), how, fields, llm.read_of(task.prompt, task.context))
+        llm.Ask(first.id, first.prompt, first.context, first.session, tuple(task.id for task in rest))
+        for first, *rest in same.values()
     ]
 
 

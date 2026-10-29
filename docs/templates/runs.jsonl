@@ -1,0 +1,3 @@
+{"id": "run-1", "prompt": "Add a login page with tests", "model": "claude-opus-5-5", "agent": "my-orchestrator", "effort": "high", "started_at": "2026-10-20T09:15:00Z", "seconds": 312.5, "input_tokens": 2400, "cache_write_tokens": 18000, "cache_read_tokens": 410000, "output_tokens": 9100, "usd": 0.92}
+{"id": "run-2", "prompt": "Fix the failing date test in utils", "model": "gpt-6.1-sol", "agent": "my-orchestrator", "started_at": "2026-10-20T10:02:00Z", "seconds": 95, "tokens": 120000}
+{"id": "run-3", "prompt": "Rename the config loader and update its callers", "model": "claude-opus-5-5", "started_at": 1792483200, "seconds": 41, "input_tokens": 900, "output_tokens": 1500, "stopped": true}

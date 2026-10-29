@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 from . import __version__, embeddings, locks, ui
-from .archives import DEFAULT_ARCHIVES, FORMATS, archive_path
+from .archives import DEFAULT_ARCHIVES, FORMATS, OPEN_RUNS, archive_path
 from .store import (
     BrokenPredictor,
     Predictor,
@@ -326,9 +326,14 @@ def ask_name(existing: list[str]) -> str:
             return name
 
 
+PLENTY = 1000
+"""With this many tasks of its own, a model a program makes leaves out Open Runs unless it asks for it."""
+
+
 def parse_archive(spec: str) -> dict:
-    """'claude-code' and 'codex' mean the usual folders. FORMAT=PATH adds a folder of records in that format."""
-    for archive in DEFAULT_ARCHIVES:
+    """'claude-code' and 'codex' mean the usual folders, and 'open-runs' the public runs that come with the tool.
+    FORMAT=PATH adds a folder of records in that format."""
+    for archive in (*DEFAULT_ARCHIVES, OPEN_RUNS):
         if spec == archive["name"]:
             return dict(archive)
     if "=" in spec:
@@ -338,7 +343,8 @@ def parse_archive(spec: str) -> dict:
         path = os.path.abspath(os.path.expanduser(path))
         return {"name": os.path.basename(path.rstrip("/\\")) or "custom", "format": fmt, "path": path}
     raise CommandError(
-        "invalid_request", f"Can't read --archive {spec!r}. Use claude-code, codex, or FORMAT=PATH like codex=~/runs."
+        "invalid_request",
+        f"Can't read --archive {spec!r}. Use claude-code, codex, open-runs or FORMAT=PATH like codex=~/runs.",
     )
 
 
@@ -376,12 +382,14 @@ def given_archives(given: list[str]) -> list[dict]:
     return archives
 
 
-def choose_archives(can_ask: bool, given: list[str]) -> list[dict]:
+def choose_archives(can_ask: bool, given: list[str], open_runs: bool = True) -> list[dict]:
+    """The folders of records a new model learns from. Open Runs, the public runs that come with the tool, is one
+    unless `open_runs` is False."""
     if given:
         return given_archives(given)
     found = [dict(a) for a in DEFAULT_ARCHIVES if archive_path(a).is_dir()]
     if not can_ask:
-        return found
+        return found + ([dict(OPEN_RUNS)] if open_runs and archive_path(OPEN_RUNS).is_dir() else [])
     chosen = []
     for archive in found:
         if ui.ask(f"Use your {archive['name']} records in their default location ({archive['path']})?", True):
@@ -389,14 +397,24 @@ def choose_archives(can_ask: bool, given: list[str]) -> list[dict]:
     for archive in DEFAULT_ARCHIVES:
         if not archive_path(archive).is_dir():
             ui.note(f"No {archive['name']} records in their default location ({archive['path']}).")
+    if open_runs and archive_path(OPEN_RUNS).is_dir():
+        question = (
+            "Also learn from Open Runs, public runs of coding tasks that come with yardstick-predict?"
+            if chosen
+            else "Start from Open Runs, public runs of coding tasks that come with yardstick-predict?"
+        )
+        if ui.ask(question, True):
+            chosen.append(dict(OPEN_RUNS))
     while True:
         # With no records chosen yet, a folder is the only way to get some, so it isn't optional.
         optional = f"{ui.dim('(Optional)')} " if chosen else ""
-        question = f"{optional}Add a folder of records in Claude Code or Codex format? Paste its path, or press Enter:"
+        question = (
+            f"{optional}Add a folder of records in Claude Code, Codex or runs format? Paste its path, or press Enter:"
+        )
         extra = input(ui.prompt(question)).strip()
         if not extra:
             break
-        fmt = input(ui.prompt("Is it claude-code or codex format?", "[claude-code]")).strip() or "claude-code"
+        fmt = input(ui.prompt("Is it claude-code, codex or runs format?", "[claude-code]")).strip() or "claude-code"
         if fmt not in FORMATS:
             ui.note(f"Use one of: {', '.join(FORMATS)}.")
             continue
@@ -949,9 +967,16 @@ def _create(args, held, answer: dict) -> int:
     picked = choose_features(can_ask, args) if args.features is not None or not can_ask else None
 
     ui.heading("Your past runs")
-    archives = unique_names(choose_archives(can_ask, args.archive))
+    archives = unique_names(choose_archives(can_ask, args.archive, not args.no_open_runs))
     if not archives:
         raise CommandError("no_records", "No records to learn from. Add a folder with --archive FORMAT=PATH.")
+    if all(archive["path"] == OPEN_RUNS["path"] for archive in archives) and built_in:
+        # Public runs were gathered months apart for other reasons. Newer ones say no more about your tasks.
+        if args.half_life is None:
+            model_settings["half_life_days"] = None
+        # Many AI models, each tested in three windows, would take many minutes. One window says enough here.
+        if args.test_windows is None:
+            model_settings["test_windows"] = 1
     ui.working("Reading your records. A big history takes a minute")
     from . import features, llm
     from .pipeline import (
@@ -968,6 +993,16 @@ def _create(args, held, answer: dict) -> int:
     from .store import Embedded
 
     found = read_all(archives, on_progress=lambda done, total: ui.progress(done, total, "bytes"))
+    own = sum(1 for task in found.new_tasks if task.archive != OPEN_RUNS["name"])
+    if not can_ask and not args.archive and own >= PLENTY and OPEN_RUNS in archives:
+        # A program with plenty of runs of its own gains little from Open Runs, and trains more slowly with it.
+        # It's left out unless asked for.
+        archives = [archive for archive in archives if archive != OPEN_RUNS]
+        found.new_tasks = [task for task in found.new_tasks if task.archive != OPEN_RUNS["name"]]
+        found.per_archive.pop(OPEN_RUNS["name"], None)
+        found.files = {
+            path: state for path, state in found.files.items() if not path.startswith(str(archive_path(OPEN_RUNS)))
+        }
     counts = [(archive["name"], found.per_archive.get(archive["name"], 0)) for archive in archives]
     total = sum(count for _, count in counts)
     if len(counts) == 1:
@@ -995,7 +1030,7 @@ def _create(args, held, answer: dict) -> int:
     held.enter_context(feature_store.writing())
     # What the same AI model said about these tasks for another predictor is in the feature store already,
     # descriptions included, so they're embedded with the rest.
-    answers = llm_answers(settings)
+    answers = llm_answers(settings, tasks=found.new_tasks)
     # The check is advice for a person setting up step by step. A program, or a person who named the features
     # with flags, gets the features they named.
     checking = can_ask and args.features is None and built_in and offer_check(chosen, found.new_tasks, args.max_tasks)
@@ -3220,7 +3255,13 @@ def make_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="SPEC",
-        help="claude-code, codex, or FORMAT=PATH for a folder of records. Repeat to add more.",
+        help="claude-code, codex, open-runs or FORMAT=PATH for a folder of records, in claude-code, codex or runs "
+        "format. Repeat to add more.",
+    )
+    create.add_argument(
+        "--no-open-runs",
+        action="store_true",
+        help="Leave out Open Runs, the public runs that come with yardstick-predict. They're in by default.",
     )
     create.add_argument("--embedding", help="voyage-4 (the default), voyage-4-lite or voyage-4-large.")
     create.add_argument("--max-tasks", type=int, help="Embed and learn from only the newest this many tasks.")

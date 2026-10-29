@@ -15,6 +15,8 @@ from yardstick_predict import features as _features
 KEY = "test-key-never-real"
 REAL_COUNT_TOKENS = _embeddings.count_tokens
 """The real token counter. Every test gets a stand-in that never downloads the tokenizer."""
+SHIPPED_VECTORS = _embeddings._shipped_cache
+"""The vectors that come with Open Runs. A test reads them only when it asks for Open Runs."""
 
 
 @pytest.fixture(autouse=True)
@@ -40,8 +42,23 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(embeddings, "_tokenizers", {})
     monkeypatch.setattr(embeddings, "_tokenizer_failed_at", None)
     _features.skill_descriptions.cache_clear()  # each test may have other skills
+    # Open Runs comes with the tool. A test learns only from the records it makes, unless it asks for Open Runs.
+    from yardstick_predict import cli
+
+    monkeypatch.setattr(cli, "OPEN_RUNS", {**cli.OPEN_RUNS, "path": "bundled:not-in-tests"})
+    monkeypatch.setattr(embeddings, "_shipped_cache", lambda: None)
     yield folder
     _features.skill_descriptions.cache_clear()
+
+
+@pytest.fixture
+def open_runs(monkeypatch):
+    """Open Runs as it comes with the tool: its runs, and the vectors that come with them."""
+    from yardstick_predict import archives, cli
+
+    monkeypatch.setattr(cli, "OPEN_RUNS", archives.OPEN_RUNS)
+    monkeypatch.setattr(_embeddings, "_shipped_cache", SHIPPED_VECTORS)
+    return archives.OPEN_RUNS
 
 
 @pytest.fixture

@@ -107,13 +107,13 @@ def test_adding_a_folder_is_optional_only_once_some_records_are_chosen(tmp_path,
         return asked
 
     asked = answer("y", "")
-    assert [a["name"] for a in cli.choose_archives(True, [])] == ["claude-code"]
+    assert [a["name"] for a in cli.choose_archives(True, [], open_runs=False)] == ["claude-code"]
     assert "records in their default location (~/.claude/projects)?" in asked[0]
     assert asked[1].startswith("(Optional) Add a folder")
     assert "No codex records in their default location (~/.codex/sessions)." in capsys.readouterr().out
 
     asked = answer("n", str(copied), "codex", "")
-    assert [a["path"] for a in cli.choose_archives(True, [])] == [str(copied)]
+    assert [a["path"] for a in cli.choose_archives(True, [], open_runs=False)] == [str(copied)]
     assert asked[1].startswith("Add a folder")
     assert asked[3].startswith("(Optional) Add a folder")
 
@@ -1538,3 +1538,35 @@ def test_the_report_says_how_many_tasks_of_its_own_each_ai_model_needs(capsys):
     assert "How close its forecasts came on each AI model's newest tasks, 40 in all" in squashed
     assert "not enough data, 12 tasks, needs 60" in squashed or "not enough data · 12 tasks, needs 60" in squashed
     assert "test" not in out
+
+
+def test_a_model_from_open_runs_alone_sends_nothing_to_voyage(capsys, monkeypatch, quick, ready, open_runs):
+    monkeypatch.setattr(cli, "DEFAULT_ARCHIVES", ())  # no records of your own here
+    code, out = run(capsys, "create", "--express", "--json", *quick)
+    answer = json.loads(out)
+    assert code == 0 and answer["found_tasks"] > 10_000 and answer["embedded"] == 0
+    assert ready.requests == [] and Predictor("main").config["archives"] == [open_runs]
+
+
+def test_a_program_with_plenty_of_its_own_runs_leaves_open_runs_out(
+    capsys, monkeypatch, quick, ready, records, open_runs
+):
+    monkeypatch.setattr(cli, "PLENTY", 100)
+    mine = {"name": "claude-code", "format": "claude-code", "path": str(records)}
+    monkeypatch.setattr(cli, "DEFAULT_ARCHIVES", (mine,))
+    code, out = run(capsys, "create", "--express", "--json", *quick)
+    assert code == 0 and json.loads(out)["found_tasks"] == 180
+    assert Predictor("main").config["archives"] == [mine]
+    code, out = run(
+        capsys,
+        "create",
+        "both",
+        "--yes",
+        "--json",
+        "--archive",
+        f"claude-code={records}",
+        "--archive",
+        "open-runs",
+        *quick,
+    )
+    assert code == 0 and [a["name"] for a in Predictor("both").config["archives"]] == ["claude-projects", "open-runs"]
