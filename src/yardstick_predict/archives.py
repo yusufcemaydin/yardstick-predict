@@ -288,13 +288,15 @@ def _seconds(value: object) -> float | None:
     return None
 
 
-def _run_task(line: dict, path: Path, archive_name: str, file_time: float) -> Task | None:
+def _run_task(line: dict, path: Path, archive_name: str) -> Task | None:
     """One line of the runs format: a finished task that any program reported. None when a required field is
-    missing: the prompt, the AI model, the seconds or the tokens."""
+    missing: the prompt, the AI model, the start, the seconds or the tokens. The test replays tasks in the order
+    they started, so a task without its start can't be tested, or tell a test what came before."""
     prompt = line.get("prompt")
     model = _shared(line.get("model"))
     seconds = _seconds(line.get("seconds"))
-    if not isinstance(prompt, str) or not prompt.strip() or not model or seconds is None:
+    started = _timestamp(line.get("started_at"))
+    if not isinstance(prompt, str) or not prompt.strip() or not model or seconds is None or started is None:
         return None
     new_input = _number(line.get("input_tokens"))
     cache_write = _number(line.get("cache_write_tokens"))
@@ -307,7 +309,6 @@ def _run_task(line: dict, path: Path, archive_name: str, file_time: float) -> Ta
     usd = line.get("usd")
     if isinstance(usd, bool) or not isinstance(usd, (int, float)) or not math.isfinite(usd) or usd < 0:
         usd = prices.call_cost(model, new_input, cache_write, 0, cache_read, output) if output else None
-    started = _timestamp(line.get("started_at")) or file_time
     run = _name(line.get("id")) or hashlib.sha256(json.dumps(line, sort_keys=True).encode()).hexdigest()[:24]
     origin = line.get("origin") if line.get("origin") in ("person", "program") else "program"
     context = line.get("context") if isinstance(line.get("context"), str) else ""
@@ -342,10 +343,10 @@ def _run_task(line: dict, path: Path, archive_name: str, file_time: float) -> Ta
 
 def _read_runs(archive: dict, files: dict[str, tuple[int, float]], on_read: Callable[[int], None] | None) -> Reading:
     tasks = []
-    for name, (size, modified) in files.items():
+    for name, (size, _) in files.items():
         path = Path(name)
         for line in _lines(path):
-            task = _run_task(line, path, archive["name"], modified)
+            task = _run_task(line, path, archive["name"])
             if task is not None:
                 tasks.append(task)
         if on_read:

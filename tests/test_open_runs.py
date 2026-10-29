@@ -7,6 +7,7 @@ import json
 import lzma
 import sqlite3
 from array import array
+from dataclasses import replace
 
 import pytest
 from test_llm import FIELDS, answer_for, ids_in
@@ -48,9 +49,17 @@ def test_a_runs_file_gives_one_task_per_line(tmp_path):
             "cache_read_tokens": 50_000,
             "output_tokens": 3000,
         },
-        {"prompt": "Fix the build", "model": "gpt-6.1-sol", "seconds": 60.5, "tokens": 90_000, "usd": 0.4},
-        {"prompt": "No time given", "model": "gpt-6.1-sol", "tokens": 10},
-        {"prompt": "", "model": "gpt-6.1-sol", "seconds": 5, "tokens": 10},
+        {
+            "prompt": "Fix the build",
+            "model": "gpt-6.1-sol",
+            "started_at": 1.79e9,
+            "seconds": 60.5,
+            "tokens": 90_000,
+            "usd": 0.4,
+        },
+        {"prompt": "No time given", "model": "gpt-6.1-sol", "started_at": 1.79e9, "tokens": 10},
+        {"prompt": "No start given", "model": "gpt-6.1-sol", "seconds": 5, "tokens": 10},
+        {"prompt": "", "model": "gpt-6.1-sol", "started_at": 1.79e9, "seconds": 5, "tokens": 10},
         "not json",
     )
     tasks = {task.prompt: task for task in archives.read_archive(archive)}
@@ -65,7 +74,7 @@ def test_a_runs_file_gives_one_task_per_line(tmp_path):
 
 
 def test_compressed_runs_files_are_read_too(tmp_path):
-    line = {"prompt": "Write tests", "model": "claude-opus-5-5", "seconds": 30, "tokens": 5000}
+    line = {"prompt": "Write tests", "model": "claude-opus-5-5", "started_at": 1.79e9, "seconds": 30, "tokens": 5000}
     for name in ("a.jsonl.gz", "b.jsonl.xz"):
         archive = runs_folder(tmp_path, {**line, "id": name}, name=name)
     assert sorted(task.id for task in archives.read_archive(archive)) == ["mine:a.jsonl.gz", "mine:b.jsonl.xz"]
@@ -181,6 +190,17 @@ def test_analysis_reads_each_text_once(monkeypatch):
     found = llm.analyze(asks, HOW, FIELDS).answers
     assert sorted(sent) == sorted(ask.id for ask in asks)  # the shared text went once
     assert sorted(found) == sorted(t.id for t in tasks) and found["claude-code:1"]["kind"] == "feature"
+
+
+def test_a_shared_text_never_shares_a_request_with_a_later_task_of_any_of_its_conversations():
+    config = {"features": ["prompt", "llm"], "llm": HOW, "options": {"llm": ["kind"]}}
+    a1 = replace(task(3, "Fix the build"), session="a")
+    b1 = replace(task(1, "Fix the build"), session="b")
+    b2 = replace(task(2, "Add tests", started=1.79e9), session="b")  # its context may show how b1 ended
+    asks = pipeline.analysis_plan([b1, b2, a1], config, {})
+    shared = next(ask for ask in asks if ask.also)
+    assert shared.conversation in ("a", "b") and set((shared.conversation, *shared.also_in)) == {"a", "b"}
+    assert all(len(batch) == 1 for batch in llm.batches(asks, 10))
 
 
 def test_answers_that_come_with_the_tool_count_as_read(monkeypatch):

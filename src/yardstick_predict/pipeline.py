@@ -462,7 +462,14 @@ def analysis_plan(tasks: list[Task], config: dict, labels: dict, limit: int | No
         if llm.needs(labels.get(task.id), how, fields, read):
             same.setdefault(read, []).append(task)
     return [
-        llm.Ask(first.id, first.prompt, first.context, first.session, tuple(task.id for task in rest))
+        llm.Ask(
+            first.id,
+            first.prompt,
+            first.context,
+            first.session,
+            tuple(task.id for task in rest),
+            tuple(dict.fromkeys(task.session for task in rest if task.session)),
+        )
         for first, *rest in same.values()
     ]
 

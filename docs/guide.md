@@ -209,13 +209,13 @@ A program that runs coding agents can write down each finished task itself, one 
 
 - **`prompt`**: the task's prompt.
 - **`model`**: the AI model, such as `claude-opus-5-5`.
+- **`started_at`**: when it started: ISO 8601 text such as `2026-10-20T09:15:00Z` or seconds since 1970. The test replays tasks in the order they started. A line without it is skipped.
 - **`seconds`**: how long the task took.
 - **tokens**: `input_tokens`, `cache_write_tokens`, `cache_read_tokens` and `output_tokens`. When the split isn't known, `tokens` alone gives the total.
 
 These are optional:
 
 - **`id`**: the task's own id. Without one, the line's contents make one. A line read again with the same id replaces the task.
-- **`started_at`**: when it started: ISO 8601 text such as `2026-10-20T09:15:00Z` or seconds since 1970. Without it, the file's time stands in.
 - **`usd`**: what it cost. Without it, the AI model's list price works it out, when the split of the tokens is known.
 - **`agent`**, **`effort`**: the agent and the thinking level. They default to `other` and `default`.
 - **`origin`**: `person` or `program`, who started it. It defaults to `program`.

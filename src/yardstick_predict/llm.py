@@ -183,6 +183,8 @@ class Ask:
     context would show the AI model how the earlier one ended."""
     also: tuple[str, ...] = ()
     """Other tasks with the very same text to read. They get the same answer, so the text is paid for once."""
+    also_in: tuple[str, ...] = ()
+    """The conversations of the tasks in `also`. A request never holds a later task of any of them either."""
 
 
 @dataclass
@@ -365,16 +367,18 @@ def _clean(found: dict, fields: list[str]) -> dict | None:
 
 
 def batches(asks: list[Ask], size: int) -> list[list[Ask]]:
-    """The tasks in requests of up to `size`, no two of them from the same conversation."""
+    """The tasks in requests of up to `size`, no two of them from the same conversation. A task that stands for
+    others with the same text counts as in each of their conversations too."""
     found: list[tuple[list[Ask], set[str]]] = []
     for ask in asks:
+        mine = {name for name in (ask.conversation, *ask.also_in) if name}
         for batch, conversations in found:
-            if len(batch) < size and (not ask.conversation or ask.conversation not in conversations):
+            if len(batch) < size and not mine & conversations:
                 batch.append(ask)
-                conversations.add(ask.conversation)
+                conversations |= mine
                 break
         else:
-            found.append(([ask], {ask.conversation}))
+            found.append(([ask], mine))
     return [batch for batch, _ in found]
 
 
