@@ -4,6 +4,10 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-30
+
+Keys and passwords in your prompts are hidden before they're sent. One command now removes yardstick-predict.
+
 ### Added
 
 - `yardstick-predict uninstall` removes yardstick-predict in one go. First it takes the forecasts out of Claude Code: for all your sessions and for every folder you added them to with `--here`. It also finds folders an earlier version added them to, in Claude Code's own list of the folders it has opened. Then it deletes the Voyage key it kept and the yardstick folder with your models. It says what goes and asks first. If a settings file can't be read or a model is being refreshed, it says so and keeps the rest for the next try. `--keep-data` keeps your models and the key. Last, it shows the command that removes the program itself, the way you installed it. Before, removing yardstick took four commands, plus one more in each folder you'd added it to.
@@ -340,7 +344,8 @@ The first release.
 - Advanced settings for what to forecast, the curve's shape, the loss, dropout, the data split and how fast old tasks count less.
 - Support for macOS, Linux and Windows, with Python 3.12 or newer.
 
-[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/yusufcemaydin/yardstick-predict/compare/v0.5.0...v0.5.1
