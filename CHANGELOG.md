@@ -4,6 +4,10 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, `yardstick-predict uninstall` kept the yardstick folder with your models. It took the small file that marks the folder as private for someone else's file. It now deletes the folder, as it does on macOS and Linux.
+
 ## [0.7.0] - 2026-10-30
 
 Keys and passwords in your prompts are hidden before they're sent. One command now removes yardstick-predict.

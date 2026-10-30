@@ -62,6 +62,7 @@ OWN = frozenset(
         "voyage-usage.lock",
         "last-crash.txt",
         ".DS_Store",  # what macOS's Finder leaves in a folder it shows
+        ".private",  # the mark that says the folder was made private on Windows
     }
 )
 """What yardstick-predict makes in its folder. Uninstall deletes only these."""

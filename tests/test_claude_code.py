@@ -427,6 +427,14 @@ def test_uninstall_deletes_the_voyage_key_and_never_a_folder_holding_files_it_di
     assert f"{home} stays as it is. It also holds notes.txt." in out
 
 
+def test_uninstall_deletes_a_folder_that_holds_the_mark_windows_leaves(home, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    (home / ".private").touch()  # on Windows, the mark that says the folder was made private
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert not home.exists()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="making a link needs extra rights on Windows")
 def test_uninstall_deletes_a_link_in_the_yardstick_folder_but_never_what_it_links_to(home, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
