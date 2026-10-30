@@ -21,7 +21,6 @@ body:
       options:
         - Claude Code
         - Codex
-        - Cursor
         - Other
     validations:
       required: true

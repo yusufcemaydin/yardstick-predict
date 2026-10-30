@@ -47,7 +47,7 @@ jobs:
         run: uv run pytest -q
 
   other-systems:
-    name: Tests and install on ${{ matrix.os }}
+    name: Tests and install on Mac and Windows
     if: github.event_name == 'workflow_dispatch' && inputs.all_systems
     runs-on: ${{ matrix.os }}
     strategy:

@@ -55,7 +55,6 @@ body:
       options:
         - Claude Code
         - Codex
-        - Cursor
         - Other
   - type: input
     id: model

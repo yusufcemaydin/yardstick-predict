@@ -57,15 +57,15 @@ This works better than giving the trees the embedding itself. 256 weak numbers l
 
 ## 3. The model: one curve per task
 
-For each task on each AI model, the model forecasts a curve for each head: seconds, tokens and dollars. An agent either answers directly, without tools, or works with tools, so each curve has two parts:
+For each task on each AI model, the model forecasts a curve for each head: seconds, tokens and dollars. An agent either answers directly, without tools, or works with tools, so each curve has three parts:
 
 1. the chance of a direct answer
 2. a curve for a direct answer
 3. a curve for work with tools
 
-By default each part is a log-normal curve: a bell curve on a log scale. It fits times and token counts, which are never negative and run from a few seconds to many hours. On a log scale, task times form two humps, quick direct answers and longer work, and the two parts give each hump its own curve.
+By default the two curves are log-normal: bell curves on a log scale. They fit times and token counts, which are never negative and run from a few seconds to many hours. On a log scale, task times form two humps: quick direct answers and longer work. The two curves give each hump its own shape.
 
-**Gradient-boosted trees** learn every part, using XGBoost, the standard library for this kind of data. For each part, the trees learn two numbers per task: the curve's center and its width. They learn them by maximum likelihood: finding the curves under which what really happened is as likely as possible.
+**Gradient-boosted trees** learn every part, using XGBoost, the standard library for this kind of data. For each curve, the trees learn two numbers per task: its center and its width. For the chance of a direct answer, they learn one. They learn them by maximum likelihood: finding the curves under which what really happened is as likely as possible.
 
 Three choices keep the model honest when there's little data:
 

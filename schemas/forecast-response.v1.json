@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/yusufcemaydin/yardstick-predict/schemas/forecast-response.v1.json",
+  "$id": "https://raw.githubusercontent.com/yusufcemaydin/yardstick-predict/main/schemas/forecast-response.v1.json",
   "title": "yardstick-predict forecast response, version 1",
   "type": "object",
   "required": [

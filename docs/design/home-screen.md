@@ -194,5 +194,5 @@ Choosing one opens its screen:
 
 - The screens live in small modules under `screens`, each with one purpose: `home.py`, `estimate.py`, `update.py`, `summary.py`, `models.py`, `listing.py`, `version.py`, `checklist.py` and `keys.py`, which reads single key presses and draws menus. How lines fit the terminal is in `ui.py`.
 - The tests cover the menus with a stand-in key reader (arrows, numbers, Enter, Esc and the typed fallback), keys read from a pseudo terminal, the text of each screen at 80 and at 45 columns, the update summary coming before any Voyage or LLM call, Cancel spending nothing, Rename keeping the default, the output outside a terminal staying the same and `refresh --yes` asking nothing.
-- CI runs on Linux and Windows. The `termios` import is guarded for Windows.
+- The tests run on Linux for every pull request. On Mac and Windows they run when started by hand, for example before a release. The `termios` import is guarded for Windows.
 - Text in screens, docs, the change log and commits uses plain words, with no dashes, no semicolons and no comma right before and, but, or, so or yet.

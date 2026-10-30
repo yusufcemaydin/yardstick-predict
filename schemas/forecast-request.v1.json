@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/yusufcemaydin/yardstick-predict/schemas/forecast-request.v1.json",
+  "$id": "https://raw.githubusercontent.com/yusufcemaydin/yardstick-predict/main/schemas/forecast-request.v1.json",
   "title": "yardstick-predict forecast request, version 1",
   "description": "A field that may be left out may also be null, which means the same as leaving it out.",
   "type": "object",

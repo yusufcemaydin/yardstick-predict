@@ -22,7 +22,7 @@ export DYLD_FALLBACK_LIBRARY_PATH="$(uv run python -c 'import sklearn, os; print
 uv run pytest
 ```
 
-New features and model types can live in a plugin, outside this repo. The front page's "Extend it" section shows how.
+New features and model types can live in a plugin, outside this repo. The guide's [Plugins](docs/guide.md#plugins) section shows how.
 
 Before you send a change, check the style too:
 
