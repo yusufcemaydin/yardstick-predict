@@ -6,7 +6,7 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ### Added
 
-- `yardstick-predict uninstall` removes yardstick-predict in one go. First it takes the forecasts out of Claude Code: for all your sessions and for every folder you added them to with `--here`. It also finds folders an earlier version added them to, in Claude Code's own list of the folders it has opened. Then it deletes the Voyage key it kept and the yardstick folder with your models. It says what goes and asks first. `--keep-data` keeps your models and the key. Last, it shows the command that removes the program itself, the way you installed it. Before, removing yardstick took four commands, plus one more in each folder you'd added it to.
+- `yardstick-predict uninstall` removes yardstick-predict in one go. First it takes the forecasts out of Claude Code: for all your sessions and for every folder you added them to with `--here`. It also finds folders an earlier version added them to, in Claude Code's own list of the folders it has opened. Then it deletes the Voyage key it kept and the yardstick folder with your models. It says what goes and asks first. If a settings file can't be read or a model is being refreshed, it says so and keeps the rest for the next try. `--keep-data` keeps your models and the key. Last, it shows the command that removes the program itself, the way you installed it. Before, removing yardstick took four commands, plus one more in each folder you'd added it to.
 
 ### Fixed
 

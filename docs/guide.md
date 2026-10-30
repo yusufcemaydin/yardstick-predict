@@ -314,6 +314,8 @@ It says what goes and asks first. Then it does it all in one go:
 - It deletes the yardstick folder, with your models, their datasets and the feature store. It never deletes a folder that also holds files it didn't make, as one that `YARDSTICK_HOME` names might.
 - Last, it shows the command that removes the program itself, the way you installed it, such as `uv tool uninstall yardstick-predict`.
 
+If something stops it, such as a settings file it can't read or a model that's being refreshed, it says what. The steps after that wait. Running it again finishes the job. Your models and the key stay until every settings file is fixed. It shows the command that removes the program only once none runs yardstick any more. It never deletes a model while another command sets it up, refreshes it or reads it.
+
 Add `--keep-data` to keep your models and the Voyage key. Then it only takes the forecasts out of Claude Code. `--yes` goes ahead without asking, for programs. If you set `VOYAGE_API_KEY` in your shell's startup file, take that line out too.
 
 Removed the program first? Claude Code then can't run the forecasts' hooks. It may say so after each prompt. `uvx yardstick-predict uninstall` takes them out. It runs the newest version once, without installing it.

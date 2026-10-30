@@ -3134,12 +3134,12 @@ def cmd_uninstall(args) -> int:
     from . import claude_code, store
     from .screens.version import uninstall_command
 
-    places, unreadable = claude_code.places_with_forecasts()
+    places, problems = claude_code.places_with_forecasts()
     folder = store.home()
     others = store.others_in_home()
     models = predictor_names()
-    deletes_folder = not args.keep_data and folder.is_dir() and not others
-    busy = [name for name in models if store.being_refreshed(name)] if deletes_folder else []
+    deletes = not args.keep_data and not problems  # your data waits until every settings file can be fixed
+    busy = [name for name in models if store.being_refreshed(name)] if deletes and not others else []
     if busy:
         raise SystemExit(
             f"{busy[0]} is being set up or refreshed by another command. Try again when it's done. Nothing was removed."
@@ -3150,13 +3150,13 @@ def cmd_uninstall(args) -> int:
         ui.line("This takes the forecasts out of Claude Code, for:")
         for path in places:
             ui.line(f"  {sessions_of(path)}")
-    else:
+    elif not problems:
         ui.line("Claude Code's settings hold no forecasts.")
-    for path in unreadable:
-        ui.note(f"{path} names yardstick but isn't JSON Claude Code can read. It's left alone.")
-    if not args.keep_data:
+    for path, reason in problems:
+        ui.line(f"{path} can't be read: {reason}. It's left alone.")
+    if deletes:
         ui.line("It deletes the Voyage key kept in your computer's password store, if there is one.")
-        if deletes_folder:
+        if folder.is_dir() and not others:
             what = (
                 "your model, its dataset and the feature store"
                 if len(models) == 1
@@ -3168,6 +3168,8 @@ def cmd_uninstall(args) -> int:
         elif others:
             ui.line(f"{folder} also holds files yardstick-predict didn't make. Nothing in it is deleted.")
         ui.note("To keep your models and the Voyage key, run it with --keep-data.")
+    elif not args.keep_data:
+        ui.line("Your models and the Voyage key stay until that's fixed. Nothing is lost.")
     if interactive() and not args.yes:
         if not ui.ask("Remove yardstick-predict?", False):
             ui.note("Nothing changed.")
@@ -3176,7 +3178,7 @@ def cmd_uninstall(args) -> int:
         ui.line("Add --yes to go ahead.")
         return 2
 
-    trouble = bool(unreadable)
+    trouble = bool(problems)
     homes: set[str | None] = set()
     for path in places:
         try:
@@ -3196,45 +3198,58 @@ def cmd_uninstall(args) -> int:
             ui.note(f"Your own status line is back there: {shown}")
     if homes:
         ui.note("A copy of each settings file as it was is kept next to it, ending in .before-yardstick.")
-    for path in unreadable:
-        ui.warn(f"{path} still names yardstick. Take out its lines that run {claude_code.MARK} yourself.")
+    for path, _ in problems:
+        ui.warn(f"{path} may still run yardstick. Take out its lines that run {claude_code.MARK} yourself.")
 
     if args.keep_data:
         for home in homes:
             claude_code.clean(home)  # what the hook kept for each session isn't needed any more
         if models:
             ui.note(f"Your models and the Voyage key stay. Your models are in {folder}.")
-    else:
-        deleted = embeddings.delete_key(claude_code.KEY_SECONDS)
-        if deleted == "deleted":
-            ui.ok("Deleted the Voyage key from your computer's password store.")
-        elif deleted == embeddings.NO_ANSWER:
-            trouble = True
-            ui.warn("Your password store didn't answer in time. The Voyage key may still be in it.")
-            ui.note("Unlock it, then run this again: yardstick-predict uninstall")
-        elif deleted == "error":
-            trouble = True
-            ui.warn("Couldn't delete the Voyage key from your password store.")
-            ui.note("Delete it there yourself. It's kept under yardstick-predict, named voyage-api-key.")
-        if os.environ.get("VOYAGE_API_KEY", "").strip():
-            ui.note("VOYAGE_API_KEY is still set. If your shell sets it when it starts, take that line out.")
-        if deletes_folder:
-            try:
-                store.delete_home()
-            except OSError as error:
-                trouble = True
-                ui.warn(f"Couldn't delete all of {folder}: {error.strerror or error}. Delete what's left yourself.")
-            else:
-                ui.ok(f"Deleted {folder}.")
-        elif others:
-            shown = ", ".join(others[:5]) + (f" and {len(others) - 5} more" if len(others) > 5 else "")
-            ui.note(f"{folder} stays as it is. It also holds {shown}.")
+    elif not trouble:
+        trouble = not delete_data(folder, others)
+    if trouble:
+        ui.out()
+        ui.line("Once that's fixed, run this again: yardstick-predict uninstall")
+        return 1
     command = uninstall_command()
     if command:
         ui.out()
         ui.line("To finish, remove the program itself:")
         ui.line(f"  {command}")
-    return 1 if trouble else 0
+    return 0
+
+
+def delete_data(folder, others: list[str]) -> bool:
+    """Delete the yardstick folder, then the Voyage key, and say how each went. False when one couldn't go: what
+    comes after it stays, so running uninstall again finishes the job."""
+    from . import claude_code, store
+
+    if others:
+        shown = ", ".join(others[:5]) + (f" and {len(others) - 5} more" if len(others) > 5 else "")
+        ui.note(f"{folder} stays as it is. It also holds {shown}.")
+    elif folder.is_dir():
+        try:
+            store.delete_home()
+        except (store.Busy, OSError) as error:
+            reason = str(getattr(error, "strerror", None) or error).rstrip(".")
+            ui.warn(f"Couldn't delete all of {folder}: {reason}.")
+            return False
+        ui.ok(f"Deleted {folder}.")
+    deleted = embeddings.delete_key(claude_code.KEY_SECONDS)
+    if deleted == "deleted":
+        ui.ok("Deleted the Voyage key from your computer's password store.")
+    elif deleted == embeddings.NO_ANSWER:
+        ui.warn("Your password store didn't answer in time. The Voyage key may still be in it.")
+        ui.note("Unlock the password store first.")
+        return False
+    elif deleted == "error":
+        ui.warn("Couldn't delete the Voyage key from your password store.")
+        ui.note("Delete it there yourself. It's kept under yardstick-predict, named voyage-api-key.")
+        return False
+    if os.environ.get("VOYAGE_API_KEY", "").strip():
+        ui.note("VOYAGE_API_KEY is still set. If your shell sets it when it starts, take that line out.")
+    return True
 
 
 def sessions_of(path) -> str:

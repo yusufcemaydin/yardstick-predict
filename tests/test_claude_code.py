@@ -18,10 +18,10 @@ import pytest
 from builders import ClaudeSession, usage
 
 from yardstick_predict import claude_code as cc
-from yardstick_predict import cli, embeddings, locks
+from yardstick_predict import cli, embeddings, feature_store, locks
 from yardstick_predict.archives import read_archive
 from yardstick_predict.screens import version
-from yardstick_predict.store import Predictor, predictor_names
+from yardstick_predict.store import Busy, Predictor, delete_home, predictor_names
 
 THEIRS = {
     "model": "opus",
@@ -411,8 +411,9 @@ def test_uninstall_can_keep_your_models_and_the_voyage_key(home, tmp_path, monke
 
 
 def test_uninstall_deletes_the_voyage_key_and_never_a_folder_holding_files_it_didnt_make(
-    home, monkeypatch, capsys, wide
+    home, tmp_path, monkeypatch, capsys, wide
 ):
+    monkeypatch.chdir(tmp_path)
     Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
     (home / "notes.txt").write_text("mine")
     kept = {("yardstick-predict", "voyage-api-key"): "a key"}
@@ -427,7 +428,8 @@ def test_uninstall_deletes_the_voyage_key_and_never_a_folder_holding_files_it_di
 
 
 @pytest.mark.skipif(os.name != "posix", reason="making a link needs extra rights on Windows")
-def test_uninstall_deletes_a_link_in_the_yardstick_folder_but_never_what_it_links_to(home, tmp_path):
+def test_uninstall_deletes_a_link_in_the_yardstick_folder_but_never_what_it_links_to(home, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "kept.txt").write_text("still here")
@@ -437,15 +439,78 @@ def test_uninstall_deletes_a_link_in_the_yardstick_folder_but_never_what_it_link
     assert not home.exists() and (elsewhere / "kept.txt").read_text() == "still here"
 
 
-def test_uninstall_leaves_settings_it_cant_read_alone_and_says_so(tmp_path, monkeypatch, capsys, wide):
+def test_uninstall_leaves_settings_it_cant_read_alone_and_keeps_your_data_until_theyre_fixed(
+    home, tmp_path, monkeypatch, capsys, wide
+):
     monkeypatch.chdir(tmp_path)
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
     path = tmp_path / ".claude" / "settings.local.json"
     path.parent.mkdir()
     broken = '{"statusLine": {"command": "python -m yardstick_predict.claude_code status"'
     path.write_text(broken)
+    deleted = []
+    monkeypatch.setattr("keyring.delete_password", lambda service, user: deleted.append(user))
     assert cli.main(["uninstall", "--yes"]) == 1
     assert path.read_text() == broken
-    assert f"{path} still names yardstick." in capsys.readouterr().out
+    assert predictor_names() == ["default"] and not deleted
+    out = capsys.readouterr().out
+    assert f"{path} can't be read: it isn't JSON Claude Code can read. It's left alone." in out
+    assert f"{path} may still run yardstick." in out
+    assert "Once that's fixed, run this again: yardstick-predict uninstall" in out
+    assert "To finish" not in out  # removing the program now would leave a hook with nothing to run
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs a file this user can't read")
+def test_uninstall_says_so_when_it_cant_read_a_settings_file_it_added_the_forecasts_to(
+    home, tmp_path, monkeypatch, capsys, wide
+):
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    assert cli.main(["claude-code", "install", "--here", "--yes"]) == 0
+    path = project / ".claude" / "settings.local.json"
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+    path.chmod(0)
+    try:
+        assert cli.main(["uninstall", "--yes"]) == 1
+    finally:
+        path.chmod(0o600)
+    # The forecasts stay there, and so does the note of where they went, for the next try.
+    assert cc.in_use(path) and cc.added_places() == [str(path)] and predictor_names() == ["default"]
+    assert f"{path} can't be read: Permission denied. It's left alone." in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs a folder this user can't read")
+def test_a_folder_claude_code_opened_that_cant_be_read_is_passed_by(own_home, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    closed = tmp_path / "closed"
+    (closed / ".claude").mkdir(parents=True)
+    (closed / ".claude" / "settings.local.json").write_text("{}")
+    (own_home / ".claude.json").write_text(json.dumps({"projects": {str(closed): {}}}))
+    closed.chmod(0)  # as macOS keeps Documents from a program it hasn't let in
+    try:
+        assert cc.places_with_forecasts() == ([], [])
+    finally:
+        closed.chmod(0o700)
+
+
+def test_uninstall_never_deletes_a_model_while_its_set_up_or_refreshed(home, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    with locks.held(Predictor("default").dir / "refresh.lock"):  # another command is refreshing it
+        assert cli.main(["uninstall", "--yes"]) == 1
+        assert "default is being set up or refreshed by another command." in capsys.readouterr().err
+        # One that starts refreshing after uninstall looked is still never deleted from under it.
+        with pytest.raises(Busy):
+            delete_home()
+    with feature_store.writing():  # as a setup holds it from before it makes anything
+        with pytest.raises(Busy):
+            delete_home()
+    assert predictor_names() == ["default"]
+    delete_home()
+    assert not home.exists()
 
 
 def test_deleting_the_voyage_key_waits_only_so_long_for_the_password_store(monkeypatch):

@@ -1485,34 +1485,46 @@ def known_folders() -> list[Path]:
     return [Path(place) for place in found if isinstance(place, str) and place] if isinstance(found, dict) else []
 
 
-def places_with_forecasts(home: str | None = None) -> tuple[list[Path], list[Path]]:
+def places_with_forecasts(home: str | None = None) -> tuple[list[Path], list[tuple[Path, str]]]:
     """Every Claude Code settings file that holds the status line or hooks: the one for all sessions, each one they
     were added to, this folder's, and those of the folders Claude Code has opened, where an earlier version may have
-    added them without keeping a note. Also the files that name them but can't be read, which are left alone."""
-    looked = [settings_path(False), *(Path(place) for place in added_places(home)), settings_path(True)]
-    looked += [folder / ".claude" / "settings.local.json" for folder in known_folders()]
+    added them without keeping a note.
+
+    Also each file that may hold them but can't be read, with why. Those are left alone. A file that isn't there
+    holds nothing. One that can't be read at all counts only where it's sure to matter: the one for all sessions,
+    one they were added to or this folder's. Among the folders Claude Code has opened, many may be closed to this
+    program, as macOS keeps Documents, so there the search is a best try.
+    """
+    sure = [settings_path(False), *(Path(place) for place in added_places(home)), settings_path(True)]
+    known = [folder / ".claude" / "settings.local.json" for folder in known_folders()]
     found: list[Path] = []
-    unreadable: list[Path] = []
+    problems: list[tuple[Path, str]] = []
     seen: set[str] = set()
-    for path in looked:
+    for path, is_sure in [*((path, True) for path in sure), *((path, False) for path in known)]:
         key = os.path.normcase(os.path.abspath(path))
         if key in seen:
             continue
         seen.add(key)
         try:
-            if MARK not in path.read_text(encoding="utf-8-sig"):
-                continue
-            settings = read_settings(path)
-        except (OSError, UnicodeDecodeError):
-            continue  # no file there, mostly
-        except ValueError:
-            unreadable.append(path)
+            text = path.read_text(encoding="utf-8-sig")
+        except (FileNotFoundError, NotADirectoryError, UnicodeDecodeError):
+            continue  # no settings there, or none Claude Code can read, so they run nothing
+        except OSError as error:
+            if is_sure:
+                problems.append((path, error.strerror or str(error)))
+            continue
+        if MARK not in text:
+            continue
+        try:
+            settings = json.loads(text)
+        except (ValueError, RecursionError):
+            problems.append((path, "it isn't JSON Claude Code can read"))
             continue
         if not isinstance(settings, dict):
-            unreadable.append(path)
+            problems.append((path, "it isn't a JSON object"))
         elif removed(settings) != settings:
             found.append(path)
-    return found, unreadable
+    return found, problems
 
 
 def take_out(path: Path, settings: dict) -> tuple[object, Path | None, str | None]:

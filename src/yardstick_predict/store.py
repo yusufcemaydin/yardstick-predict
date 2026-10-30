@@ -88,16 +88,37 @@ def others_in_home() -> list[str]:
 
 def delete_home() -> None:
     """Delete the yardstick folder, with your models, their datasets, the feature store and the caches. Only a folder
-    that holds nothing else is deleted: with others_in_home, nothing is. A link in it goes, never what it links to."""
+    that holds nothing else is deleted: with others_in_home, nothing is.
+
+    It holds the lock of the feature store's users alone until it's done, as a features delete does. Setup and
+    refresh hold it from before they make anything, so none runs meanwhile, and it raises Busy while one does. Each
+    model goes as a delete of one model goes: it raises Busy while the model is set up or refreshed, and waits for a
+    forecast that is reading its model. Nothing is ever deleted through a link: a link goes, and what it links to
+    stays. The store's lock file goes once the lock is let go.
+    """
+    from . import feature_store
+
     folder = home()
     if others_in_home() or not folder.is_dir():
         return
-    for path in folder.iterdir():
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink(missing_ok=True)
-    if folder.is_symlink():
+    features = folder / "features"
+    linked = is_link(features)
+    with feature_store.deleting() as alone:
+        if not alone:
+            raise Busy("A model is being set up or refreshed by another command. Try again when it's done.")
+        models = folder / "predictors"
+        for model in sorted(models.iterdir()) if models.is_dir() and not is_link(models) else []:
+            delete_predictor(model.name)
+        for path in folder.iterdir():
+            if path.name != "features" or linked:
+                _remove(path)
+        for path in [] if linked else features.iterdir():
+            if path.name != "users.lock":  # held until the rest is gone
+                _remove(path)
+    if not linked:
+        (features / "users.lock").unlink(missing_ok=True)
+        features.rmdir()
+    if is_link(folder):
         folder.unlink()  # YARDSTICK_HOME names a link: the folder it links to is left empty
     else:
         folder.rmdir()
