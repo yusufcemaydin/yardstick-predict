@@ -4,6 +4,10 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+### Added
+
+- The front page has three short clips. The first, at the top, shows a real Claude Code session with the forecast in its status line. The second shows the home screen forecasting a task on two AI models. The third shows the command line asking for each forecast's curve with `--distribution`. The clips run the real program on made-up past runs. Their numbers are an example. `demo/README.md` says how to make them again.
+
 ## [0.7.1] - 2026-10-30
 
 A fix release. On Windows, `yardstick-predict uninstall` now deletes the yardstick folder.

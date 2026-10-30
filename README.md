@@ -5,6 +5,10 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/yusufcemaydin/yardstick-predict/blob/main/LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://github.com/yusufcemaydin/yardstick-predict/blob/main/pyproject.toml)
 
+![A real Claude Code session on Opus 5.5 at max effort. The task "Add a login page with tests" is sent. Under the input box, yardstick's status line forecasts about 7 minutes and $1.26, then counts up while Claude works. The middle is sped up. When Claude stops, the line says how long it took, next to the forecast.](https://raw.githubusercontent.com/yusufcemaydin/yardstick-predict/main/demo/claude-code.gif)
+
+A real Claude Code session, sped up in the middle. The line under the input box is yardstick's forecast, counting up while Claude works. The forecast comes from made-up past runs. So its numbers are an example.
+
 yardstick-predict learns from your own past Claude Code and Codex runs. Give it a task and it forecasts the time, tokens and dollars on each AI model you use. It's built for orchestrators: programs that run many coding agents and pick an AI model, a time limit or a budget for each task.
 
 ```console
@@ -65,6 +69,12 @@ You need [uv](https://docs.astral.sh/uv/), a tool that installs Python programs.
 
 4. Every week or so, run `yardstick-predict` and choose Update. It reads your new runs and trains again.
 
+Run `yardstick-predict` with nothing after it for the home screen. Its menus do all of this. Here it forecasts a task on two AI models:
+
+![yardstick-predict in a terminal. On the home screen, Estimate is chosen. The task "Add a login page with tests" is typed and two AI models are ticked. A table then shows each AI model's expected time, tokens and cost, with the range real results fall in.](https://raw.githubusercontent.com/yusufcemaydin/yardstick-predict/main/demo/demo.gif)
+
+The clip runs the real program on made-up past runs. Its numbers are an example.
+
 ## See forecasts in Claude Code
 
 ```bash
@@ -76,6 +86,8 @@ Claude Code's status line then shows a forecast for each prompt you send. It cou
 ```text
 yardstick · 1:12 of ~4 min · ~$1.23
 ```
+
+The clip at the top of this page shows it in a real session.
 
 On a Claude subscription, it shows shares of your weekly limit in place of dollars. First comes what the task has used so far. Then the brackets hold the forecast's time and its share of the week:
 
@@ -96,6 +108,12 @@ echo '{"version": 1, "tasks": [
 ```
 
 Each forecast has `seconds`, `tokens` and `usd`. They are averages. Ten tasks' forecasts add up to their expected total. When a forecast isn't given, its numbers are `null` and `reason` says why. [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md) explains every field. Setup and refresh answer in JSON too, with `--json`.
+
+Flags do the same in one line. `--model` and `--effort` choose the AI model and the thinking level. `--distribution` adds each forecast's whole curve. It gives the chance that the agent answers at once, without tools. For time, tokens and cost it gives a center and a width. From those a program can work out any range, such as a time limit that 9 runs in 10 fit in. [The format](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/format.md#the-distribution) says how.
+
+![yardstick-predict on the command line. First it forecasts "Add a login page with tests" on claude-opus-5-5 at max effort and prints a table. Then the same command with --distribution, piped to jq, prints the forecast as JSON with its curve. The curve has the chance of a direct answer, then a center and a width for time, tokens and cost.](https://raw.githubusercontent.com/yusufcemaydin/yardstick-predict/main/demo/cli.gif)
+
+The clip runs the real program on made-up past runs. Its numbers are an example.
 
 ## Commands
 
