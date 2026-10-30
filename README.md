@@ -113,8 +113,17 @@ Each forecast has `seconds`, `tokens` and `usd`. They are averages. Ten tasks' f
 | `yardstick-predict rename OLD NEW` | Renames a model. |
 | `yardstick-predict delete NAME` | Deletes a model. Your records stay. |
 | `yardstick-predict claude-code install` | Shows forecasts in Claude Code's status line. |
+| `yardstick-predict uninstall` | Removes yardstick-predict: takes it out of Claude Code and deletes your models. |
 
 Most commands take `--json` for programs. `yardstick-predict COMMAND --help` lists every flag of a command. [The guide](https://github.com/yusufcemaydin/yardstick-predict/blob/main/docs/guide.md#commands) says more about each one.
+
+## Remove it
+
+```bash
+yardstick-predict uninstall
+```
+
+It takes the forecasts out of Claude Code, everywhere you added them. Then it deletes the Voyage key it kept and your models. It says what goes and asks first. Add `--keep-data` to keep your models and the key. Last, it shows the command that removes the program itself, such as `uv tool uninstall yardstick-predict`.
 
 ## Learn more
 

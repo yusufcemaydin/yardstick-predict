@@ -59,18 +59,39 @@ def wanted() -> bool:
     return store.settings().get(SETTING) is not False
 
 
-def upgrade_command(prefix: str | None = None) -> str:
-    """How to update yardstick-predict the way it was installed: with uv, pipx or pip. `prefix` is the folder of
-    the Python it runs in."""
+def installed_with(prefix: str | None = None) -> str:
+    """How yardstick-predict was installed: "uv", "pipx" or "pip". `prefix` is the folder of the Python it runs in."""
     place = Path(prefix or sys.prefix)
     parts = [part.lower() for part in place.parts]
     folder = place.parent.name.lower()
     uv_tools = os.environ.get("UV_TOOL_DIR")
     if (uv_tools and place.parent == Path(uv_tools)) or ("uv" in parts and folder == "tools"):
-        return "uv tool upgrade yardstick-predict"
+        return "uv"
     if "pipx" in parts and folder == "venvs":
-        return "pipx upgrade yardstick-predict"
-    return "pip install --upgrade yardstick-predict"
+        return "pipx"
+    return "pip"
+
+
+def upgrade_command(prefix: str | None = None) -> str:
+    """How to update yardstick-predict the way it was installed: with uv, pipx or pip. `prefix` is the folder of
+    the Python it runs in."""
+    return {
+        "uv": "uv tool upgrade yardstick-predict",
+        "pipx": "pipx upgrade yardstick-predict",
+        "pip": "pip install --upgrade yardstick-predict",
+    }[installed_with(prefix)]
+
+
+def uninstall_command(prefix: str | None = None) -> str | None:
+    """How to remove the program itself, the way it was installed. None when uvx runs it once, from uv's cache, and
+    there's nothing installed to remove."""
+    if "archive-v0" in (part.lower() for part in Path(prefix or sys.prefix).parts):
+        return None
+    return {
+        "uv": "uv tool uninstall yardstick-predict",
+        "pipx": "pipx uninstall yardstick-predict",
+        "pip": "pip uninstall yardstick-predict",
+    }[installed_with(prefix)]
 
 
 def check() -> None:

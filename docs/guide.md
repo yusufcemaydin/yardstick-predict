@@ -279,6 +279,7 @@ A plugin can also add a model type with `yardstick_predict.model_types.register_
 | `yardstick-predict default [NAME]` | Shows or sets your default model: the one commands use when they name none. `--predictor NAME` picks another for one command. |
 | `yardstick-predict rename OLD NEW` | Gives a model another name. The default stays the default. |
 | `yardstick-predict claude-code install` | Shows forecasts in Claude Code's status line. `--here` for one folder, `remove` to turn it off. |
+| `yardstick-predict uninstall` | Removes yardstick-predict: takes the forecasts out of Claude Code everywhere you added them, then deletes the Voyage key it kept and your models. It ends with the command that removes the program itself. In a terminal it says what goes and asks first. `--keep-data` keeps your models and the key. `--yes` for programs. |
 
 ## Update or remove it
 
@@ -300,21 +301,22 @@ From 0.4 on, going back to an older version is safe too. It reads what it can of
 
 To remove one model, run `yardstick-predict delete NAME`. Your records, the feature store and your other models stay.
 
-To remove everything, first take the forecasts out of Claude Code, if you added them. Otherwise Claude Code keeps trying to run yardstick-predict once it's gone:
+To remove everything, run:
 
 ```bash
-yardstick-predict claude-code remove
+yardstick-predict uninstall
 ```
 
-If you added them for one folder with `--here`, also run `yardstick-predict claude-code remove --here` in that folder. Then uninstall the program, delete its folder and delete the Voyage key it kept:
+It says what goes and asks first. Then it does it all in one go:
 
-```bash
-uv tool uninstall yardstick-predict
-rm -rf ~/.yardstick
-uvx keyring del yardstick-predict voyage-api-key
-```
+- It takes the forecasts out of Claude Code: for all your sessions and for each folder you added them to with `--here`. It also finds folders that an earlier version added them to, in Claude Code's own list of the folders it has opened. Where yardstick replaced your status line, yours comes back. A copy of each settings file as it was is kept next to it.
+- It deletes the Voyage key it kept in your computer's password store.
+- It deletes the yardstick folder, with your models, their datasets and the feature store. It never deletes a folder that also holds files it didn't make, as one that `YARDSTICK_HOME` names might.
+- Last, it shows the command that removes the program itself, the way you installed it, such as `uv tool uninstall yardstick-predict`.
 
-If you set `YARDSTICK_HOME`, delete that folder instead. On Windows, delete the `.yardstick` folder in your user folder. If you only ever used `VOYAGE_API_KEY`, the last line reports that it found no key. That's fine.
+Add `--keep-data` to keep your models and the Voyage key. Then it only takes the forecasts out of Claude Code. `--yes` goes ahead without asking, for programs. If you set `VOYAGE_API_KEY` in your shell's startup file, take that line out too.
+
+Removed the program first? Claude Code then can't run the forecasts' hooks. It may say so after each prompt. `uvx yardstick-predict uninstall` takes them out. It runs the newest version once, without installing it.
 
 ## Privacy and safety
 

@@ -4,6 +4,10 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ## [Unreleased]
 
+### Added
+
+- `yardstick-predict uninstall` removes yardstick-predict in one go. First it takes the forecasts out of Claude Code: for all your sessions and for every folder you added them to with `--here`. It also finds folders an earlier version added them to, in Claude Code's own list of the folders it has opened. Then it deletes the Voyage key it kept and the yardstick folder with your models. It says what goes and asks first. `--keep-data` keeps your models and the key. Last, it shows the command that removes the program itself, the way you installed it. Before, removing yardstick took four commands, plus one more in each folder you'd added it to.
+
 ### Fixed
 
 - The front page, the guide, the Update screen and what the command says when run on its own no longer say that only the text you choose leaves your computer. The Update screen no longer says your chats never do. They all say plainly that your prompts go to Voyage. What the command says when run on its own now wraps as one paragraph, with no short line in the middle.

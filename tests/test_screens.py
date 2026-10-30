@@ -805,6 +805,19 @@ def test_the_notice_names_the_update_command_for_the_way_it_was_installed(monkey
     assert version.upgrade_command("/opt/tools/yardstick-predict") == "uv tool upgrade yardstick-predict"
 
 
+def test_uninstall_names_the_command_that_removes_the_program_the_way_it_was_installed(monkeypatch):
+    monkeypatch.delenv("UV_TOOL_DIR", raising=False)
+    assert version.uninstall_command("/Users/me/.local/share/uv/tools/yardstick-predict") == (
+        "uv tool uninstall yardstick-predict"
+    )
+    assert version.uninstall_command("/Users/me/.local/pipx/venvs/yardstick-predict") == (
+        "pipx uninstall yardstick-predict"
+    )
+    assert version.uninstall_command("/Users/me/project/.venv") == "pip uninstall yardstick-predict"
+    # uvx runs it once from uv's cache: nothing is installed, so there's nothing more to remove.
+    assert version.uninstall_command("/Users/me/.cache/uv/archive-v0/a1b2c3") is None
+
+
 def test_the_check_is_off_with_do_not_track_or_the_setting(monkeypatch):
     monkeypatch.delenv(version.OFF, raising=False)
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)

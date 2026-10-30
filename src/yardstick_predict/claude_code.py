@@ -52,6 +52,8 @@ HEADLESS = "sdk"
 for the Agent SDKs."""
 REPLACED = "status-lines.json"
 """The status lines that adding this one replaced, by settings file, so removing it can put them back."""
+ADDED = "settings-files.json"
+"""Each settings file the status line and hooks were added to, so uninstall finds every one."""
 
 
 # Files -------------------------------------------------------------------------------------------------
@@ -1449,6 +1451,85 @@ def _keep_replaced(kept: dict, home: str | None) -> None:
         path.unlink(missing_ok=True)
 
 
+def added_places(home: str | None = None) -> list[str]:
+    """The settings files the status line and hooks were added to, as they were kept."""
+    found = _read(_home(home) / "claude-code" / ADDED).get("settings")
+    return [place for place in found if isinstance(place, str)] if isinstance(found, list) else []
+
+
+def remember_added(path: Path, home: str | None) -> None:
+    """Keep the settings file the status line and hooks went into, so uninstall finds it."""
+    places = added_places(home)
+    if str(path) not in places:
+        _keep_added([*places, str(path)], home)
+
+
+def _keep_added(places: list[str], home: str | None) -> None:
+    path = _home(home) / "claude-code" / ADDED
+    if places:
+        from .files import write_text
+
+        write_text(path, json.dumps({"settings": places}, indent=2, ensure_ascii=False) + "\n")
+        if os.name == "posix":
+            os.chmod(_home(home), 0o700)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def known_folders() -> list[Path]:
+    """The folders Claude Code has opened, from its own list in ~/.claude.json. Empty when that can't be read."""
+    try:
+        found = json.loads((Path.home() / ".claude.json").read_text(encoding="utf-8")).get("projects")
+    except (OSError, ValueError, RecursionError, AttributeError):
+        return []
+    return [Path(place) for place in found if isinstance(place, str) and place] if isinstance(found, dict) else []
+
+
+def places_with_forecasts(home: str | None = None) -> tuple[list[Path], list[Path]]:
+    """Every Claude Code settings file that holds the status line or hooks: the one for all sessions, each one they
+    were added to, this folder's, and those of the folders Claude Code has opened, where an earlier version may have
+    added them without keeping a note. Also the files that name them but can't be read, which are left alone."""
+    looked = [settings_path(False), *(Path(place) for place in added_places(home)), settings_path(True)]
+    looked += [folder / ".claude" / "settings.local.json" for folder in known_folders()]
+    found: list[Path] = []
+    unreadable: list[Path] = []
+    seen: set[str] = set()
+    for path in looked:
+        key = os.path.normcase(os.path.abspath(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if MARK not in path.read_text(encoding="utf-8-sig"):
+                continue
+            settings = read_settings(path)
+        except (OSError, UnicodeDecodeError):
+            continue  # no file there, mostly
+        except ValueError:
+            unreadable.append(path)
+            continue
+        if not isinstance(settings, dict):
+            unreadable.append(path)
+        elif removed(settings) != settings:
+            found.append(path)
+    return found, unreadable
+
+
+def take_out(path: Path, settings: dict) -> tuple[object, Path | None, str | None]:
+    """Take the status line and hooks out of one settings file, and put back the status line they replaced.
+
+    Returns the status line put back or None, where a copy of the file as it was is kept, and the yardstick folder
+    the commands named.
+    """
+    home = installed_home(settings)  # the folder the hook kept its forecasts in
+    changed, restored = put_back_status_line(settings, removed(settings), path, home)
+    backup = save_settings(path, changed)
+    places = added_places(home)
+    if str(path) in places:
+        _keep_added([place for place in places if place != str(path)], home)
+    return restored, backup, home
+
+
 def clean(home: str | None = None) -> None:
     """Delete what the hook kept for each session: prompts, forecasts and clocks. Never fails."""
     root = _home(home) / "claude-code"
@@ -1457,7 +1538,7 @@ def clean(home: str | None = None) -> None:
     except OSError:
         return
     for path in paths:
-        if path.name != REPLACED:
+        if path.name not in (REPLACED, ADDED):
             try:
                 path.unlink()
             except OSError:

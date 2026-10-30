@@ -3039,13 +3039,10 @@ def cmd_claude_code(args) -> int:
         raise SystemExit(f"Claude Code's settings in {path} aren't a JSON object, so they were left alone.")
     where = "Claude Code sessions in this folder" if args.here else "all your Claude Code sessions"
     if args.action == "remove":
-        changed = claude_code.removed(settings)
-        if changed == settings:
+        if claude_code.removed(settings) == settings:
             ui.out(f"yardstick isn't in the settings for {where}. Nothing to remove.")
             return 0
-        home = claude_code.installed_home(settings)  # the folder the hook kept its forecasts in
-        changed, restored = claude_code.put_back_status_line(settings, changed, path, home)
-        backup = claude_code.save_settings(path, changed)
+        restored, backup, home = claude_code.take_out(path, settings)
         ui.ok(f"Removed the forecasts from {where}. New sessions won't show them.")
         if restored is not None:
             shown = claude_code.other_status_line({"statusLine": restored}) or json.dumps(restored)
@@ -3093,8 +3090,10 @@ def cmd_claude_code(args) -> int:
         return 2
     claude_code.remember_status_line(settings, path, home)
     claude_code.save_settings(path, claude_code.added(settings, sys.executable, home))
+    claude_code.remember_added(path, home)
     ui.ok("Added. Start a new Claude Code session there to see forecasts in its status line.")
     ui.note("Remove them with: yardstick-predict claude-code remove" + (" --here" if args.here else ""))
+    ui.note("To remove yardstick-predict from everywhere at once: yardstick-predict uninstall")
     # The hook finds the Voyage key as every command does: in VOYAGE_API_KEY, then in the password store.
     key = os.environ.get("VOYAGE_API_KEY", "").strip()
     stored, answer = claude_code.stored_key(claude_code.KEY_SECONDS)
@@ -3126,6 +3125,125 @@ def cmd_claude_code(args) -> int:
                 "in a terminal without --yes. Or set VOYAGE_API_KEY where Claude Code starts."
             )
     return 0
+
+
+def cmd_uninstall(args) -> int:
+    """Remove yardstick-predict: take the forecasts out of every Claude Code settings file that holds them, delete
+    the Voyage key it kept and its folder, then say how to remove the program itself. In a terminal it says what goes
+    and asks first. A program adds --yes. With --keep-data, your models and the key stay."""
+    from . import claude_code, store
+    from .screens.version import uninstall_command
+
+    places, unreadable = claude_code.places_with_forecasts()
+    folder = store.home()
+    others = store.others_in_home()
+    models = predictor_names()
+    deletes_folder = not args.keep_data and folder.is_dir() and not others
+    busy = [name for name in models if store.being_refreshed(name)] if deletes_folder else []
+    if busy:
+        raise SystemExit(
+            f"{busy[0]} is being set up or refreshed by another command. Try again when it's done. Nothing was removed."
+        )
+
+    ui.heading("Remove yardstick-predict")
+    if places:
+        ui.line("This takes the forecasts out of Claude Code, for:")
+        for path in places:
+            ui.line(f"  {sessions_of(path)}")
+    else:
+        ui.line("Claude Code's settings hold no forecasts.")
+    for path in unreadable:
+        ui.note(f"{path} names yardstick but isn't JSON Claude Code can read. It's left alone.")
+    if not args.keep_data:
+        ui.line("It deletes the Voyage key kept in your computer's password store, if there is one.")
+        if deletes_folder:
+            what = (
+                "your model, its dataset and the feature store"
+                if len(models) == 1
+                else f"your {len(models)} models, their datasets and the feature store"
+                if models
+                else "the feature store and caches"
+            )
+            ui.line(f"It deletes {folder} and everything in it: {what}. This can't be undone.")
+        elif others:
+            ui.line(f"{folder} also holds files yardstick-predict didn't make. Nothing in it is deleted.")
+        ui.note("To keep your models and the Voyage key, run it with --keep-data.")
+    if interactive() and not args.yes:
+        if not ui.ask("Remove yardstick-predict?", False):
+            ui.note("Nothing changed.")
+            return 0
+    elif not args.yes:
+        ui.line("Add --yes to go ahead.")
+        return 2
+
+    trouble = bool(unreadable)
+    homes: set[str | None] = set()
+    for path in places:
+        try:
+            settings = claude_code.read_settings(path)
+            if not isinstance(settings, dict):
+                raise ValueError("it isn't a JSON object")
+            restored, _, home = claude_code.take_out(path, settings)
+        except (OSError, ValueError) as error:
+            trouble = True
+            reason = getattr(error, "strerror", None) or error
+            ui.warn(f"Couldn't change {path}: {reason}. Take out its lines that run {claude_code.MARK} yourself.")
+            continue
+        homes.add(home)
+        ui.ok(f"Took the forecasts out of {sessions_of(path)}.")
+        if restored is not None:
+            shown = claude_code.other_status_line({"statusLine": restored}) or json.dumps(restored)
+            ui.note(f"Your own status line is back there: {shown}")
+    if homes:
+        ui.note("A copy of each settings file as it was is kept next to it, ending in .before-yardstick.")
+    for path in unreadable:
+        ui.warn(f"{path} still names yardstick. Take out its lines that run {claude_code.MARK} yourself.")
+
+    if args.keep_data:
+        for home in homes:
+            claude_code.clean(home)  # what the hook kept for each session isn't needed any more
+        if models:
+            ui.note(f"Your models and the Voyage key stay. Your models are in {folder}.")
+    else:
+        deleted = embeddings.delete_key(claude_code.KEY_SECONDS)
+        if deleted == "deleted":
+            ui.ok("Deleted the Voyage key from your computer's password store.")
+        elif deleted == embeddings.NO_ANSWER:
+            trouble = True
+            ui.warn("Your password store didn't answer in time. The Voyage key may still be in it.")
+            ui.note("Unlock it, then run this again: yardstick-predict uninstall")
+        elif deleted == "error":
+            trouble = True
+            ui.warn("Couldn't delete the Voyage key from your password store.")
+            ui.note("Delete it there yourself. It's kept under yardstick-predict, named voyage-api-key.")
+        if os.environ.get("VOYAGE_API_KEY", "").strip():
+            ui.note("VOYAGE_API_KEY is still set. If your shell sets it when it starts, take that line out.")
+        if deletes_folder:
+            try:
+                store.delete_home()
+            except OSError as error:
+                trouble = True
+                ui.warn(f"Couldn't delete all of {folder}: {error.strerror or error}. Delete what's left yourself.")
+            else:
+                ui.ok(f"Deleted {folder}.")
+        elif others:
+            shown = ", ".join(others[:5]) + (f" and {len(others) - 5} more" if len(others) > 5 else "")
+            ui.note(f"{folder} stays as it is. It also holds {shown}.")
+    command = uninstall_command()
+    if command:
+        ui.out()
+        ui.line("To finish, remove the program itself:")
+        ui.line(f"  {command}")
+    return 1 if trouble else 0
+
+
+def sessions_of(path) -> str:
+    """Which Claude Code sessions a settings file is for, in words."""
+    from . import claude_code
+
+    if path == claude_code.settings_path(False):
+        return "all your Claude Code sessions"
+    return f"Claude Code sessions in {path.parent.parent}"
 
 
 def cmd_rename(args) -> int:
@@ -3361,6 +3479,14 @@ def make_parser() -> argparse.ArgumentParser:
     claude.add_argument("action", choices=["install", "remove"], help="Add the status line, or take it out.")
     claude.add_argument("--here", action="store_true", help="Only for Claude Code sessions in this folder.")
     claude.add_argument("--yes", action="store_true", help="Go ahead without asking.")
+
+    uninstall = commands.add_parser(
+        "uninstall",
+        help="Remove yardstick-predict: take it out of Claude Code everywhere, then delete your models and the Voyage "
+        "key it kept. It ends with the command that removes the program itself.",
+    )
+    uninstall.add_argument("--keep-data", action="store_true", help="Keep your models and the Voyage key.")
+    uninstall.add_argument("--yes", action="store_true", help="Go ahead without asking.")
     return parser
 
 
@@ -3393,6 +3519,7 @@ def main(argv: list[str] | None = None) -> int:
         "default": cmd_default,
         "rename": cmd_rename,
         "claude-code": cmd_claude_code,
+        "uninstall": cmd_uninstall,
     }
     if args.command in ("features", "status"):
         # Coverage, and what making a deleted feature again costs, need XGBoost. The rest shows without it.

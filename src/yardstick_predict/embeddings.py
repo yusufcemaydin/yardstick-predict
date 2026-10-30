@@ -271,6 +271,39 @@ def save_key(key: str) -> bool:
         return False
 
 
+def delete_key(wait: float) -> str:
+    """Take the Voyage key out of the computer's password store, giving the store at most `wait` seconds to answer.
+
+    Says how that went: "deleted", "none" when no key was kept there, "no_store" when there's no password store,
+    "error", or NO_ANSWER when the store didn't answer in time, as a locked macOS Keychain waits for you.
+    """
+    import threading
+
+    done: list[str] = []
+
+    def delete() -> None:
+        try:
+            import keyring
+            from keyring.errors import NoKeyringError, PasswordDeleteError
+        except Exception:
+            done.append("no_store")
+            return
+        try:
+            keyring.delete_password(KEY_SERVICE, KEY_USER)
+            done.append("deleted")
+        except PasswordDeleteError:
+            done.append("none")
+        except NoKeyringError:
+            done.append("no_store")
+        except Exception:
+            done.append("error")
+
+    asking = threading.Thread(target=delete, daemon=True)  # a store that never answers can't keep it from ending
+    asking.start()
+    asking.join(wait)
+    return done[0] if done else NO_ANSWER
+
+
 def fingerprint(key: str) -> str:
     """A short, one-way label for a key, so usage can be counted without storing the key."""
     return hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()[:12]

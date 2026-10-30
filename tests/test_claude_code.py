@@ -18,9 +18,10 @@ import pytest
 from builders import ClaudeSession, usage
 
 from yardstick_predict import claude_code as cc
-from yardstick_predict import cli, locks
+from yardstick_predict import cli, embeddings, locks
 from yardstick_predict.archives import read_archive
-from yardstick_predict.store import Predictor
+from yardstick_predict.screens import version
+from yardstick_predict.store import Predictor, predictor_names
 
 THEIRS = {
     "model": "opus",
@@ -346,6 +347,115 @@ def test_a_settings_file_that_links_elsewhere_stays_a_link(tmp_path, monkeypatch
     assert "café ✓" in real.read_text()  # your text stays as you wrote it
     assert cli.main(["claude-code", "remove", "--here"]) == 0
     assert path.is_symlink() and json.loads(real.read_text()) == {"model": "opus", "note": "café ✓"}
+
+
+def test_installing_keeps_a_note_of_each_settings_file_and_removing_drops_it(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    assert cli.main(["claude-code", "install", "--here", "--yes"]) == 0
+    assert cc.added_places() == [str(tmp_path / ".claude" / "settings.local.json")]
+    cc.clean()  # what the hook kept for each session goes, and the note stays
+    assert cc.added_places() == [str(tmp_path / ".claude" / "settings.local.json")]
+    assert cli.main(["claude-code", "remove", "--here"]) == 0
+    assert cc.added_places() == []
+
+
+def test_uninstall_takes_the_forecasts_out_of_every_place_then_deletes_what_yardstick_made(
+    home, own_home, tmp_path, monkeypatch, capsys, wide
+):
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    everywhere = own_home / ".claude" / "settings.json"
+    everywhere.parent.mkdir()
+    everywhere.write_text(json.dumps(THEIRS))
+    assert cli.main(["claude-code", "install", "--yes"]) == 0
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    assert cli.main(["claude-code", "install", "--here", "--yes"]) == 0
+    # A folder an earlier version added them to without keeping a note: Claude Code's own list of folders has it.
+    older = tmp_path / "older"
+    (older / ".claude").mkdir(parents=True)
+    (older / ".claude" / "settings.local.json").write_text(json.dumps(cc.added({}, sys.executable)))
+    (own_home / ".claude.json").write_text(json.dumps({"projects": {str(older): {}, str(tmp_path / "gone"): {}}}))
+    monkeypatch.chdir(tmp_path)
+    capsys.readouterr()
+
+    assert cli.main(["uninstall"]) == 2  # a program must say yes
+    assert cc.in_use(everywhere) and home.is_dir()
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert json.loads(everywhere.read_text()) == THEIRS
+    assert json.loads((project / ".claude" / "settings.local.json").read_text()) == {}
+    assert json.loads((older / ".claude" / "settings.local.json").read_text()) == {}
+    assert not home.exists()
+    out = capsys.readouterr().out
+    assert "Took the forecasts out of all your Claude Code sessions." in out
+    assert f"Took the forecasts out of Claude Code sessions in {project}." in out
+    assert f"Took the forecasts out of Claude Code sessions in {older}." in out
+    assert f"Deleted {home}." in out
+    assert f"To finish, remove the program itself:\n    {version.uninstall_command()}" in out
+    # Run again, it finds nothing left to take out.
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert "Claude Code's settings hold no forecasts." in capsys.readouterr().out
+
+
+def test_uninstall_can_keep_your_models_and_the_voyage_key(home, tmp_path, monkeypatch, capsys, wide):
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["claude-code", "install", "--here", "--yes"]) == 0
+    deleted = []
+    monkeypatch.setattr("keyring.delete_password", lambda service, user: deleted.append(user))
+    assert cli.main(["uninstall", "--keep-data", "--yes"]) == 0
+    assert not cc.in_use(tmp_path / ".claude" / "settings.local.json")
+    assert predictor_names() == ["default"] and not deleted
+    assert f"Your models and the Voyage key stay. Your models are in {home}." in capsys.readouterr().out
+
+
+def test_uninstall_deletes_the_voyage_key_and_never_a_folder_holding_files_it_didnt_make(
+    home, monkeypatch, capsys, wide
+):
+    Predictor.create("default", [], {"model": "voyage-4", "dimensions": 256})
+    (home / "notes.txt").write_text("mine")
+    kept = {("yardstick-predict", "voyage-api-key"): "a key"}
+    monkeypatch.setattr("keyring.delete_password", lambda service, user: kept.pop((service, user)))
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert not kept
+    assert predictor_names() == ["default"] and (home / "notes.txt").read_text() == "mine"
+    out = capsys.readouterr().out
+    assert "files yardstick-predict didn't make. Nothing in it is deleted." in out
+    assert "Deleted the Voyage key from your computer's password store." in out
+    assert f"{home} stays as it is. It also holds notes.txt." in out
+
+
+@pytest.mark.skipif(os.name != "posix", reason="making a link needs extra rights on Windows")
+def test_uninstall_deletes_a_link_in_the_yardstick_folder_but_never_what_it_links_to(home, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "kept.txt").write_text("still here")
+    (home / "predictors").mkdir(parents=True)
+    (home / "predictors" / "linked").symlink_to(elsewhere)
+    assert cli.main(["uninstall", "--yes"]) == 0
+    assert not home.exists() and (elsewhere / "kept.txt").read_text() == "still here"
+
+
+def test_uninstall_leaves_settings_it_cant_read_alone_and_says_so(tmp_path, monkeypatch, capsys, wide):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / ".claude" / "settings.local.json"
+    path.parent.mkdir()
+    broken = '{"statusLine": {"command": "python -m yardstick_predict.claude_code status"'
+    path.write_text(broken)
+    assert cli.main(["uninstall", "--yes"]) == 1
+    assert path.read_text() == broken
+    assert f"{path} still names yardstick." in capsys.readouterr().out
+
+
+def test_deleting_the_voyage_key_waits_only_so_long_for_the_password_store(monkeypatch):
+    assert embeddings.delete_key(1) == "no_store"  # the tests' password store is one that's never there
+    release = threading.Event()
+    monkeypatch.setattr("keyring.delete_password", lambda service, user: release.wait(10))
+    try:
+        assert embeddings.delete_key(0.05) == embeddings.NO_ANSWER
+    finally:
+        release.set()
 
 
 def test_install_puts_the_yardstick_folder_into_the_commands_and_the_hook_uses_it(tmp_path, monkeypatch):

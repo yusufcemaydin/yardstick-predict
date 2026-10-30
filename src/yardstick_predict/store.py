@@ -49,6 +49,60 @@ def home() -> Path:
     return Path(os.environ.get("YARDSTICK_HOME") or "~/.yardstick").expanduser()
 
 
+OWN = frozenset(
+    {
+        "predictors",
+        "features",
+        "cache",
+        "locks",
+        "claude-code",
+        "settings.json",
+        "update-check.json",
+        "voyage-usage.json",
+        "voyage-usage.lock",
+        "last-crash.txt",
+        ".DS_Store",  # what macOS's Finder leaves in a folder it shows
+    }
+)
+"""What yardstick-predict makes in its folder. Uninstall deletes only these."""
+
+
+def own(name: str) -> bool:
+    """Whether yardstick-predict made this, in its folder: one of its own, a damaged usage file it set aside, or a
+    file that a save left half made."""
+    return (
+        name in OWN
+        or (name.startswith("voyage-usage.damaged-") and name.endswith(".json"))
+        or (name.startswith(".") and name.endswith(".partial"))
+    )
+
+
+def others_in_home() -> list[str]:
+    """What's in the yardstick folder that yardstick-predict didn't make. Uninstall never deletes a folder that holds
+    any, since YARDSTICK_HOME may point to a folder that's in use for other things too."""
+    try:
+        return sorted(path.name for path in home().iterdir() if not own(path.name))
+    except OSError:
+        return []
+
+
+def delete_home() -> None:
+    """Delete the yardstick folder, with your models, their datasets, the feature store and the caches. Only a folder
+    that holds nothing else is deleted: with others_in_home, nothing is. A link in it goes, never what it links to."""
+    folder = home()
+    if others_in_home() or not folder.is_dir():
+        return
+    for path in folder.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+    if folder.is_symlink():
+        folder.unlink()  # YARDSTICK_HOME names a link: the folder it links to is left empty
+    else:
+        folder.rmdir()
+
+
 def private_home() -> Path:
     """The yardstick folder, readable only by you. It holds your prompts."""
     folder = home()
