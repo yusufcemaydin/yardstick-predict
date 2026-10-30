@@ -7,11 +7,17 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from yardstick_predict.archives import DEFAULT_ARCHIVES
 from yardstick_predict.pipeline import learnable, read_all
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "demo"))
+DEMO = ROOT / "demo"
+if not (DEMO / "history.py").exists():
+    # The source package carries the tests but not the demo folder with its clips. These tests need a checkout.
+    pytest.skip("The demo folder is only in a checkout of the repository.", allow_module_level=True)
+sys.path.insert(0, str(DEMO))
 
 import history  # noqa: E402  (demo/history.py)
 
