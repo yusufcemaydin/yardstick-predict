@@ -206,6 +206,20 @@ def test_a_bare_run_outside_a_terminal_with_no_model_says_how_to_make_one(capsys
     assert "predictor" not in out and "Nothing leaves your computer" not in out
 
 
+@pytest.mark.parametrize("width", [80, 45])
+def test_a_bare_run_with_no_model_wraps_its_intro_as_one_paragraph(capsys, monkeypatch, width):
+    monkeypatch.setattr(keys, "reader", lambda: pytest.fail("It showed a menu"))
+    monkeypatch.setenv("COLUMNS", str(width))
+    assert main([]) == 1
+    lines = plain(capsys.readouterr().out).splitlines()
+    first = next(at for at, text in enumerate(lines) if text.startswith("It learns"))
+    last = next(at for at, text in enumerate(lines) if text.endswith("first."))
+    intro = lines[first : last + 1]
+    assert " ".join(intro).endswith("Keys and passwords in them are hidden first.")
+    assert all(len(text) < width for text in intro)
+    assert all(len(text) > width / 2 for text in intro[:-1])  # no short line before the paragraph ends
+
+
 def trained(name: str, verdicts: dict[str, bool]) -> Predictor:
     """A model with a saved quick model that knows these AI models, each run 40 times at max. True passed the test."""
     predictor = Predictor.create(

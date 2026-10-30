@@ -6,7 +6,7 @@ Every notable change to yardstick-predict is listed here, newest first. The form
 
 ### Fixed
 
-- The front page, the guide, the Update screen and what the command says when run on its own no longer say that only the text you choose leaves your computer. The Update screen no longer says your chats never do. They all say plainly that your prompts go to Voyage.
+- The front page, the guide, the Update screen and what the command says when run on its own no longer say that only the text you choose leaves your computer. The Update screen no longer says your chats never do. They all say plainly that your prompts go to Voyage. What the command says when run on its own now wraps as one paragraph, with no short line in the middle.
 
 ### Security
 
